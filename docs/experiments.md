@@ -150,9 +150,39 @@ cwd is the target repository, not its own workspace. `buildAgentInstructions`
 now emits absolute paths. The radio layer surfaced a real defect in the
 runtime that launched it.
 
-## Implications for the design
+## E6 — Interactive mode via MCP: CONFIRMED
 
-1. Workers must be directly executed processes, not Workflow subagents.
+**Date:** 2026-08-12
+**Environment:** `narwhal daemon` + `narwhal mcp` registered at user scope
+
+Registered with `claude mcp add --scope user narwhal narwhal mcp`, then
+verified the full path with raw JSON-RPC over stdio.
+
+| Check | Result |
+|---|---|
+| `initialize` returns protocol + serverInfo | pass — `narwhal 2025-06-18` |
+| `tools/list` exposes all five tools with schemas | pass |
+| Notification (`notifications/initialized`) gets no response | pass |
+| Tool call with no daemon auto-starts one | pass |
+| Daemon outlives the MCP process | pass — still running after stdin closed |
+| `narwhal_spawn` dispatches a real worker | pass |
+| Worker completes and calls `task-done` | pass |
+
+Against a live daemon over the control API directly:
+
+- spawned two workers, both dispatched
+- drained a worker finding while the run was still active
+- **added a third worker to the same run afterwards** — the thing batch
+  mode structurally cannot do
+- sent an urgent operator message to steer a running worker
+- cancelled the run: the worker was killed and state went to `canceled`
+
+The daemon is auto-started detached (`Setsid`) so Claude Code restarting the
+MCP server does not orphan in-flight runs. Single-instance safety uses flock
+on the pidfile rather than a pid liveness check, so a stale pidfile from
+`kill -9` cannot let a second daemon bind a different port and split state.
+
+## Implications for the design1. Workers must be directly executed processes, not Workflow subagents.
 2. `--permission-mode bypassPermissions` is mandatory for headless workers;
    without it the agent workspace is unreachable.
 3. `drain` remains useful as a belt-and-braces check at natural boundaries,

@@ -19,11 +19,38 @@ Claude Code workers.
 
 ## Quick Start
 
+### Interactive (recommended)
+
+Register Narwhal as an MCP server, then drive it from a normal Claude Code
+session. Your session stays in the conversation; workers run headless
+underneath and report back.
+
 ```bash
-# Simple: flat parallel workers
+go build -o ~/.local/bin/narwhal ./cmd/narwhal
+claude mcp add --scope user narwhal narwhal mcp
+```
+
+Five tools become available:
+
+| Tool | Purpose |
+|---|---|
+| `narwhal_spawn` | Launch workers on independent sub-tasks |
+| `narwhal_drain` | Read radio messages since a cursor |
+| `narwhal_status` | Task states and active workers |
+| `narwhal_send` | Steer workers with an operator message |
+| `narwhal_cancel` | Kill a run's workers |
+
+The broker daemon starts on demand and outlives MCP server restarts, so a
+run survives Claude Code reconnecting. You can add workers to a run that is
+already in flight — the thing batch mode cannot do.
+
+### Batch
+
+```bash
+# Flat parallel workers
 narwhal run --workers 2 --cwd ~/src/myrepo --prompt "audit this codebase"
 
-# Smart: a planner agent decomposes the request into a DAG,
+# A planner agent decomposes the request into a DAG,
 # then the coordinator dispatches workers in dependency order
 narwhal plan --prompt "audit this codebase" --cwd ~/src/myrepo --concurrency 3
 
@@ -87,6 +114,13 @@ narwhal
 │   ├── atomic JSON snapshots under ~/.narwhal/runs/<id>.json
 │   └── live registry (~/.narwhal/live.json) for monitor discovery
 │
+├── daemon
+│   ├── long-lived broker for interactive use (flock single-instance)
+│   └── session: per-run launchers, so one session can hold several runs
+│
+├── mcp
+│   └── stdio JSON-RPC server; thin client of the daemon's /control API
+│
 └── monitor
     └── polls the broker's read-only endpoint; DAG in place, radio scrolling
 ```
@@ -123,6 +157,8 @@ launches workers as processes rather than as Workflow subagents.
 | `narwhal run` | Flat parallel workers on a prompt |
 | `narwhal plan` | Planner agent decomposes request into DAG, then coordinator executes |
 | `narwhal monitor` | Live view of a running run (DAG + radio traffic) |
+| `narwhal daemon` | `start` / `stop` / `status` for the interactive broker |
+| `narwhal mcp` | MCP server over stdio (registered with Claude Code) |
 | `narwhal experiment` | Two-worker passive-awareness validation scenario |
 | `narwhal show` | List recent runs (from disk) |
 | `narwhal show <id>` | Full run snapshot (from disk) |
@@ -143,6 +179,7 @@ launches workers as processes rather than as Workflow subagents.
 - ✓ Run persistence + inspection
 - ✓ Coordinating agent (planner decomposes request into DAG)
 - ✓ Live monitor (DAG progress + radio traffic during a run)
+- ✓ Interactive mode (daemon + MCP; add workers to an in-flight run)
 
 ### AgentRadio-style passive awareness
 

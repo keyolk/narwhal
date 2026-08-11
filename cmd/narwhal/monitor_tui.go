@@ -24,6 +24,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -34,6 +35,15 @@ type focusPane int
 const (
 	focusTasks focusPane = iota
 	focusRadio
+)
+
+// detailMode says what the detail pane is showing, or that it is closed.
+type detailMode int
+
+const (
+	detailClosed detailMode = iota
+	detailMessage
+	detailTask
 )
 
 // tickMsg drives the poll loop.
@@ -62,7 +72,7 @@ type tuiModel struct {
 	// manual navigation releases it, so reading an older message is not
 	// yanked away by the next poll.
 	followTail bool
-	detail     bool
+	detail     detailMode
 	detailScroll int
 
 	width  int
@@ -143,7 +153,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.detail {
+	if m.detail != detailClosed {
 		return m.handleDetailKey(msg)
 	}
 	switch msg.String() {
@@ -169,9 +179,18 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+u", "pgup":
 		m.moveCursor(-10)
 	case "enter":
-		if m.focus == focusRadio && len(m.snap.Messages) > 0 {
-			m.detail = true
-			m.detailScroll = 0
+		// Detail shows whichever pane you opened it from.
+		switch m.focus {
+		case focusRadio:
+			if len(m.snap.Messages) > 0 {
+				m.detail = detailMessage
+				m.detailScroll = 0
+			}
+		case focusTasks:
+			if len(m.snap.Tasks) > 0 {
+				m.detail = detailTask
+				m.detailScroll = 0
+			}
 		}
 	case "f":
 		// Re-arm tail following after manual navigation.
@@ -184,7 +203,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "q", "esc":
-		m.detail = false
+		m.detail = detailClosed
 	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
@@ -204,17 +223,33 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g", "home":
 		m.detailScroll = 0
 	case "n":
-		// Next message without leaving the detail view.
-		if m.radioCur < len(m.snap.Messages)-1 {
-			m.radioCur++
-			m.detailScroll = 0
-			m.followTail = false
+		// Walk to the next item without leaving the detail view.
+		switch m.detail {
+		case detailMessage:
+			if m.radioCur < len(m.snap.Messages)-1 {
+				m.radioCur++
+				m.detailScroll = 0
+				m.followTail = false
+			}
+		case detailTask:
+			if m.taskCur < len(m.snap.Tasks)-1 {
+				m.taskCur++
+				m.detailScroll = 0
+			}
 		}
 	case "p":
-		if m.radioCur > 0 {
-			m.radioCur--
-			m.detailScroll = 0
-			m.followTail = false
+		switch m.detail {
+		case detailMessage:
+			if m.radioCur > 0 {
+				m.radioCur--
+				m.detailScroll = 0
+				m.followTail = false
+			}
+		case detailTask:
+			if m.taskCur > 0 {
+				m.taskCur--
+				m.detailScroll = 0
+			}
 		}
 	}
 	return m, nil
@@ -279,8 +314,11 @@ func (m tuiModel) View() string {
 	if m.quit {
 		return ""
 	}
-	if m.detail {
-		return m.viewDetail()
+	switch m.detail {
+	case detailMessage:
+		return m.viewMessageDetail()
+	case detailTask:
+		return m.viewTaskDetail()
 	}
 
 	header := m.viewHeader()
@@ -364,38 +402,171 @@ func (m tuiModel) viewFooter() string {
 	return stats + tail + "\n" + keys
 }
 
+// dagRow is one rendered line of the task graph.
+type dagRow struct {
+	task  broker.TaskSnapshot
+	depth int
+	// last marks the final child at its depth, so the connector is └ not ├.
+	last bool
+	// prefix carries the vertical bars for ancestor levels that still have
+	// siblings below.
+	prefix string
+}
+
+// buildDAG lays the tasks out as a dependency tree.
+//
+// A task graph is a DAG, not a tree: a task can have several dependencies,
+// so it can be reachable by several paths. Rendering it as a tree means
+// picking one parent per node. We root each task under its first dependency
+// and mark the rest inline, which keeps the common shapes (fan-out, then a
+// synthesis node joining everything) readable without needing real graph
+// layout.
+//
+// Roots are tasks with no deps, in id order. Anything unreachable from a
+// root — a dependency that was never created — is appended at the end so it
+// is visible rather than silently dropped.
+func buildDAG(tasks []broker.TaskSnapshot) []dagRow {
+	byID := make(map[string]broker.TaskSnapshot, len(tasks))
+	for _, t := range tasks {
+		byID[t.ID] = t
+	}
+
+	children := make(map[string][]string)
+	var roots []string
+	for _, t := range tasks {
+		parent := ""
+		for _, d := range t.Deps {
+			if _, ok := byID[d]; ok {
+				parent = d
+				break
+			}
+		}
+		if parent == "" {
+			roots = append(roots, t.ID)
+			continue
+		}
+		children[parent] = append(children[parent], t.ID)
+	}
+	sort.Strings(roots)
+	for k := range children {
+		sort.Strings(children[k])
+	}
+
+	var rows []dagRow
+	seen := make(map[string]bool, len(tasks))
+
+	// Depth-first from each root would split siblings apart: with three
+	// independent tasks feeding one synthesis node, the synthesis row would
+	// land under the first root and push the other two roots below it.
+	// Emitting every root first, then their dependents, keeps a fan-in
+	// shape readable — which is the shape most runs have.
+	var emit func(ids []string, prefix string, depth int)
+	emit = func(ids []string, prefix string, depth int) {
+		pending := ids[:0:0]
+		for _, id := range ids {
+			if seen[id] {
+				continue
+			}
+			pending = append(pending, id)
+		}
+		for i, id := range pending {
+			seen[id] = true
+			rows = append(rows, dagRow{
+				task:   byID[id],
+				depth:  depth,
+				last:   i == len(pending)-1,
+				prefix: prefix,
+			})
+		}
+		// Collect the next level from all of this level's nodes.
+		var next []string
+		for _, id := range pending {
+			next = append(next, children[id]...)
+		}
+		if len(next) == 0 {
+			return
+		}
+		childPrefix := prefix
+		if depth > 0 {
+			childPrefix += "  "
+		}
+		emit(next, childPrefix, depth+1)
+	}
+	emit(roots, "", 0)
+
+	// Cycles or dangling deps leave tasks unvisited; show them anyway.
+	for _, t := range tasks {
+		if !seen[t.ID] {
+			rows = append(rows, dagRow{task: t, depth: 0})
+		}
+	}
+	return rows
+}
+
+// connector returns the branch glyph for a row.
+func (r dagRow) connector() string {
+	if r.depth == 0 {
+		return ""
+	}
+	if r.last {
+		return "└─"
+	}
+	return "├─"
+}
+
 func (m tuiModel) viewTasks(width, height int) string {
-	title := "Tasks"
+	title := "Graph"
 	if m.focus == focusTasks {
 		title = styPanel.Render(title)
 	} else {
 		title = styDim.Render(title)
 	}
 
-	tasks := m.sortedTasks()
-	rows := make([]string, 0, height)
-	rows = append(rows, title)
+	rows := m.dagRows()
+	out := make([]string, 0, height)
+	out = append(out, title)
 
 	visible := height - 1
-	start := scrollStart(m.taskCur, visible, len(tasks))
-	for i := start; i < len(tasks) && len(rows) < height; i++ {
-		t := tasks[i]
-		icon, style := taskIconStyle(t.State)
-		name := t.ID
-		if t.Dispatches > 1 {
-			name += fmt.Sprintf(" (%d)", t.Dispatches)
-		}
-		line := fmt.Sprintf("%s %s", style.Render(icon), name)
-		if len(t.Deps) > 0 {
-			line += styDim.Render(" ←" + strings.Join(t.Deps, ","))
-		}
-		line = truncate(line, width)
-		if i == m.taskCur && m.focus == focusTasks {
-			line = stySel.Render(padRight(line, width))
-		}
-		rows = append(rows, line)
+	start := scrollStart(m.taskCur, visible, len(rows))
+	for i := start; i < len(rows) && len(out) < height; i++ {
+		out = append(out, m.taskRow(rows[i], width, i == m.taskCur && m.focus == focusTasks))
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+	if len(rows) == 0 {
+		out = append(out, styDim.Render("(no tasks yet)"))
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+}
+
+// taskRow renders one graph line. Like radioRow, the text is assembled and
+// truncated as plain text before any styling is applied.
+func (m tuiModel) taskRow(r dagRow, width int, selected bool) string {
+	icon, style := taskIconStyle(r.task.State)
+	tree := r.prefix + r.connector()
+
+	label := r.task.ID
+	if r.task.Dispatches > 1 {
+		label += fmt.Sprintf(" ×%d", r.task.Dispatches)
+	}
+	// A task joining several branches shows the extra deps it also waits on,
+	// since the tree only encodes the first one.
+	if len(r.task.Deps) > 1 {
+		label += fmt.Sprintf(" +%d", len(r.task.Deps)-1)
+	}
+
+	plain := truncate(tree+icon+" "+label, width)
+	if selected {
+		return stySel.Render(padRight(plain, width))
+	}
+	// Re-render with color, keeping the same truncation decision.
+	if displayWidth(tree+icon+" "+label) > width {
+		return styDim.Render(tree) + style.Render(icon) + " " +
+			truncate(label, width-displayWidth(tree)-2)
+	}
+	return styDim.Render(tree) + style.Render(icon) + " " + label
+}
+
+func (m tuiModel) dagRows() []dagRow {
+	return buildDAG(m.sortedTasks())
 }
 
 func (m tuiModel) viewRadio(width, height int) string {
@@ -413,11 +584,8 @@ func (m tuiModel) viewRadio(width, height int) string {
 	visible := height - 1
 	start := scrollStart(m.radioCur, visible, len(msgs))
 	for i := start; i < len(msgs) && len(rows) < height; i++ {
-		line := truncate(m.radioLine(msgs[i]), width)
-		if i == m.radioCur && m.focus == focusRadio {
-			line = stySel.Render(padRight(line, width))
-		}
-		rows = append(rows, line)
+		selected := i == m.radioCur && m.focus == focusRadio
+		rows = append(rows, m.radioRow(msgs[i], width, selected))
 	}
 	if len(msgs) == 0 {
 		rows = append(rows, styDim.Render("(no messages yet)"))
@@ -425,28 +593,123 @@ func (m tuiModel) viewRadio(width, height int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
 }
 
-func (m tuiModel) radioLine(msg *broker.Message) string {
-	prio := styDim.Render("·")
-	switch msg.Priority {
-	case broker.PriorityUrgent:
-		prio = styRed.Render("!")
-	case broker.PriorityFYI:
-		prio = styDim.Render("i")
-	}
-	tag := ""
-	if _, _, _, _, ok := broker.ParseSplitRequest(msg.Content); ok {
-		tag = styYellow.Render("[split] ")
-	}
-	to := ""
+// radioRow renders one message line, fitted to width.
+//
+// The line is assembled and truncated as plain text first, then styled.
+// Doing it the other way round means measuring and cutting a string full of
+// ANSI escapes, which is what made every frame cost ~34ms.
+func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string {
+	prioCh, prioStyle := priorityGlyph(msg.Priority)
+	sender := shortName(msg.Sender)
+	prefix := fmt.Sprintf("%3d %s %s ", msg.Seq, prioCh, sender)
+
+	// The mention/split markers are short and fixed; keeping them unstyled
+	// in the row body avoids re-styling a fragment truncation cut in half.
+	var body strings.Builder
 	if len(msg.Mentions) > 0 {
-		to = styDim.Render("→" + strings.Join(msg.Mentions, ",") + " ")
+		body.WriteString("→" + strings.Join(msg.Mentions, ",") + " ")
 	}
-	content := strings.ReplaceAll(msg.Content, "\n", " ")
-	return fmt.Sprintf("%s%3d %s %s %s%s%s",
-		"", msg.Seq, prio, styBlue.Render(shortName(msg.Sender)), to, tag, content)
+	if _, _, _, _, ok := broker.ParseSplitRequest(msg.Content); ok {
+		body.WriteString("[split] ")
+	}
+	body.WriteString(strings.ReplaceAll(msg.Content, "\n", " "))
+
+	rest := truncate(body.String(), width-displayWidth(prefix))
+
+	if selected {
+		// A reversed row reads better without competing colors inside it.
+		return stySel.Render(padRight(prefix+rest, width))
+	}
+	return fmt.Sprintf("%3d %s %s %s",
+		msg.Seq, prioStyle.Render(prioCh), styBlue.Render(sender), rest)
 }
 
-func (m tuiModel) viewDetail() string {
+func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
+	switch p {
+	case broker.PriorityUrgent:
+		return "!", styRed
+	case broker.PriorityFYI:
+		return "i", styDim
+	default:
+		return "·", styDim
+	}
+}
+
+// viewTaskDetail shows the selected task's state, its place in the graph,
+// and its full assignment — which the graph pane can only show truncated.
+func (m tuiModel) viewTaskDetail() string {
+	rows := m.dagRows()
+	if len(rows) == 0 {
+		return "no tasks"
+	}
+	cur := m.taskCur
+	if cur >= len(rows) {
+		cur = len(rows) - 1
+	}
+	t := rows[cur].task
+
+	icon, style := taskIconStyle(t.State)
+	head := fmt.Sprintf("%s  %s %s  %s",
+		styTitle.Render("Task"), style.Render(icon), t.ID, style.Render(string(t.State)))
+
+	var meta []string
+	if t.Name != "" && t.Name != t.ID {
+		meta = append(meta, "name="+t.Name)
+	}
+	meta = append(meta, fmt.Sprintf("dispatches=%d", t.Dispatches))
+	if len(t.Deps) > 0 {
+		meta = append(meta, "waits on "+strings.Join(t.Deps, ", "))
+	}
+	// Downstream tasks are not stored on the task, so derive them.
+	var blocks []string
+	for _, other := range m.snap.Tasks {
+		for _, d := range other.Deps {
+			if d == t.ID {
+				blocks = append(blocks, other.ID)
+				break
+			}
+		}
+	}
+	sort.Strings(blocks)
+	if len(blocks) > 0 {
+		meta = append(meta, "blocks "+strings.Join(blocks, ", "))
+	}
+
+	body := wrapText(t.Assignment, m.width-2)
+	footer := styDim.Render("j/k scroll · n/p task · esc back · q close")
+
+	avail := m.height - 5
+	if avail < 3 {
+		avail = 3
+	}
+	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
+
+	return head + pos + "\n" + styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
+		strings.Join(body[scroll:end], "\n") + "\n" + footer
+}
+
+// scrollWindow clamps a scroll offset to a body length and returns the
+// visible range plus a position indicator.
+func scrollWindow(scroll, avail, total int) (int, int, string) {
+	if scroll > total-1 {
+		scroll = total - 1
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	end := scroll + avail
+	if end > total {
+		end = total
+	}
+	pos := ""
+	if total > avail {
+		pos = styDim.Render(fmt.Sprintf("  [%d-%d/%d]", scroll+1, end, total))
+	}
+	return scroll, end, pos
+}
+
+
+func (m tuiModel) viewMessageDetail() string {
 	if len(m.snap.Messages) == 0 {
 		return "no messages"
 	}
@@ -465,23 +728,10 @@ func (m tuiModel) viewDetail() string {
 	if avail < 3 {
 		avail = 3
 	}
-	if m.detailScroll > len(body)-1 {
-		m.detailScroll = len(body) - 1
-	}
-	if m.detailScroll < 0 {
-		m.detailScroll = 0
-	}
-	end := m.detailScroll + avail
-	if end > len(body) {
-		end = len(body)
-	}
-	pos := ""
-	if len(body) > avail {
-		pos = styDim.Render(fmt.Sprintf("  [%d-%d/%d]", m.detailScroll+1, end, len(body)))
-	}
+	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 
 	return head + pos + "\n" + meta + "\n\n" +
-		strings.Join(body[m.detailScroll:end], "\n") + "\n" + footer
+		strings.Join(body[scroll:end], "\n") + "\n" + footer
 }
 
 func mentionsLabel(m []string) string {
@@ -528,23 +778,58 @@ func shortName(s string) string {
 	return strings.TrimPrefix(s, "worker-")
 }
 
+// truncate cuts s to w display columns.
+//
+// This is on the hot path: every visible row is truncated on every frame,
+// and a frame happens on every keystroke. The obvious implementation —
+// drop one rune at a time and re-measure — costs ~0.9ms on a long styled
+// line because each measurement re-parses ANSI escapes, which put whole-View
+// latency at 34ms and made navigation feel sluggish.
+//
+// Instead: fast-path pure-ASCII strings (the common case) with a byte slice,
+// and otherwise accumulate rune widths in a single pass.
 func truncate(s string, w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if lipgloss.Width(s) <= w {
-		return s
+	if isASCII(s) {
+		if len(s) <= w {
+			return s
+		}
+		return s[:w]
 	}
-	// Trim by runes until it fits; ANSI-aware width keeps styled text honest.
-	r := []rune(s)
-	for len(r) > 0 && lipgloss.Width(string(r)) > w {
-		r = r[:len(r)-1]
+	total := 0
+	for i, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if total+rw > w {
+			return s[:i]
+		}
+		total += rw
 	}
-	return string(r)
+	return s
+}
+
+// isASCII reports whether s is plain ASCII with no escape sequences, in
+// which case byte length equals display width.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 || s[i] == 0x1b {
+			return false
+		}
+	}
+	return true
+}
+
+// displayWidth is the column count of s, using the same fast path.
+func displayWidth(s string) int {
+	if isASCII(s) {
+		return len(s)
+	}
+	return runewidth.StringWidth(s)
 }
 
 func padRight(s string, w int) string {
-	gap := w - lipgloss.Width(s)
+	gap := w - displayWidth(s)
 	if gap <= 0 {
 		return s
 	}

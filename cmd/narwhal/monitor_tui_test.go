@@ -147,22 +147,20 @@ func TestTailFollowingTracksNewMessages(t *testing.T) {
 func TestEnterOpensDetailAndEscCloses(t *testing.T) {
 	m := testModel(2, 3)
 	m = press(m, "enter")
-	if !m.detail {
-		t.Fatal("enter should open the detail view")
+	if m.detail != detailMessage {
+		t.Fatal("enter should open the message detail view")
 	}
 	m = press(m, "esc")
-	if m.detail {
+	if m.detail != detailClosed {
 		t.Fatal("esc should close the detail view")
 	}
 }
 
-func TestEnterOnTasksPaneDoesNotOpenDetail(t *testing.T) {
-	// The detail view renders a message; opening it from the task pane
-	// would show something unrelated to the selection.
+func TestEnterOnTasksPaneOpensTaskDetail(t *testing.T) {
 	m := testModel(2, 3)
 	m = press(m, "tab", "enter")
-	if m.detail {
-		t.Fatal("enter on the tasks pane should not open the message detail")
+	if m.detail != detailTask {
+		t.Fatalf("enter on the tasks pane should open the task detail, got %v", m.detail)
 	}
 }
 
@@ -182,6 +180,24 @@ func TestDetailNavigationBetweenMessages(t *testing.T) {
 	m = press(m, "p")
 	if m.radioCur != 0 {
 		t.Fatalf("p should go back, got %d", m.radioCur)
+	}
+}
+
+func TestDetailNavigationBetweenTasks(t *testing.T) {
+	m := testModel(3, 1)
+	m = press(m, "tab", "enter")
+
+	m = press(m, "n")
+	if m.taskCur != 1 {
+		t.Fatalf("n should advance to the next task, got %d", m.taskCur)
+	}
+	m = press(m, "p")
+	if m.taskCur != 0 {
+		t.Fatalf("p should go back, got %d", m.taskCur)
+	}
+	// Walking tasks must not disturb the radio cursor.
+	if m.radioCur != 0 {
+		t.Fatalf("radio cursor moved during task navigation: %d", m.radioCur)
 	}
 }
 
@@ -263,8 +279,8 @@ func TestViewRendersRunAndMessages(t *testing.T) {
 	if !strings.Contains(out, "Radio") {
 		t.Fatalf("view missing radio panel:\n%s", out)
 	}
-	if !strings.Contains(out, "Tasks") {
-		t.Fatalf("view missing tasks panel:\n%s", out)
+	if !strings.Contains(out, "Graph") {
+		t.Fatalf("view missing graph panel:\n%s", out)
 	}
 }
 
@@ -290,7 +306,127 @@ func TestSplitRequestIsTaggedInList(t *testing.T) {
 	m := testModel(1, 1)
 	m.width, m.height = 100, 24
 	m.snap.Messages[0].Content = broker.FormatSplitRequest("t9", "extra", "do extra", nil)
-	if !strings.Contains(m.radioLine(m.snap.Messages[0]), "split") {
-		t.Fatalf("split request not tagged: %s", m.radioLine(m.snap.Messages[0]))
+	row := m.radioRow(m.snap.Messages[0], 100, false)
+	if !strings.Contains(row, "split") {
+		t.Fatalf("split request not tagged: %s", row)
+	}
+}
+
+func TestBuildDAGNestsDependents(t *testing.T) {
+	// a and b are roots; c depends on both. c is rendered under its first
+	// dependency and carries a marker for the rest.
+	tasks := []broker.TaskSnapshot{
+		{ID: "a"},
+		{ID: "b"},
+		{ID: "c", Deps: []string{"a", "b"}},
+	}
+	rows := buildDAG(tasks)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %d, want 3", len(rows))
+	}
+	byID := map[string]dagRow{}
+	for _, r := range rows {
+		byID[r.task.ID] = r
+	}
+	if byID["a"].depth != 0 || byID["b"].depth != 0 {
+		t.Fatalf("roots should be at depth 0: a=%d b=%d", byID["a"].depth, byID["b"].depth)
+	}
+	if byID["c"].depth != 1 {
+		t.Fatalf("c should nest under its first dep, depth=%d", byID["c"].depth)
+	}
+}
+
+func TestBuildDAGIncludesUnreachableTasks(t *testing.T) {
+	// A dep that was never created must not make its dependent vanish.
+	tasks := []broker.TaskSnapshot{
+		{ID: "orphan", Deps: []string{"never-created"}},
+	}
+	rows := buildDAG(tasks)
+	if len(rows) != 1 || rows[0].task.ID != "orphan" {
+		t.Fatalf("unreachable task dropped: %v", rows)
+	}
+}
+
+func TestBuildDAGHandlesChain(t *testing.T) {
+	tasks := []broker.TaskSnapshot{
+		{ID: "one"},
+		{ID: "two", Deps: []string{"one"}},
+		{ID: "three", Deps: []string{"two"}},
+	}
+	rows := buildDAG(tasks)
+	depth := map[string]int{}
+	for _, r := range rows {
+		depth[r.task.ID] = r.depth
+	}
+	if depth["one"] != 0 || depth["two"] != 1 || depth["three"] != 2 {
+		t.Fatalf("chain depths = %v, want 0,1,2", depth)
+	}
+}
+
+func TestBuildDAGSurvivesCycle(t *testing.T) {
+	// A cycle has no root; every task must still appear exactly once.
+	tasks := []broker.TaskSnapshot{
+		{ID: "x", Deps: []string{"y"}},
+		{ID: "y", Deps: []string{"x"}},
+	}
+	rows := buildDAG(tasks)
+	if len(rows) != 2 {
+		t.Fatalf("cycle produced %d rows, want 2", len(rows))
+	}
+	seen := map[string]int{}
+	for _, r := range rows {
+		seen[r.task.ID]++
+	}
+	for id, n := range seen {
+		if n != 1 {
+			t.Fatalf("task %s appeared %d times", id, n)
+		}
+	}
+}
+
+func TestTaskDetailShowsAssignmentAndEdges(t *testing.T) {
+	m := testModel(0, 0)
+	m.width, m.height = 80, 24
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "root", State: broker.TaskCompleted, Assignment: "investigate the launcher path"},
+		{ID: "leaf", State: broker.TaskPending, Deps: []string{"root"}, Assignment: "synthesize"},
+	}
+	m.focus = focusTasks
+	m.taskCur = 0
+	m = press(m, "enter")
+
+	out := m.View()
+	if !strings.Contains(out, "investigate the launcher path") {
+		t.Fatalf("task detail missing assignment:\n%s", out)
+	}
+	if !strings.Contains(out, "blocks leaf") {
+		t.Fatalf("task detail should list downstream tasks:\n%s", out)
+	}
+}
+
+func TestGraphPaneRendersTreeGlyphs(t *testing.T) {
+	m := testModel(0, 0)
+	m.width, m.height = 90, 20
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "root", State: broker.TaskCompleted},
+		{ID: "child", State: broker.TaskReady, Deps: []string{"root"}},
+	}
+	out := m.viewTasks(40, 10)
+	if !strings.Contains(out, "└─") && !strings.Contains(out, "├─") {
+		t.Fatalf("graph pane should draw tree connectors:\n%s", out)
+	}
+}
+
+func TestTruncateIsANSIFree(t *testing.T) {
+	// truncate operates on plain text; feeding it styled input was the
+	// original performance bug. Confirm the plain-text contract.
+	if got := truncate("abcdef", 3); got != "abc" {
+		t.Fatalf("truncate ascii = %q, want abc", got)
+	}
+	if got := truncate("한글테스트", 4); displayWidth(got) > 4 {
+		t.Fatalf("truncate wide runes overflowed: %q width=%d", got, displayWidth(got))
+	}
+	if got := truncate("short", 99); got != "short" {
+		t.Fatalf("truncate should pass through short strings, got %q", got)
 	}
 }

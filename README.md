@@ -72,24 +72,29 @@ is where you actually read one.
 Narwhal  s1786471179534-1  active
 account routing 경로의 일관성 검증
 
-Tasks                        Radio (3)
+Graph                        Radio (2)
 ✓ anthropic-path               1 · anthropic-path →mixed-path cross-path asymmetries...
-▶ mixed-path (2)               2 ! mixed-path URGENT: provider lock releases on backend...
-▶ session-identity             3 i session-identity lastCWD assumes one session per proxy.
-· synthesis ←anthropic-path,…
+▶ mixed-path ×2                2 ! mixed-path URGENT: provider lock releases on backend...
+▶ session-identity
+└─· synthesis +2
+  └─· review
 
 done 1  running 2  ready 0  failed 0  [following]
 tab pane · j/k move · enter detail · f follow · q quit
 ```
 
+The graph pane lays tasks out by dependency: roots first, then what waits on
+them. `×2` is a retried dispatch; `+2` means the task also waits on two deps
+beyond the one it is nested under.
+
 | Key | Action |
 |---|---|
-| `tab` | Switch between the task and radio panes |
+| `tab` | Switch between the graph and radio panes |
 | `j` / `k` | Move the cursor (also `↓` / `↑`) |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
-| `enter` | Open the selected message |
-| `n` / `p` | Next / previous message inside the detail view |
+| `enter` | Open the selected task or message |
+| `n` / `p` | Next / previous item inside the detail view |
 | `f` | Re-arm tail following after manual navigation |
 | `esc` | Close the detail view |
 | `q` | Quit |

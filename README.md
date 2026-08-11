@@ -63,25 +63,40 @@ narwhal show               # list recent runs
 narwhal show <run-id>      # full snapshot
 ```
 
-The monitor shows the task DAG updating in place plus radio traffic as a
-scrolling transcript, so an operator can watch workers cross-correct each
-other, a split-request land, or a task fail and retry:
+The monitor is an interactive TUI: a task list on the left, radio traffic on
+the right, and a detail pane for reading a full message. Radio messages are
+long — that is the point of them — so the list truncates and the detail view
+is where you actually read one.
 
 ```
-Narwhal  run-1786468655383  active
+Narwhal  s1786471179534-1  active
+account routing 경로의 일관성 검증
 
-Tasks  2 total   0 done  2 running  0 ready  0 pending  0 failed
+Tasks                        Radio (3)
+✓ anthropic-path               1 · anthropic-path →mixed-path cross-path asymmetries...
+▶ mixed-path (2)               2 ! mixed-path URGENT: provider lock releases on backend...
+▶ session-identity             3 i session-identity lastCWD assumes one session per proxy.
+· synthesis ←anthropic-path,…
 
-  ▶ task-1         worker-1
-  ▶ task-2         worker-2
-
-Agents  main, worker-task-1, worker-task-2
-
-Radio  6 messages
-    1 worker-task-1    ·                       task-1 starting security audit...
-    2 worker-task-2    URGENT → worker-task-1  ACK worker-1's split: I take PER-FILE DEPTH...
-    3 worker-task-2    URGENT → worker-task-1  INCONSISTENT CREDENTIAL SOURCE...
+done 1  running 2  ready 0  failed 0  [following]
+tab pane · j/k move · enter detail · f follow · q quit
 ```
+
+| Key | Action |
+|---|---|
+| `tab` | Switch between the task and radio panes |
+| `j` / `k` | Move the cursor (also `↓` / `↑`) |
+| `ctrl+d` / `ctrl+u` | Page down / up |
+| `g` / `G` | Jump to first / last |
+| `enter` | Open the selected message |
+| `n` / `p` | Next / previous message inside the detail view |
+| `f` | Re-arm tail following after manual navigation |
+| `esc` | Close the detail view |
+| `q` | Quit |
+
+The radio list follows the newest message until you navigate manually —
+reading an older message is not yanked away by the next poll. Press `f` to
+start following again.
 
 ## Design
 
@@ -122,7 +137,7 @@ narwhal
 │   └── stdio JSON-RPC server; thin client of the daemon's /control API
 │
 └── monitor
-    └── polls the broker's read-only endpoint; DAG in place, radio scrolling
+    └── Bubble Tea TUI: task list, radio traffic, message detail pane
 ```
 
 ### What graph and radio each own

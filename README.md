@@ -72,20 +72,21 @@ is where you actually read one.
 Narwhal  s1786471179534-1  active
 account routing 경로의 일관성 검증
 
-Graph                        Radio (2)
-✓ anthropic-path               1 · anthropic-path →mixed-path cross-path asymmetries...
-▶ mixed-path ×2                2 ! mixed-path URGENT: provider lock releases on backend...
-▶ session-identity
-└─· synthesis +2
-  └─· review
+Graph                        Radio (3)
+●     ✓ anthropic-path         1 · anthropic-path →mixed-path cross-path asymmetries...
+│ ●   ▶ mixed-path ×2          2 ! mixed-path URGENT: provider lock releases on backend...
+│ │ ● ▶ session-identity       3 i session-identity lastCWD assumes one session per proxy.
+◉─┴─┴ · synthesis
+◉     · review
 
 done 1  running 2  ready 0  failed 0  [following]
 tab pane · j/k move · enter detail · f follow · q quit
 ```
 
-The graph pane lays tasks out by dependency: roots first, then what waits on
-them. `×2` is a retried dispatch; `+2` means the task also waits on two deps
-beyond the one it is nested under.
+The graph pane draws the DAG the way a commit graph does: every task gets a
+lane, and every edge is drawn. A node joining several branches (`◉─┴─┴`)
+shows all of them, and a linear chain stays in one column. `×2` marks a
+retried dispatch.
 
 | Key | Action |
 |---|---|

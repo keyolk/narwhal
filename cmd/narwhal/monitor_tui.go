@@ -522,7 +522,7 @@ func (m tuiModel) viewTasks(width, height int) string {
 		title = styDim.Render(title)
 	}
 
-	rows := m.dagRows()
+	rows := m.graphRows()
 	out := make([]string, 0, height)
 	out = append(out, title)
 
@@ -537,36 +537,31 @@ func (m tuiModel) viewTasks(width, height int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
 }
 
-// taskRow renders one graph line. Like radioRow, the text is assembled and
-// truncated as plain text before any styling is applied.
-func (m tuiModel) taskRow(r dagRow, width int, selected bool) string {
-	icon, style := taskIconStyle(r.task.State)
-	tree := r.prefix + r.connector()
+// taskRow renders one graph line: the edge gutter, then the task.
+// Like radioRow, the text is measured and truncated as plain text before
+// any styling is applied.
+func (m tuiModel) taskRow(r graphRow, width int, selected bool) string {
+	icon, style := taskIconStyle(r.state)
 
-	label := r.task.ID
-	if r.task.Dispatches > 1 {
-		label += fmt.Sprintf(" ×%d", r.task.Dispatches)
-	}
-	// A task joining several branches shows the extra deps it also waits on,
-	// since the tree only encodes the first one.
-	if len(r.task.Deps) > 1 {
-		label += fmt.Sprintf(" +%d", len(r.task.Deps)-1)
+	label := r.label
+	if r.dispatches > 1 {
+		label += fmt.Sprintf(" ×%d", r.dispatches)
 	}
 
-	plain := truncate(tree+icon+" "+label, width)
+	plain := r.gutter + " " + icon + " " + label
 	if selected {
-		return stySel.Render(padRight(plain, width))
+		return stySel.Render(padRight(truncate(plain, width), width))
 	}
-	// Re-render with color, keeping the same truncation decision.
-	if displayWidth(tree+icon+" "+label) > width {
-		return styDim.Render(tree) + style.Render(icon) + " " +
-			truncate(label, width-displayWidth(tree)-2)
+	if displayWidth(plain) > width {
+		head := r.gutter + " " + icon + " "
+		label = truncate(label, width-displayWidth(head))
 	}
-	return styDim.Render(tree) + style.Render(icon) + " " + label
+	return styDim.Render(r.gutter) + " " + style.Render(icon) + " " + label
 }
 
-func (m tuiModel) dagRows() []dagRow {
-	return buildDAG(m.sortedTasks())
+// graphRows lays out the DAG for the current snapshot.
+func (m tuiModel) graphRows() []graphRow {
+	return layoutGraph(m.sortedTasks()).render()
 }
 
 func (m tuiModel) viewRadio(width, height int) string {
@@ -635,10 +630,21 @@ func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
 	}
 }
 
+// taskByID looks up a task in the current snapshot. Graph rows carry only
+// the id, so the detail view resolves the full record here.
+func (m tuiModel) taskByID(id string) broker.TaskSnapshot {
+	for _, t := range m.snap.Tasks {
+		if t.ID == id {
+			return t
+		}
+	}
+	return broker.TaskSnapshot{ID: id}
+}
+
 // viewTaskDetail shows the selected task's state, its place in the graph,
 // and its full assignment — which the graph pane can only show truncated.
 func (m tuiModel) viewTaskDetail() string {
-	rows := m.dagRows()
+	rows := m.graphRows()
 	if len(rows) == 0 {
 		return "no tasks"
 	}
@@ -646,7 +652,7 @@ func (m tuiModel) viewTaskDetail() string {
 	if cur >= len(rows) {
 		cur = len(rows) - 1
 	}
-	t := rows[cur].task
+	t := m.taskByID(rows[cur].id)
 
 	icon, style := taskIconStyle(t.State)
 	head := fmt.Sprintf("%s  %s %s  %s",

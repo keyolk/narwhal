@@ -312,77 +312,9 @@ func TestSplitRequestIsTaggedInList(t *testing.T) {
 	}
 }
 
-func TestBuildDAGNestsDependents(t *testing.T) {
-	// a and b are roots; c depends on both. c is rendered under its first
-	// dependency and carries a marker for the rest.
-	tasks := []broker.TaskSnapshot{
-		{ID: "a"},
-		{ID: "b"},
-		{ID: "c", Deps: []string{"a", "b"}},
-	}
-	rows := buildDAG(tasks)
-	if len(rows) != 3 {
-		t.Fatalf("rows = %d, want 3", len(rows))
-	}
-	byID := map[string]dagRow{}
-	for _, r := range rows {
-		byID[r.task.ID] = r
-	}
-	if byID["a"].depth != 0 || byID["b"].depth != 0 {
-		t.Fatalf("roots should be at depth 0: a=%d b=%d", byID["a"].depth, byID["b"].depth)
-	}
-	if byID["c"].depth != 1 {
-		t.Fatalf("c should nest under its first dep, depth=%d", byID["c"].depth)
-	}
-}
 
-func TestBuildDAGIncludesUnreachableTasks(t *testing.T) {
-	// A dep that was never created must not make its dependent vanish.
-	tasks := []broker.TaskSnapshot{
-		{ID: "orphan", Deps: []string{"never-created"}},
-	}
-	rows := buildDAG(tasks)
-	if len(rows) != 1 || rows[0].task.ID != "orphan" {
-		t.Fatalf("unreachable task dropped: %v", rows)
-	}
-}
 
-func TestBuildDAGHandlesChain(t *testing.T) {
-	tasks := []broker.TaskSnapshot{
-		{ID: "one"},
-		{ID: "two", Deps: []string{"one"}},
-		{ID: "three", Deps: []string{"two"}},
-	}
-	rows := buildDAG(tasks)
-	depth := map[string]int{}
-	for _, r := range rows {
-		depth[r.task.ID] = r.depth
-	}
-	if depth["one"] != 0 || depth["two"] != 1 || depth["three"] != 2 {
-		t.Fatalf("chain depths = %v, want 0,1,2", depth)
-	}
-}
 
-func TestBuildDAGSurvivesCycle(t *testing.T) {
-	// A cycle has no root; every task must still appear exactly once.
-	tasks := []broker.TaskSnapshot{
-		{ID: "x", Deps: []string{"y"}},
-		{ID: "y", Deps: []string{"x"}},
-	}
-	rows := buildDAG(tasks)
-	if len(rows) != 2 {
-		t.Fatalf("cycle produced %d rows, want 2", len(rows))
-	}
-	seen := map[string]int{}
-	for _, r := range rows {
-		seen[r.task.ID]++
-	}
-	for id, n := range seen {
-		if n != 1 {
-			t.Fatalf("task %s appeared %d times", id, n)
-		}
-	}
-}
 
 func TestTaskDetailShowsAssignmentAndEdges(t *testing.T) {
 	m := testModel(0, 0)
@@ -404,7 +336,7 @@ func TestTaskDetailShowsAssignmentAndEdges(t *testing.T) {
 	}
 }
 
-func TestGraphPaneRendersTreeGlyphs(t *testing.T) {
+func TestGraphPaneDrawsEdges(t *testing.T) {
 	m := testModel(0, 0)
 	m.width, m.height = 90, 20
 	m.snap.Tasks = []broker.TaskSnapshot{
@@ -412,8 +344,23 @@ func TestGraphPaneRendersTreeGlyphs(t *testing.T) {
 		{ID: "child", State: broker.TaskReady, Deps: []string{"root"}},
 	}
 	out := m.viewTasks(40, 10)
-	if !strings.Contains(out, "└─") && !strings.Contains(out, "├─") {
-		t.Fatalf("graph pane should draw tree connectors:\n%s", out)
+	// child inherits root's lane, so the edge is the column itself.
+	if !strings.Contains(out, glyphNodeOnLine) {
+		t.Fatalf("graph pane should show the dependency edge:\n%s", out)
+	}
+}
+
+func TestGraphPaneDrawsFanIn(t *testing.T) {
+	m := testModel(0, 0)
+	m.width, m.height = 90, 20
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "a", State: broker.TaskCompleted},
+		{ID: "b", State: broker.TaskCompleted},
+		{ID: "sink", State: broker.TaskReady, Deps: []string{"a", "b"}},
+	}
+	out := m.viewTasks(40, 10)
+	if !strings.Contains(out, glyphJoinUp) {
+		t.Fatalf("fan-in should draw a join:\n%s", out)
 	}
 }
 

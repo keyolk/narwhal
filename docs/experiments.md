@@ -105,6 +105,51 @@ Durable evidence:
 This is the mechanism Narwhal builds on, and it is the concrete reason
 workers are launched as processes rather than as Workflow subagents.
 
+## E3 — Live peer correction during a real run: CONFIRMED
+
+**Date:** 2026-08-12
+**Environment:** `narwhal run --workers 2`, coordinator loop driving the graph
+
+Two workers analyzed a two-file codebase with a deliberately cross-cutting
+concern: `auth.py` states "header takes precedence over body", `session.py`
+carries an unresolved `# TODO: which wins, header or body?`.
+
+The radio log shows genuine intellectual collaboration, not just status
+reporting:
+
+| Seq | From → To | Priority | Content |
+|---|---|---|---|
+| 1 | task-1 → task-2 | urgent | auth.py's rule answers session.py's TODO; flags the asymmetry risk |
+| 2 | task-2 → task-1 | urgent | Frames it as two conflicting rules; warns task-1 not to over-generalize |
+| 3 | task-2 → task-1 | normal | "RECONCILE — we crossed": **retracts its own seq=2 framing** as overstated |
+| 4 | task-1 → task-2 | normal | ACK; **narrows its own claim** from "codebase rule" to "auth.py's rule" |
+
+Messages 1 and 2 were sent within 400ms of each other — the workers crossed.
+Message 3 is task-2 noticing the crossing and correcting itself in task-1's
+favor. Message 4 is task-1 accepting the correction and scoping its claim down.
+
+Both also independently converged on the sharpest defect, which neither file
+exhibits alone: a request can carry a header-sourced token and an unrelated
+body-sourced `session_id`, and nothing binds them to the same principal.
+
+This is the behavior a barrier-synchronized design cannot produce. Under
+`parallel()` with a join, each worker would have finished on its own
+un-corrected framing, and the reconciliation would have had to happen in a
+later synthesis stage — with both original errors already baked into the
+returned findings.
+
+### A bug the workers found first
+
+In an earlier run on a different workspace, worker-task-1 radioed:
+
+> GOTCHA for task-2: `./scripts/` does not exist in /private/tmp/narwhal-demo
+> — use the absolute path /Users/…/agents/worker-task-2/scripts/
+
+It was right. The generated instructions said `./scripts/`, but a worker's
+cwd is the target repository, not its own workspace. `buildAgentInstructions`
+now emits absolute paths. The radio layer surfaced a real defect in the
+runtime that launched it.
+
 ## Implications for the design
 
 1. Workers must be directly executed processes, not Workflow subagents.

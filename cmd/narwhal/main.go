@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/coordinator"
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
 )
@@ -83,10 +84,6 @@ func runCmd(args []string) {
 	fmt.Fprintf(os.Stderr, "[narwhal] cwd: %s\n", *cwd)
 	fmt.Fprintf(os.Stderr, "[narwhal] prompt: %s\n", *prompt)
 
-	// For phase 1: the coordinator (main) decomposes the task into workers.
-	// In a real run, main would be a Claude Code session that calls
-	// spawn_worker via MCP tools. For now we create a single worker to
-	// validate the end-to-end path.
 	workerCount := 1
 	if *workers != "auto" {
 		fmt.Sscanf(*workers, "%d", &workerCount)
@@ -94,52 +91,40 @@ func runCmd(args []string) {
 
 	l := launcher.New(addr, runID, *cwd)
 
-	// Create a planning thread and a worklog thread.
-	r.CreateThread("planning", "planning",
-		[]string{"main"})
-	r.CreateThread("worklog", "worklog",
-		[]string{"main"})
+	// Radio threads: planning carries decisions, worklog carries in-flight
+	// findings. Keeping them separate mirrors AgentRadio's protocol so
+	// decision traffic does not drown out live discovery sharing.
+	r.CreateThread("planning", "planning", []string{"main"})
+	r.CreateThread("worklog", "worklog", []string{"main"})
 
+	// Phase 2: the caller declares a flat set of independent tasks. A
+	// coordinating agent will later build a real DAG and add tasks mid-run
+	// via split-request; the coordinator loop already handles both.
 	for i := 1; i <= workerCount; i++ {
-		agentID := fmt.Sprintf("worker-%d", i)
 		taskID := fmt.Sprintf("task-%d", i)
-
-		// Register the worker agent.
-		agent := reg.Register(agentID, runID, false)
-
-		// Create a task for this worker.
-		r.AddTask(taskID, agentID, *prompt, nil)
-
-		// Set up the agent workspace and wrapper scripts.
-		cfg := launcher.WorkerConfig{
-			AgentID:    agentID,
-			TaskID:     taskID,
-			Assignment: *prompt,
-		}
-		agentDir, err := l.SetupAgent(agent, cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[narwhal] setup %s: %v\n", agentID, err)
-			continue
-		}
-
-		// Launch the worker as ccproxy claude --print.
-		if err := l.Launch(agentDir, cfg); err != nil {
-			fmt.Fprintf(os.Stderr, "[narwhal] launch %s: %v\n", agentID, err)
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "[narwhal] launched %s (task %s)\n", agentID, taskID)
+		r.AddTask(taskID, fmt.Sprintf("worker-%d", i), *prompt, nil)
 	}
 
-	// Wait for all workers to finish.
-	if err := l.Wait(*timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "[narwhal] %v\n", err)
+	cfg := coordinator.DefaultConfig()
+	cfg.Timeout = *timeout
+	if workerCount < cfg.MaxConcurrency {
+		cfg.MaxConcurrency = workerCount
 	}
 
-	// Print the final run state.
-	snap := r.Snapshot()
+	coord := coordinator.New(r, reg, l, cfg)
+	res := coord.Run()
+
+	fmt.Fprintf(os.Stderr, "[narwhal] completed=%d failed=%d unreached=%d timed_out=%v\n",
+		len(res.Completed), len(res.Failed), len(res.Unreached), res.TimedOut)
+
+	out := map[string]any{
+		"result":      res,
+		"snapshot":    r.Snapshot(),
+		"session_dir": l.SessionDir(),
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(snap)
+	_ = enc.Encode(out)
 }
 
 func showCmd(args []string) {

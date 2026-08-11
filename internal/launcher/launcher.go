@@ -130,7 +130,12 @@ curl -s -X POST %s/task/$TASK/done \
 
 	// Write the agent instructions file. The launcher will append this to
 	// the Claude Code system prompt via --append-system-prompt.
-	instructions := buildAgentInstructions(a, cfg)
+	//
+	// Scripts are referenced by absolute path: the worker's cwd is the
+	// target repository, not its own workspace, so a relative "./scripts/"
+	// does not resolve. A worker caught this in the first orchestration run
+	// and radioed the correction to its peer.
+	instructions := buildAgentInstructions(a, cfg, scriptsDir)
 	instrPath := filepath.Join(agentDir, "instructions.md")
 	if err := os.WriteFile(instrPath, []byte(instructions), 0o600); err != nil {
 		return "", fmt.Errorf("write instructions: %w", err)
@@ -141,35 +146,48 @@ curl -s -X POST %s/task/$TASK/done \
 
 // buildAgentInstructions produces the system prompt fragment that teaches
 // the worker how to use the radio and when to call task-done.
-func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig) string {
+//
+// scriptsDir must be absolute: the worker runs with its cwd set to the
+// target repository, so relative script paths do not resolve.
+func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "You are %s in Narwhal run %s.\n\n", a.ID, a.RunID)
+	fmt.Fprintf(&b, "You are %s in Narwhal run %s.\n", a.ID, a.RunID)
+	fmt.Fprintf(&b, "Your task id is %s.\n\n", cfg.TaskID)
 	fmt.Fprintf(&b, "Your task: %s\n\n", cfg.Assignment)
 	fmt.Fprintf(&b, "## Radio Channel (peer communication)\n\n")
-	fmt.Fprintf(&b, "Wrapper scripts are in ./scripts/ (relative to your working directory).\n")
-	fmt.Fprintf(&b, "Your identity is baked in — never pass a URL or token.\n\n")
-	fmt.Fprintf(&b, "- bash scripts/send <threadId> \"<content>\" [mentionsCSV] [priority]\n")
-	fmt.Fprintf(&b, "    Send a message. priority: fyi, normal, urgent.\n")
-	fmt.Fprintf(&b, "- bash scripts/drain [afterSeq]\n")
+	fmt.Fprintf(&b, "Wrapper scripts live at this ABSOLUTE path (your cwd is the target\n")
+	fmt.Fprintf(&b, "repository, so relative paths will NOT work):\n\n")
+	fmt.Fprintf(&b, "  %s\n\n", scriptsDir)
+	fmt.Fprintf(&b, "Your identity is baked into each script — never pass a URL or token.\n\n")
+	fmt.Fprintf(&b, "- bash %s/send <threadId> \"<content>\" [mentionsCSV] [priority]\n", scriptsDir)
+	fmt.Fprintf(&b, "    Send a message. threadId is usually \"worklog\". priority: fyi, normal, urgent.\n")
+	fmt.Fprintf(&b, "- bash %s/drain [afterSeq]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Non-blocking check for new messages. Run after each investigation unit.\n")
-	fmt.Fprintf(&b, "- bash scripts/watch [afterSeq] [timeoutMs]\n")
+	fmt.Fprintf(&b, "- bash %s/watch [afterSeq] [timeoutMs]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Long-poll for messages. Run as a BACKGROUND Bash task so you get a\n")
 	fmt.Fprintf(&b, "    completion notification when a message arrives. Keep exactly one watcher\n")
 	fmt.Fprintf(&b, "    running at all times; restart it immediately when it finishes.\n")
-	fmt.Fprintf(&b, "- bash scripts/state\n")
+	fmt.Fprintf(&b, "- bash %s/state\n", scriptsDir)
 	fmt.Fprintf(&b, "    Print the full run state.\n")
-	fmt.Fprintf(&b, "- bash scripts/task-done <taskId> \"<outcome>\"\n")
+	fmt.Fprintf(&b, "- bash %s/task-done %s \"<outcome>\"\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "    Declare your task complete with a summary of findings.\n\n")
 	fmt.Fprintf(&b, "## Passive Awareness (CRITICAL)\n\n")
-	fmt.Fprintf(&b, "1. Keep EXACTLY ONE background watcher running: bash scripts/watch\n")
-	fmt.Fprintf(&b, "2. When it finishes, restart it immediately, then process the messages.\n")
-	fmt.Fprintf(&b, "3. After every investigation unit, run bash scripts/drain to catch\n")
-	fmt.Fprintf(&b, "   messages that arrived between watcher cycles.\n")
-	fmt.Fprintf(&b, "4. URGENT messages from peers may change your assumptions — handle them\n")
-	fmt.Fprintf(&b, "   before starting the next piece of work.\n\n")
+	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
+	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)
+	fmt.Fprintf(&b, "   Run it with run_in_background=true so it never blocks your turn.\n")
+	fmt.Fprintf(&b, "2. When the harness notifies you that it finished, restart it immediately,\n")
+	fmt.Fprintf(&b, "   then handle whatever arrived.\n")
+	fmt.Fprintf(&b, "3. After every investigation unit, run drain to catch messages that landed\n")
+	fmt.Fprintf(&b, "   between watcher cycles.\n")
+	fmt.Fprintf(&b, "4. URGENT messages may invalidate assumptions your current work rests on —\n")
+	fmt.Fprintf(&b, "   handle them before starting the next piece of work.\n")
+	fmt.Fprintf(&b, "5. Broadcast findings that affect a peer's active work the moment you find\n")
+	fmt.Fprintf(&b, "   them. Sending costs you nothing and does not interrupt the receiver.\n\n")
 	fmt.Fprintf(&b, "## Task Completion\n\n")
 	fmt.Fprintf(&b, "When your task is complete, run:\n")
-	fmt.Fprintf(&b, "  bash scripts/task-done %s \"summary of your findings\"\n\n", cfg.TaskID)
+	fmt.Fprintf(&b, "  bash %s/task-done %s \"summary of your findings\"\n\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "You MUST call task-done, otherwise the coordinator records a failed\n")
+	fmt.Fprintf(&b, "dispatch and retries your task.\n\n")
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	return b.String()
 }

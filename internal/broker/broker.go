@@ -279,6 +279,41 @@ func (r *Run) GetTask(id string) *Task {
 	return r.Tasks[id]
 }
 
+// SnapshotTasks returns a stable view of every task's id and state, for
+// callers that need to classify the graph without holding locks.
+func (r *Run) SnapshotTasks() []TaskSnapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]TaskSnapshot, 0, len(r.Tasks))
+	for _, t := range r.Tasks {
+		t.mu.RLock()
+		out = append(out, TaskSnapshot{
+			ID:         t.ID,
+			Name:       t.Name,
+			Assignment: t.Assignment,
+			Deps:       append([]string(nil), t.Deps...),
+			State:      t.State,
+			Dispatches: len(t.Dispatches),
+		})
+		t.mu.RUnlock()
+	}
+	return out
+}
+
+// CurrentState returns the task's state under a read lock.
+func (t *Task) CurrentState() TaskState {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.State
+}
+
+// DispatchCount returns how many dispatch attempts this task has had.
+func (t *Task) DispatchCount() int {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.Dispatches)
+}
+
 // ReadyTasks returns all tasks currently in TaskReady state, suitable for
 // parallel dispatch by the coordinator loop.
 func (r *Run) ReadyTasks() []*Task {

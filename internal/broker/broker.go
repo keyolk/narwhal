@@ -23,6 +23,7 @@
 package broker
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,6 +74,47 @@ const (
 // MaxDispatchFailures is the circuit-breaker threshold. After this many
 // failed dispatches a task is marked TaskFailed rather than retried.
 const MaxDispatchFailures = 3
+
+// SplitRequestPrefix marks a radio message as a request to add a new task
+// to the run. The coordinator scans for messages with this prefix on the
+// planning thread and creates the requested task. This is the only way the
+// graph grows mid-run: existing tasks are immutable, new ones are appended.
+//
+// Format: "SPLIT_REQUEST|<taskId>|<name>|<assignment>|<dep1,dep2,...>"
+const SplitRequestPrefix = "SPLIT_REQUEST"
+
+// ParseSplitRequest extracts the fields from a split-request message body.
+// Returns ok=false if the body is not a well-formed split request.
+func ParseSplitRequest(content string) (taskID, name, assignment string, deps []string, ok bool) {
+	if len(content) < len(SplitRequestPrefix) || content[:len(SplitRequestPrefix)] != SplitRequestPrefix {
+		return "", "", "", nil, false
+	}
+	rest := content[len(SplitRequestPrefix):]
+	if len(rest) == 0 || rest[0] != '|' {
+		return "", "", "", nil, false
+	}
+	parts := strings.SplitN(rest[1:], "|", 4)
+	if len(parts) < 3 {
+		return "", "", "", nil, false
+	}
+	taskID = parts[0]
+	name = parts[1]
+	assignment = parts[2]
+	if len(parts) == 4 && parts[3] != "" {
+		deps = strings.Split(parts[3], ",")
+	}
+	return taskID, name, assignment, deps, true
+}
+
+// FormatSplitRequest builds a split-request message body. Used by the
+// wrapper script and by tests.
+func FormatSplitRequest(taskID, name, assignment string, deps []string) string {
+	depStr := ""
+	if len(deps) > 0 {
+		depStr = strings.Join(deps, ",")
+	}
+	return SplitRequestPrefix + "|" + taskID + "|" + name + "|" + assignment + "|" + depStr
+}
 
 // Run is a namespace holding one or more task graphs plus a radio channel.
 // A Run is "a namespace, not a DAG" — it can hold several unrelated graphs.

@@ -93,3 +93,88 @@ func TestSnapshotIsConsistent(t *testing.T) {
 		t.Fatalf("task name = %q, want first", s.Tasks[0].Name)
 	}
 }
+
+func TestSplitRequestParseAndFormat(t *testing.T) {
+	// Round-trip: format then parse should preserve all fields.
+	deps := []string{"task-1", "task-2"}
+	body := FormatSplitRequest("task-3", "lifecycle", "investigate lifecycle", deps)
+	id, name, assignment, parsedDeps, ok := ParseSplitRequest(body)
+	if !ok {
+		t.Fatalf("parse failed on %q", body)
+	}
+	if id != "task-3" || name != "lifecycle" || assignment != "investigate lifecycle" {
+		t.Fatalf("fields = %q/%q/%q, want task-3/lifecycle/investigate lifecycle", id, name, assignment)
+	}
+	if len(parsedDeps) != 2 || parsedDeps[0] != "task-1" || parsedDeps[1] != "task-2" {
+		t.Fatalf("deps = %v, want [task-1 task-2]", parsedDeps)
+	}
+
+	// No deps case.
+	body2 := FormatSplitRequest("task-4", "solo", "standalone", nil)
+	_, _, _, parsedDeps2, ok2 := ParseSplitRequest(body2)
+	if !ok2 {
+		t.Fatalf("parse failed on %q", body2)
+	}
+	if len(parsedDeps2) != 0 {
+		t.Fatalf("expected 0 deps, got %v", parsedDeps2)
+	}
+
+	// Non-split-request message should not parse.
+	_, _, _, _, ok3 := ParseSplitRequest("just a regular FYI message")
+	if ok3 {
+		t.Fatal("non-split-request content should not parse")
+	}
+
+	// Malformed (missing fields).
+	_, _, _, _, ok4 := ParseSplitRequest("SPLIT_REQUEST|only-one-field")
+	if ok4 {
+		t.Fatal("malformed split request should not parse")
+	}
+}
+
+func TestMessagesSinceRespectsCursor(t *testing.T) {
+	b := New()
+	r := b.CreateRun("run-cursor", "test", "/tmp", "main")
+
+	r.PostMessage("th", "a", nil, PriorityNormal, "m1")
+	r.PostMessage("th", "b", nil, PriorityNormal, "m2")
+	r.PostMessage("th", "c", nil, PriorityNormal, "m3")
+
+	all := r.MessagesSince(0)
+	if len(all) != 3 {
+		t.Fatalf("MessagesSince(0) = %d, want 3", len(all))
+	}
+	since1 := r.MessagesSince(1)
+	if len(since1) != 2 {
+		t.Fatalf("MessagesSince(1) = %d, want 2", len(since1))
+	}
+	if since1[0].Seq != 2 || since1[1].Seq != 3 {
+		t.Fatalf("seqs = %d, %d; want 2, 3", since1[0].Seq, since1[1].Seq)
+	}
+}
+
+func TestMessagesMentioningFiltersByMention(t *testing.T) {
+	b := New()
+	r := b.CreateRun("run-mention", "test", "/tmp", "main")
+
+	// Message mentioning worker-1 only.
+	r.PostMessage("th", "sender", []string{"worker-1"}, PriorityUrgent, "for you")
+	// Broadcast (no mentions) — visible to everyone.
+	r.PostMessage("th", "sender", nil, PriorityFYI, "broadcast")
+	// Message mentioning worker-2 only.
+	r.PostMessage("th", "sender", []string{"worker-2"}, PriorityNormal, "not for you")
+
+	worker1Msgs := r.MessagesMentioning(0, "worker-1")
+	if len(worker1Msgs) != 2 {
+		t.Fatalf("worker-1 should see 2 messages (mention + broadcast), got %d", len(worker1Msgs))
+	}
+	worker2Msgs := r.MessagesMentioning(0, "worker-2")
+	if len(worker2Msgs) != 2 {
+		t.Fatalf("worker-2 should see 2 messages (mention + broadcast), got %d", len(worker2Msgs))
+	}
+	// Cursor filter: only messages after seq 1.
+	worker1After1 := r.MessagesMentioning(1, "worker-1")
+	if len(worker1After1) != 1 {
+		t.Fatalf("worker-1 after seq 1 should see 1 (broadcast), got %d", len(worker1After1))
+	}
+}

@@ -66,9 +66,10 @@ type Coordinator struct {
 	launcher WorkerRunner
 	cfg      Config
 
-	mu       sync.Mutex
-	running  map[string]string // taskID → agentID
-	finished map[string]bool   // taskID → true once terminal
+	mu          sync.Mutex
+	running     map[string]string // taskID → agentID
+	finished    map[string]bool   // taskID → true once terminal
+	splitCursor int64             // last processed message Seq for split-request intake
 }
 
 // New creates a Coordinator for a run.
@@ -114,6 +115,7 @@ func (c *Coordinator) Run() Result {
 		}
 
 		c.reapFinishedWorkers()
+		c.intakeSplitRequests()
 		dispatched := c.dispatchReady()
 
 		c.mu.Lock()
@@ -252,6 +254,36 @@ func (c *Coordinator) reapFinishedWorkers() {
 			c.finished[taskID] = true
 			c.mu.Unlock()
 		}
+	}
+}
+
+// intakeSplitRequests scans the planning thread for split-request messages
+// the coordinator has not yet processed and creates the requested tasks.
+//
+// This is the only path by which the graph grows mid-run. Existing tasks
+// are never edited; new ones are appended with their deps. The coordinator
+// tracks the last processed message cursor so it does not re-create a task
+// on every tick.
+func (c *Coordinator) intakeSplitRequests() {
+	msgs := c.run.MessagesSince(c.splitCursor)
+	for _, m := range msgs {
+		if m.ThreadID != "planning" {
+			continue
+		}
+		taskID, name, assignment, deps, ok := broker.ParseSplitRequest(m.Content)
+		if !ok {
+			continue
+		}
+		if c.run.GetTask(taskID) != nil {
+			// Already created (e.g. two workers requested the same split).
+			continue
+		}
+		c.run.AddTask(taskID, name, assignment, deps)
+		log.Printf("[coordinator] split-request accepted: %s (%s) deps=%v from %s",
+			taskID, name, deps, m.Sender)
+	}
+	if len(msgs) > 0 {
+		c.splitCursor = msgs[len(msgs)-1].Seq
 	}
 }
 

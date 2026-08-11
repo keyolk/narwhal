@@ -119,6 +119,18 @@ curl -s -X POST %s/task/$TASK/done \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")"
 `, base),
+		"split": fmt.Sprintf(`#!/bin/bash
+# usage: split "<taskId>" "<name>" "<assignment>" [depsCSV]
+# Request the coordinator to add a new task to the run. Existing tasks
+# are immutable; this is the only way the graph grows mid-run.
+set -euo pipefail
+TASK="$1"; NAME="$2"; ASSIGN="$3"; DEPS="${4:-}"
+# Build a SPLIT_REQUEST message body and post it to the planning thread.
+BODY="SPLIT_REQUEST|$TASK|$NAME|$ASSIGN|$DEPS"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"planning","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
+`, base),
 	}
 
 	for name, content := range scripts {
@@ -170,7 +182,11 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "- bash %s/state\n", scriptsDir)
 	fmt.Fprintf(&b, "    Print the full run state.\n")
 	fmt.Fprintf(&b, "- bash %s/task-done %s \"<outcome>\"\n", scriptsDir, cfg.TaskID)
-	fmt.Fprintf(&b, "    Declare your task complete with a summary of findings.\n\n")
+	fmt.Fprintf(&b, "    Declare your task complete with a summary of findings.\n")
+	fmt.Fprintf(&b, "- bash %s/split \"<newTaskId>\" \"<name>\" \"<assignment>\" [depsCSV]\n", scriptsDir)
+	fmt.Fprintf(&b, "    Request a NEW task be added to the run. Use when you discover work\n")
+	fmt.Fprintf(&b, "    that is genuinely independent of yours and should run in parallel.\n")
+	fmt.Fprintf(&b, "    Existing tasks are immutable — you cannot edit your own task.\n\n")
 	fmt.Fprintf(&b, "## Passive Awareness (CRITICAL)\n\n")
 	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
 	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)

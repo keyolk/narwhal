@@ -18,6 +18,7 @@ import (
 	"github.com/keyolk/narwhal/internal/coordinator"
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 func main() {
@@ -114,6 +115,11 @@ func runCmd(args []string) {
 	coord := coordinator.New(r, reg, l, cfg)
 	res := coord.Run()
 
+	// Persist the final snapshot so `narwhal show` can read it after exit.
+	if err := store.SaveRun(r.Snapshot()); err != nil {
+		fmt.Fprintf(os.Stderr, "[narwhal] warning: save run: %v\n", err)
+	}
+
 	fmt.Fprintf(os.Stderr, "[narwhal] completed=%d failed=%d unreached=%d timed_out=%v\n",
 		len(res.Completed), len(res.Failed), len(res.Unreached), res.TimedOut)
 
@@ -129,13 +135,51 @@ func runCmd(args []string) {
 
 func showCmd(args []string) {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: narwhal show <run-id>")
+		// No run-id: list recent runs.
+		ids, err := store.ListRuns()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: list runs: %v\n", err)
+			os.Exit(1)
+		}
+		if len(ids) == 0 {
+			fmt.Println("(no persisted runs)")
+			return
+		}
+		fmt.Printf("Recent runs (newest first):\n")
+		for _, id := range ids {
+			s, err := store.LoadRun(id)
+			if err != nil {
+				fmt.Printf("  %s  (unreadable: %v)\n", id, err)
+				continue
+			}
+			completed := 0
+			failed := 0
+			for _, t := range s.Tasks {
+				switch t.State {
+				case broker.TaskCompleted:
+					completed++
+				case broker.TaskFailed:
+					failed++
+				}
+			}
+			msgCount := 0
+			if s.Messages != nil {
+				msgCount = len(s.Messages)
+			}
+			fmt.Printf("  %s  state=%s tasks=%d (done=%d fail=%d) msgs=%d\n",
+				id, s.State, len(s.Tasks), completed, failed, msgCount)
+		}
+		return
+	}
+
+	s, err := store.LoadRun(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	// Phase 1: show reads from the in-memory broker which is gone after the
-	// process exits. A later phase will persist run state to disk.
-	fmt.Fprintf(os.Stderr, "note: in-memory broker; show is only useful within a running session\n")
-	fmt.Fprintf(os.Stderr, "run-id: %s\n", args[0])
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(s)
 }
 
 func generateRunID() string {

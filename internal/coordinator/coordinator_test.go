@@ -237,3 +237,186 @@ func TestBlockedTaskIsReportedUnreached(t *testing.T) {
 		t.Fatalf("nothing should complete, got %v", res.Completed)
 	}
 }
+
+func TestDiamondDependency(t *testing.T) {
+	// A → B, A → C, B+C → D. D must run only after both B and C finish.
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("run-diamond", "test", "/tmp", "main")
+
+	run.AddTask("A", "A", "do A", nil)
+	run.AddTask("B", "B", "do B", []string{"A"})
+	run.AddTask("C", "C", "do C", []string{"A"})
+	run.AddTask("D", "D", "do D", []string{"B", "C"})
+
+	f := newFakeRunner()
+	c := New(run, reg, f, testConfig())
+
+	f.onLaunch = func(cfg launcher.WorkerConfig) {
+		time.Sleep(20 * time.Millisecond)
+		if task := run.GetTask(cfg.TaskID); task != nil {
+			task.CompleteDispatch("done", run)
+		}
+		f.finish(cfg.AgentID)
+	}
+
+	res := c.Run()
+
+	if len(res.Completed) != 4 {
+		t.Fatalf("completed = %d, want 4", len(res.Completed))
+	}
+	if len(res.Failed) != 0 {
+		t.Fatalf("unexpected failures: %v", res.Failed)
+	}
+
+	// Verify D ran last (its deps B and C both completed first).
+	order := f.launchOrder()
+	if len(order) != 4 {
+		t.Fatalf("launch order length = %d, want 4", len(order))
+	}
+	if order[0] != "A" {
+		t.Fatalf("first launched = %s, want A", order[0])
+	}
+	if order[3] != "D" {
+		t.Fatalf("last launched = %s, want D", order[3])
+	}
+	// B and C must come before D but after A.
+	bIdx, cIdx, dIdx := -1, -1, -1
+	for i, id := range order {
+		switch id {
+		case "B":
+			bIdx = i
+		case "C":
+			cIdx = i
+		case "D":
+			dIdx = i
+		}
+	}
+	if bIdx > dIdx || cIdx > dIdx {
+		t.Fatalf("B(%d) or C(%d) ran after D(%d)", bIdx, cIdx, dIdx)
+	}
+}
+
+func TestPartialFailureBlocksDependents(t *testing.T) {
+	// A always fails (circuit-breaks). B depends on A. B should be
+	// unreached because A never completes.
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("run-partial-fail", "test", "/tmp", "main")
+
+	run.AddTask("A", "A", "always fail", nil)
+	run.AddTask("B", "B", "depends on A", []string{"A"})
+
+	f := newFakeRunner()
+	c := New(run, reg, f, testConfig())
+
+	// Worker for A always exits without task-done, causing circuit breaker.
+	f.onLaunch = func(cfg launcher.WorkerConfig) {
+		time.Sleep(10 * time.Millisecond)
+		f.finish(cfg.AgentID)
+	}
+
+	res := c.Run()
+
+	if len(res.Failed) != 1 || res.Failed[0] != "A" {
+		t.Fatalf("failed = %v, want [A]", res.Failed)
+	}
+	if len(res.Unreached) != 1 || res.Unreached[0] != "B" {
+		t.Fatalf("unreached = %v, want [B]", res.Unreached)
+	}
+}
+
+func TestSplitRequestAddsTaskMidRun(t *testing.T) {
+	// Worker on the initial task posts a split-request to the planning
+	// thread. The coordinator should create the new task and dispatch it.
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("run-split", "test", "/tmp", "main")
+	run.CreateThread("planning", "planning", []string{"main"})
+
+	run.AddTask("initial", "initial", "do initial", nil)
+
+	f := newFakeRunner()
+	c := New(run, reg, f, testConfig())
+
+	f.onLaunch = func(cfg launcher.WorkerConfig) {
+		if cfg.TaskID == "initial" {
+			// Worker discovers independent work and requests a split.
+			body := broker.FormatSplitRequest("discovered", "discovered", "investigate new area", nil)
+			run.PostMessage("planning", cfg.AgentID, nil, broker.PriorityNormal, body)
+			time.Sleep(10 * time.Millisecond)
+			run.GetTask("initial").CompleteDispatch("done + found new area", run)
+			f.finish(cfg.AgentID)
+		} else {
+			time.Sleep(10 * time.Millisecond)
+			run.GetTask(cfg.TaskID).CompleteDispatch("done", run)
+			f.finish(cfg.AgentID)
+		}
+	}
+
+	res := c.Run()
+
+	if len(res.Completed) != 2 {
+		t.Fatalf("completed = %d, want both initial and discovered, got %v", len(res.Completed), res.Completed)
+	}
+	if run.GetTask("discovered") == nil {
+		t.Fatal("split-requested task 'discovered' was never created")
+	}
+	// The discovered task should have been dispatched (at least 1 dispatch).
+	if got := run.GetTask("discovered").DispatchCount(); got < 1 {
+		t.Fatalf("discovered task dispatch count = %d, want >= 1", got)
+	}
+}
+
+func TestSplitRequestWithDeps(t *testing.T) {
+	// Worker on task-1 requests a split for task-2 that depends on task-1.
+	// The coordinator should create task-2 with the dep, and it should
+	// become ready only after task-1 completes.
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("run-split-deps", "test", "/tmp", "main")
+	run.CreateThread("planning", "planning", []string{"main"})
+
+	run.AddTask("task-1", "task-1", "do task-1", nil)
+
+	f := newFakeRunner()
+	c := New(run, reg, f, testConfig())
+
+	f.onLaunch = func(cfg launcher.WorkerConfig) {
+		if cfg.TaskID == "task-1" {
+			body := broker.FormatSplitRequest("task-2", "task-2", "follow-up", []string{"task-1"})
+			run.PostMessage("planning", cfg.AgentID, nil, broker.PriorityNormal, body)
+			time.Sleep(10 * time.Millisecond)
+			run.GetTask("task-1").CompleteDispatch("done", run)
+			f.finish(cfg.AgentID)
+		} else {
+			time.Sleep(10 * time.Millisecond)
+			run.GetTask(cfg.TaskID).CompleteDispatch("done", run)
+			f.finish(cfg.AgentID)
+		}
+	}
+
+	res := c.Run()
+
+	if len(res.Completed) != 2 {
+		t.Fatalf("completed = %d, want 2", len(res.Completed))
+	}
+	// Verify task-2 has the dep.
+	t2 := run.GetTask("task-2")
+	if t2 == nil {
+		t.Fatal("task-2 was not created")
+	}
+	snap := run.SnapshotTasks()
+	for _, ts := range snap {
+		if ts.ID == "task-2" {
+			if len(ts.Deps) != 1 || ts.Deps[0] != "task-1" {
+				t.Fatalf("task-2 deps = %v, want [task-1]", ts.Deps)
+			}
+		}
+	}
+	// Verify task-2 launched after task-1.
+	order := f.launchOrder()
+	if len(order) != 2 || order[0] != "task-1" || order[1] != "task-2" {
+		t.Fatalf("launch order = %v, want [task-1 task-2]", order)
+	}
+}

@@ -87,6 +87,77 @@ type Run struct {
 	Tasks       map[string]*Task
 	Threads     map[string]*Thread
 	seqCounter  int64     // monotonic message sequence, global per Run
+	messages    []*Message // append-only log, indexed by Seq-1
+	msgMu       sync.Mutex // guards messages slice and watcher signaling
+	watchers    []watchSink // active long-poll sessions waiting for new messages
+}
+
+// watchSink is fed to long-poll watchers so PostMessage can wake them.
+type watchSink struct {
+	agentID string
+	wake    chan struct{}
+}
+
+// MessagesSince returns all messages with Seq > after, in order. This is
+// the core of both drain (non-blocking) and watch (after long-poll resolves).
+func (r *Run) MessagesSince(after int64) []*Message {
+	r.msgMu.Lock()
+	defer r.msgMu.Unlock()
+	var out []*Message
+	for _, m := range r.messages {
+		if m.Seq > after {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// MessagesMentioning returns messages with Seq > after that mention agentID
+// OR were posted to any thread the agent can see (in phase 1, all threads).
+func (r *Run) MessagesMentioning(after int64, agentID string) []*Message {
+	r.msgMu.Lock()
+	defer r.msgMu.Unlock()
+	var out []*Message
+	for _, m := range r.messages {
+		if m.Seq <= after {
+			continue
+		}
+		// Mention check, or broadcast (no mentions = all).
+		if len(m.Mentions) == 0 {
+			out = append(out, m)
+			continue
+		}
+		for _, mention := range m.Mentions {
+			if mention == agentID {
+				out = append(out, m)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// RegisterWatch adds a long-poll wake channel for an agent. Returns a
+// removal function to call when the watch ends. PostMessage will signal
+// the channel when a new message arrives mentioning the agent (or a
+// broadcast message with no mentions).
+func (r *Run) RegisterWatch(agentID string) (chan struct{}, func()) {
+	ch := make(chan struct{}, 1)
+	sink := watchSink{agentID: agentID, wake: ch}
+	r.msgMu.Lock()
+	r.watchers = append(r.watchers, sink)
+	r.msgMu.Unlock()
+	remove := func() {
+		r.msgMu.Lock()
+		defer r.msgMu.Unlock()
+		for i, w := range r.watchers {
+			if w == sink {
+				r.watchers = append(r.watchers[:i], r.watchers[i+1:]...)
+				return
+			}
+		}
+	}
+	return ch, remove
 }
 
 // Task is a unit of work within a Run. Deps define DAG edges: a task is
@@ -322,8 +393,10 @@ func (r *Run) CreateThread(id, name string, participants []string) *Thread {
 	return th
 }
 
-// PostMessage appends a message to the run's radio channel and returns it.
-// The caller must set Sender; the broker assigns Seq atomically.
+// PostMessage appends a message to the run's radio channel, stores it in
+// the append-only log, and wakes any active long-poll watchers. The caller
+// must set Sender; the broker assigns Seq atomically. Returns the stored
+// message (safe to serialize without holding any lock).
 func (r *Run) PostMessage(threadID, sender string, mentions []string, priority Priority, content string) *Message {
 	seq := atomic.AddInt64(&r.seqCounter, 1)
 	m := &Message{
@@ -335,6 +408,31 @@ func (r *Run) PostMessage(threadID, sender string, mentions []string, priority P
 		Priority:  priority,
 		Content:   content,
 		CreatedAt: time.Now(),
+	}
+	// Store in log and wake watchers under the message lock so a concurrent
+	// drain/watch sees a consistent view (message is in the log before the
+	// wake signal is sent).
+	r.msgMu.Lock()
+	r.messages = append(r.messages, m)
+	watchers := append([]watchSink(nil), r.watchers...)
+	r.msgMu.Unlock()
+	for _, w := range watchers {
+		// Only wake watchers who are mentioned (or for broadcast messages).
+		shouldWake := len(m.Mentions) == 0
+		if !shouldWake {
+			for _, mention := range m.Mentions {
+				if mention == w.agentID {
+					shouldWake = true
+					break
+				}
+			}
+		}
+		if shouldWake {
+			select {
+			case w.wake <- struct{}{}:
+			default: // watcher already has a pending wake; skip
+			}
+		}
 	}
 	return m
 }
@@ -348,7 +446,7 @@ type Snapshot struct {
 	State    RunState       `json:"state"`
 	Tasks    []TaskSnapshot `json:"tasks"`
 	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []Message      `json:"messages"`
+	Messages []*Message   `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -396,5 +494,9 @@ func (r *Run) Snapshot() Snapshot {
 		})
 		th.mu.RUnlock()
 	}
+	// Include the message log so snapshots are self-contained.
+	r.msgMu.Lock()
+	s.Messages = append([]*Message(nil), r.messages...)
+	r.msgMu.Unlock()
 	return s
 }

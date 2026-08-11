@@ -23,7 +23,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -35,27 +34,14 @@ type Server struct {
 	registry *broker.AgentRegistry
 	listener net.Listener
 	server   *http.Server
-
-	// watchMu guards per-agent watch state so only one long-poll per agent
-	// is active at a time (AgentRadio's "exactly one watcher" invariant).
-	watchMu   sync.Mutex
-	watchers  map[string]*watchSession
-}
-
-type watchSession struct {
-	mu       sync.Mutex
-	notified chan struct{}
-	cursor   int64
 }
 
 // New returns a Server bound to an OS-assigned ephemeral port on localhost.
 func New(b *broker.Broker, reg *broker.AgentRegistry) *Server {
-	s := &Server{
+	return &Server{
 		broker:   b,
 		registry: reg,
-		watchers: make(map[string]*watchSession),
 	}
-	return s
 }
 
 // Start binds the listener and begins serving. Returns the actual address.
@@ -251,42 +237,39 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, agent *brok
 	}
 	timeout := time.Duration(req.TimeoutMs) * time.Millisecond
 
-	// AgentRadio invariant: exactly one watcher per agent. If a previous
-	// watch session is still active, close it before starting a new one.
-	s.watchMu.Lock()
-	if old, ok := s.watchers[agent.ID]; ok {
-		close(old.notified)
-	}
-	sess := &watchSession{
-		notified: make(chan struct{}, 1),
-		cursor:   req.After,
-	}
-	s.watchers[agent.ID] = sess
-	s.watchMu.Unlock()
-
-	defer func() {
-		s.watchMu.Lock()
-		delete(s.watchers, agent.ID)
-		s.watchMu.Unlock()
-	}()
-
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		// In phase 1 the broker is in-memory with no history store, so we
-		// poll the run's snapshot. A later phase will add a proper message
-		// log with O(1) cursor lookup; for now the simplicity is worth it.
-		time.Sleep(200 * time.Millisecond)
-		// TODO: when message log is persisted, check cursor directly.
-		// For now, return immediately so the watcher wrapper can drain.
-		// This is a placeholder that the watch wrapper will exercise.
-		break
+	// First check: are there already messages waiting?
+	msgs := run.MessagesMentioning(req.After, agent.ID)
+	if len(msgs) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agent_id": agent.ID,
+			"cursor":   lastSeq(msgs),
+			"messages": msgs,
+		})
+		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"agent_id": agent.ID,
-		"cursor":   sess.cursor,
-		"status":   "check-drain",
-	})
+	// No messages yet: register a long-poll wake channel and wait.
+	ch, remove := run.RegisterWatch(agent.ID)
+	defer remove()
+
+	select {
+	case <-ch:
+		msgs := run.MessagesMentioning(req.After, agent.ID)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agent_id": agent.ID,
+			"cursor":   lastSeq(msgs),
+			"messages": msgs,
+		})
+	case <-time.After(timeout):
+		writeJSON(w, http.StatusOK, map[string]any{
+			"agent_id": agent.ID,
+			"cursor":   req.After,
+			"messages": []*broker.Message{},
+			"timeout":  true,
+		})
+	case <-r.Context().Done():
+		return
+	}
 }
 
 func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request, agent *broker.Agent, run *broker.Run) {
@@ -299,14 +282,24 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request, agent *brok
 	}
 	_ = decodeBody(r, &req)
 
-	// Phase 1: return the run snapshot. The caller (wrapper script) will
-	// extract messages with seq > after and mention this agent.
-	snap := run.Snapshot()
+	msgs := run.MessagesMentioning(req.After, agent.ID)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agent_id": agent.ID,
 		"after":    req.After,
-		"snapshot": snap,
+		"cursor":   lastSeq(msgs),
+		"messages": msgs,
 	})
+}
+
+// lastSeq returns the highest Seq among msgs, or 0 if empty.
+func lastSeq(msgs []*broker.Message) int64 {
+	var max int64
+	for _, m := range msgs {
+		if m.Seq > max {
+			max = m.Seq
+		}
+	}
+	return max
 }
 
 func (s *Server) handleState(w http.ResponseWriter, agent *broker.Agent, run *broker.Run) {

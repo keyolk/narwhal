@@ -30,6 +30,8 @@ func main() {
 		runCmd(os.Args[2:])
 	case "show":
 		showCmd(os.Args[2:])
+	case "experiment":
+		experimentCmd(os.Args[2:])
 	case "version":
 		fmt.Println("narwhal dev")
 	case "-h", "--help", "help":

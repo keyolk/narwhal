@@ -190,7 +190,13 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 		return fmt.Errorf("create log file: %w", err)
 	}
 
+	// bypassPermissions is required: workers run headless with --print, so
+	// there is no interactive approval path. Without it every Bash call
+	// touching the agent workspace (wrapper scripts, ack artifacts) is
+	// blocked by the permission gate and the worker cannot do its job.
+	// AgentRadio's own startup scripts use the same flag for this reason.
 	cmd := exec.Command("ccproxy", "claude", "--print",
+		"--permission-mode", "bypassPermissions",
 		"--append-system-prompt", string(instructions),
 		cfg.Assignment,
 	)

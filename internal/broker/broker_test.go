@@ -3,6 +3,7 @@ package broker
 
 import (
 	"testing"
+	"time"
 )
 
 func TestCreateRunAndAddTask(t *testing.T) {
@@ -176,5 +177,107 @@ func TestMessagesMentioningFiltersByMention(t *testing.T) {
 	worker1After1 := r.MessagesMentioning(1, "worker-1")
 	if len(worker1After1) != 1 {
 		t.Fatalf("worker-1 after seq 1 should see 1 (broadcast), got %d", len(worker1After1))
+	}
+}
+
+func TestWatcherRestartPreservesMessages(t *testing.T) {
+	// Simulate the AgentRadio watcher restart sequence:
+	//   watcher cycle 1: drain from cursor 0, get msg seq 1, advance cursor to 1
+	//   watcher restart gap: msg seq 2 arrives while no watcher is active
+	//   watcher cycle 2: drain from cursor 1, get msg seq 2 (NOT lost)
+	//
+	// AgentRadio's original wait_for_mention.sh re-read the full state on
+	// each restart to avoid swallowing messages between cycles. Narwhal's
+	// cursor-based drain achieves the same guarantee more directly: the
+	// cursor is the high-water mark, so a drain after any gap picks up
+	// everything the watcher missed.
+	b := New()
+	r := b.CreateRun("run-restart", "test", "/tmp", "main")
+
+	// Cycle 1: one message arrives.
+	r.PostMessage("th", "peer", []string{"me"}, PriorityNormal, "first")
+	cycle1 := r.MessagesMentioning(0, "me")
+	if len(cycle1) != 1 || cycle1[0].Seq != 1 {
+		t.Fatalf("cycle 1: expected seq 1, got %v", cycle1)
+	}
+	cursor := cycle1[0].Seq
+
+	// Restart gap: message arrives while no watcher is active.
+	r.PostMessage("th", "peer", []string{"me"}, PriorityUrgent, "second during gap")
+
+	// Cycle 2: drain from the saved cursor — must see seq 2.
+	cycle2 := r.MessagesMentioning(cursor, "me")
+	if len(cycle2) != 1 {
+		t.Fatalf("cycle 2: expected 1 message, got %d", len(cycle2))
+	}
+	if cycle2[0].Seq != 2 {
+		t.Fatalf("cycle 2: expected seq 2, got %d", cycle2[0].Seq)
+	}
+	if cycle2[0].Content != "second during gap" {
+		t.Fatalf("cycle 2: content = %q, want 'second during gap'", cycle2[0].Content)
+	}
+
+	// Cycle 3: nothing new — cursor advance must not produce stale results.
+	cycle3 := r.MessagesMentioning(cycle2[0].Seq, "me")
+	if len(cycle3) != 0 {
+		t.Fatalf("cycle 3: expected 0 messages, got %d", len(cycle3))
+	}
+}
+
+func TestRegisterWatchWakesOnMention(t *testing.T) {
+	b := New()
+	r := b.CreateRun("run-wake", "test", "/tmp", "main")
+
+	// Register a watcher for "worker-1".
+	ch, remove := r.RegisterWatch("worker-1")
+	defer remove()
+
+	// Post a message mentioning worker-1 in a goroutine.
+	go func() {
+		r.PostMessage("th", "peer", []string{"worker-1"}, PriorityUrgent, "wake up")
+	}()
+
+	select {
+	case <-ch:
+		// Wake received — verify the message is now visible.
+		msgs := r.MessagesMentioning(0, "worker-1")
+		if len(msgs) != 1 || msgs[0].Content != "wake up" {
+			t.Fatalf("after wake: msgs = %v", msgs)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher was not woken by mentioned message")
+	}
+}
+
+func TestRegisterWakeSkipsUnmentionedAgent(t *testing.T) {
+	b := New()
+	r := b.CreateRun("run-skip", "test", "/tmp", "main")
+
+	ch, remove := r.RegisterWatch("worker-1")
+	defer remove()
+
+	// Post a message mentioning worker-2, NOT worker-1.
+	go func() {
+		r.PostMessage("th", "peer", []string{"worker-2"}, PriorityNormal, "not for you")
+	}()
+
+	// worker-1 should NOT be woken.
+	select {
+	case <-ch:
+		t.Fatal("watcher was woken by a message not mentioning it")
+	case <-time.After(300 * time.Millisecond):
+		// Expected: no wake. Now post a broadcast (no mentions) — that should wake.
+	}
+
+	// Broadcast message (no mentions) should wake everyone.
+	go func() {
+		r.PostMessage("th", "peer", nil, PriorityFYI, "broadcast")
+	}()
+
+	select {
+	case <-ch:
+		// Expected: broadcast wakes all watchers.
+	case <-time.After(2 * time.Second):
+		t.Fatal("watcher was not woken by broadcast message")
 	}
 }

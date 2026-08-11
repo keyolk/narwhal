@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
 )
 
@@ -45,6 +46,39 @@ type monitorView struct {
 	seenMsgs map[int64]bool
 }
 
+// daemonRunLister asks the daemon which runs it is hosting. Returns an
+// error when no daemon is running, which Discover treats as "no daemon
+// runs" rather than a failure — monitoring a batch run must still work
+// when the daemon was never started.
+func daemonRunLister() (string, []string, error) {
+	info, err := nd.Status()
+	if err != nil {
+		return "", nil, err
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(info.URL + "/api/v1/control/status")
+	if err != nil {
+		return "", nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("daemon status %d", resp.StatusCode)
+	}
+	var payload struct {
+		Runs []struct {
+			RunID string `json:"run_id"`
+		} `json:"runs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", nil, err
+	}
+	ids := make([]string, 0, len(payload.Runs))
+	for _, r := range payload.Runs {
+		ids = append(ids, r.RunID)
+	}
+	return info.URL, ids, nil
+}
+
 func monitorCmd(args []string) {
 	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
 	runID := fs.String("run", "", "run id to monitor (default: newest live run)")
@@ -53,12 +87,16 @@ func monitorCmd(args []string) {
 	noColor := fs.Bool("no-color", false, "disable ANSI colors")
 	fs.Parse(args)
 
-	live, ok := store.FindLive(*runID)
+	// Discover both batch runs (registry file) and daemon-hosted runs
+	// (spawned through MCP). Only the batch CLI writes to the registry, so
+	// looking there alone would miss every interactive run.
+	entries := store.Discover(daemonRunLister)
+	live, ok := store.FindLiveIn(entries, *runID)
 	if !ok {
 		if *runID == "" {
-			fmt.Fprintf(os.Stderr, "no live runs.\n%s", store.LiveRunsSummary())
+			fmt.Fprintf(os.Stderr, "no live runs.\n%s", store.SummarizeRuns(entries))
 		} else {
-			fmt.Fprintf(os.Stderr, "run %q is not live.\n%s", *runID, store.LiveRunsSummary())
+			fmt.Fprintf(os.Stderr, "run %q is not live.\n%s", *runID, store.SummarizeRuns(entries))
 			fmt.Fprintf(os.Stderr, "\nFor a finished run, use: narwhal show %s\n", *runID)
 		}
 		os.Exit(1)
@@ -69,8 +107,12 @@ func monitorCmd(args []string) {
 		seenMsgs: make(map[int64]bool),
 	}
 
-	fmt.Fprintf(os.Stderr, "%s monitoring %s (pid %d) at %s%s\n",
-		v.dim("[narwhal]"), live.RunID, live.PID, live.BrokerURL, v.reset())
+	origin := fmt.Sprintf("pid %d", live.PID)
+	if live.PID == 0 {
+		origin = "daemon"
+	}
+	fmt.Fprintf(os.Stderr, "%s monitoring %s (%s) at %s%s\n",
+		v.dim("[narwhal]"), live.RunID, origin, live.BrokerURL, v.reset())
 
 	client := &http.Client{Timeout: 5 * time.Second}
 	for {

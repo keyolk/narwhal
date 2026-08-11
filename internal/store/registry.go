@@ -122,6 +122,11 @@ func DeregisterLive(pid int) error {
 
 // ListLive returns the live runs, newest first, self-healing the file when
 // pruning removed anything.
+//
+// This covers batch runs only. A run hosted by the daemon (spawned through
+// MCP) is not in this file — the daemon owns those, and duplicating them
+// here would mean two places to keep in sync. Callers that need to see
+// every live run should use Discover instead.
 func ListLive() []LiveRun {
 	raw := loadRegistry()
 	live := pruneDead(raw)
@@ -131,10 +136,49 @@ func ListLive() []LiveRun {
 	return live
 }
 
-// FindLive resolves a run by id, or returns the newest live run when id is
-// empty. The second value reports whether a match was found.
-func FindLive(runID string) (LiveRun, bool) {
-	entries := ListLive()
+// DaemonRunLister reports the runs a daemon is currently hosting. The
+// concrete implementation lives in the caller to avoid an import cycle
+// (daemon depends on store, not the other way around).
+type DaemonRunLister func() (url string, runIDs []string, err error)
+
+// Discover returns every live run: batch runs from the registry file plus
+// runs hosted by the daemon.
+//
+// Batch runs and daemon runs are advertised differently on purpose. A batch
+// run owns its broker for the length of one command, so a file entry that
+// disappears when the process exits is exactly right. Daemon runs come and
+// go inside a process that outlives all of them, so the daemon is the
+// authority and gets asked directly.
+func Discover(lister DaemonRunLister) []LiveRun {
+	out := ListLive()
+	if lister == nil {
+		return out
+	}
+	url, runIDs, err := lister()
+	if err != nil {
+		return out
+	}
+	seen := make(map[string]bool, len(out))
+	for _, e := range out {
+		seen[e.RunID] = true
+	}
+	for _, id := range runIDs {
+		if seen[id] {
+			continue
+		}
+		out = append(out, LiveRun{
+			RunID:     id,
+			BrokerURL: url,
+			// PID is the daemon's, not a per-run process; left zero so
+			// callers do not mistake it for a run-owned process.
+		})
+	}
+	return out
+}
+
+// FindLiveIn resolves a run by id from a caller-supplied set, or returns
+// the newest when runID is empty.
+func FindLiveIn(entries []LiveRun, runID string) (LiveRun, bool) {
 	if runID == "" {
 		if len(entries) > 0 {
 			return entries[0], true
@@ -149,15 +193,31 @@ func FindLive(runID string) (LiveRun, bool) {
 	return LiveRun{}, false
 }
 
-// LiveRunsSummary renders a short human-readable list for error messages.
-func LiveRunsSummary() string {
-	entries := ListLive()
+// FindLive resolves a batch run by id, or returns the newest batch run when
+// runID is empty. Daemon-hosted runs are not covered; use Discover +
+// FindLiveIn for that.
+func FindLive(runID string) (LiveRun, bool) {
+	return FindLiveIn(ListLive(), runID)
+}
+
+// SummarizeRuns renders a short human-readable list for error messages.
+func SummarizeRuns(entries []LiveRun) string {
 	if len(entries) == 0 {
 		return "(no live runs)"
 	}
 	out := ""
 	for _, e := range entries {
-		out += fmt.Sprintf("  %s  pid=%d  %s\n", e.RunID, e.PID, e.BrokerURL)
+		if e.PID > 0 {
+			out += fmt.Sprintf("  %s  pid=%d  %s\n", e.RunID, e.PID, e.BrokerURL)
+			continue
+		}
+		out += fmt.Sprintf("  %s  (daemon)  %s\n", e.RunID, e.BrokerURL)
 	}
 	return out
+}
+
+// LiveRunsSummary renders the batch-run list. Kept for callers that have no
+// daemon lister at hand.
+func LiveRunsSummary() string {
+	return SummarizeRuns(ListLive())
 }

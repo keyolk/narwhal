@@ -115,6 +115,10 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 
 	l := s.control.LauncherFor(req.RunID, req.CWD)
 
+	// Tasks are created here but launched by the daemon's dispatch loop.
+	// Routing every launch through one place means a task cannot be
+	// dispatched twice — once by this handler and again by the loop that
+	// sees it sitting ready.
 	launched := make([]map[string]any, 0, len(req.Workers))
 	for _, spec := range req.Workers {
 		name := spec.Name
@@ -128,43 +132,14 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 
 		task := run.AddTask(taskID, name, spec.Assignment, spec.Deps)
 
-		// A task with unmet deps is not launched now; the caller can spawn
-		// it later, or a future coordinator tick will pick it up.
+		note := "queued; the dispatcher will launch it shortly"
 		if task.CurrentState() != broker.TaskReady {
-			launched = append(launched, map[string]any{
-				"task_id": taskID,
-				"state":   string(task.CurrentState()),
-				"note":    "waiting on deps; not launched yet",
-			})
-			continue
-		}
-
-		agentID := "worker-" + taskID
-		agent := s.registry.Register(agentID, req.RunID, false)
-		cfg := launcher.WorkerConfig{
-			AgentID:    agentID,
-			TaskID:     taskID,
-			Assignment: spec.Assignment,
-		}
-		agentDir, err := l.SetupAgent(agent, cfg)
-		if err != nil {
-			launched = append(launched, map[string]any{
-				"task_id": taskID, "state": "error", "error": err.Error(),
-			})
-			continue
-		}
-		task.StartDispatch(taskID+"-d1", agentID)
-		if err := l.Launch(agentDir, cfg); err != nil {
-			task.FailDispatch(err.Error(), run)
-			launched = append(launched, map[string]any{
-				"task_id": taskID, "state": "error", "error": err.Error(),
-			})
-			continue
+			note = "waiting on deps; will launch when they complete"
 		}
 		launched = append(launched, map[string]any{
-			"task_id":  taskID,
-			"agent_id": agentID,
-			"state":    "dispatched",
+			"task_id": taskID,
+			"state":   string(task.CurrentState()),
+			"note":    note,
 		})
 	}
 
@@ -173,6 +148,29 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		"workers":     launched,
 		"session_dir": l.SessionDir(),
 	})
+}
+
+// DispatchTask registers an agent for a ready task, sets up its workspace,
+// and launches the worker. Shared by the spawn endpoint and the daemon's
+// dispatch loop so both paths create workers identically.
+func DispatchTask(reg *broker.AgentRegistry, l *launcher.Launcher, run *broker.Run, task *broker.Task) error {
+	agentID := "worker-" + task.ID
+	agent := reg.Register(agentID, run.ID, false)
+	cfg := launcher.WorkerConfig{
+		AgentID:    agentID,
+		TaskID:     task.ID,
+		Assignment: task.Assignment,
+	}
+	agentDir, err := l.SetupAgent(agent, cfg)
+	if err != nil {
+		return fmt.Errorf("setup agent: %w", err)
+	}
+	task.StartDispatch(fmt.Sprintf("%s-d%d", task.ID, task.DispatchCount()+1), agentID)
+	if err := l.Launch(agentDir, cfg); err != nil {
+		task.FailDispatch(err.Error(), run)
+		return fmt.Errorf("launch worker: %w", err)
+	}
+	return nil
 }
 
 // handleControlDrain returns radio messages after a cursor, from the

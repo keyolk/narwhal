@@ -65,6 +65,13 @@ func daemonStart(args []string) {
 	}
 	sess.URL = addr
 
+	// Watch for tasks whose deps have completed. Without this loop a task
+	// created with unmet deps becomes ready and then never launches,
+	// because nothing on the daemon path dispatches it.
+	dispatcher := nd.NewDispatcher(sess)
+	dispatcher.Start()
+	defer dispatcher.Stop()
+
 	if err := nd.WriteState(lock, os.Getpid(), addr); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: write daemon state: %v\n", err)
 	}

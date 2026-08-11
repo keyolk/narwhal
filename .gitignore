@@ -1,0 +1,15 @@
+# Binaries
+/narwhal
+/narwhal-*
+/dist/
+
+# State
+.narwhal/
+
+# Editor
+*.swp
+*.swo
+.DS_Store
+
+# Go
+/vendor/

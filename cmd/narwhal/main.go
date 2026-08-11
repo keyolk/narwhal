@@ -36,6 +36,10 @@ func main() {
 		showCmd(os.Args[2:])
 	case "monitor":
 		monitorCmd(os.Args[2:])
+	case "daemon":
+		daemonCmd(os.Args[2:])
+	case "mcp":
+		mcpCmd(os.Args[2:])
 	case "experiment":
 		experimentCmd(os.Args[2:])
 	case "version":
@@ -218,6 +222,14 @@ Usage:
 
   narwhal show  [run-id]
                 List finished runs, or print one run's full snapshot.
+
+  narwhal daemon <start|stop|status>
+                Long-lived broker for interactive use. Started on demand by
+                the MCP server; you rarely need to run this yourself.
+
+  narwhal mcp   [--no-auto-start]
+                MCP server over stdio. Register it with Claude Code:
+                  claude mcp add --scope user narwhal narwhal mcp
 
   narwhal experiment [--cwd DIR]
                 Two-worker passive-awareness validation scenario.

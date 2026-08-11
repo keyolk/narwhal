@@ -34,6 +34,11 @@ type Server struct {
 	registry *broker.AgentRegistry
 	listener net.Listener
 	server   *http.Server
+
+	// control is set only by the daemon. It backs the /control routes an
+	// interactive client uses to spawn and steer workers; the batch CLI
+	// leaves it nil because it drives the launcher in-process.
+	control Controller
 }
 
 // New returns a Server bound to an OS-assigned ephemeral port on localhost.
@@ -88,6 +93,8 @@ func (s *Server) handleV1(w http.ResponseWriter, r *http.Request, parts []string
 		s.handleAgent(w, r, parts[1:])
 	case "monitor":
 		s.handleMonitor(w, r, parts[1:])
+	case "control":
+		s.handleControl(w, r, parts[1:])
 	default:
 		http.NotFound(w, r)
 	}

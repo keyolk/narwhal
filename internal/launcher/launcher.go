@@ -292,6 +292,31 @@ func (l *Launcher) ActiveWorkers() []string {
 	return out
 }
 
+// KillAll terminates every running worker and returns the agent IDs it
+// signalled. Used when the operator cancels a run: the tasks keep whatever
+// state they reached, because cancellation is an operator decision rather
+// than a failure of the work.
+func (l *Launcher) KillAll() []string {
+	l.mu.Lock()
+	cmds := make(map[string]*exec.Cmd, len(l.workers))
+	for id, cmd := range l.workers {
+		cmds[id] = cmd
+	}
+	l.mu.Unlock()
+
+	killed := make([]string, 0, len(cmds))
+	for id, cmd := range cmds {
+		if cmd.Process == nil {
+			continue
+		}
+		if err := cmd.Process.Kill(); err != nil {
+			continue
+		}
+		killed = append(killed, id)
+	}
+	return killed
+}
+
 func homeDir() string {
 	h, _ := os.UserHomeDir()
 	return h

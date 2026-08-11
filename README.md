@@ -69,14 +69,14 @@ long — that is the point of them — so the list truncates and the detail view
 is where you actually read one.
 
 ```
-Narwhal  s1786471179534-1  active
+Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
 Graph                        Radio (3)
 ●     ✓ anthropic-path         1 · anthropic-path →mixed-path cross-path asymmetries...
 │ ●   ▶ mixed-path ×2          2 ! mixed-path URGENT: provider lock releases on backend...
 │ │ ● ▶ session-identity       3 i session-identity lastCWD assumes one session per proxy.
-◉─┴─┴ · synthesis
+◉─╰─╰ · synthesis
 ◉     · review
 
 done 1  running 2  ready 0  failed 0  [following]
@@ -84,9 +84,21 @@ tab pane · j/k move · enter detail · f follow · q quit
 ```
 
 The graph pane draws the DAG the way a commit graph does: every task gets a
-lane, and every edge is drawn. A node joining several branches (`◉─┴─┴`)
-shows all of them, and a linear chain stays in one column. `×2` marks a
-retried dispatch.
+lane and every edge is drawn. A node joining several branches (`◉─╰─╰`)
+shows all of them; a linear chain stays in one column (`◉` continues the
+lane above it, `●` opens a new one); a lane with more work below branches
+with `├` instead of ending with `╰`. `×2` marks a retried dispatch.
+
+Graph glyphs are plain box-drawing, so they render in any font. Task and
+priority icons use Nerd Font when the terminal has one:
+
+```bash
+NARWHAL_ICONS=nerd     # force Nerd Font icons
+NARWHAL_ICONS=unicode  # force the portable set
+```
+
+Detection is conservative — an unrecognized terminal gets portable glyphs,
+since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 
 | Key | Action |
 |---|---|

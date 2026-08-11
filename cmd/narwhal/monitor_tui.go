@@ -360,16 +360,9 @@ var (
 )
 
 func (m tuiModel) viewHeader() string {
-	state := string(m.snap.State)
-	switch m.snap.State {
-	case broker.RunDone:
-		state = styGreen.Render(state)
-	case broker.RunFailed, broker.RunCanceled:
-		state = styRed.Render(state)
-	default:
-		state = styCyan.Render(state)
-	}
-	line := fmt.Sprintf("%s  %s  %s", styTitle.Render("Narwhal"), m.snap.RunID, state)
+	icon, state := runGlyph(m.snap.State)
+	line := fmt.Sprintf("%s  %s  %s %s",
+		styTitle.Render("Narwhal"), m.snap.RunID, icon, state)
 	if m.err != nil {
 		line += "  " + styRed.Render("(broker unreachable)")
 	}
@@ -381,6 +374,20 @@ func (m tuiModel) viewHeader() string {
 		return line
 	}
 	return line + "\n" + styDim.Render(prompt)
+}
+
+// runGlyph returns the icon and colored label for a run state.
+func runGlyph(s broker.RunState) (string, string) {
+	switch s {
+	case broker.RunDone:
+		return styGreen.Render(icons.runDone), styGreen.Render(string(s))
+	case broker.RunFailed:
+		return styRed.Render(icons.runFailed), styRed.Render(string(s))
+	case broker.RunCanceled:
+		return styDim.Render(icons.runCanceled), styDim.Render(string(s))
+	default:
+		return styCyan.Render(icons.runActive), styCyan.Render(string(s))
+	}
 }
 
 func (m tuiModel) viewFooter() string {
@@ -402,117 +409,6 @@ func (m tuiModel) viewFooter() string {
 	return stats + tail + "\n" + keys
 }
 
-// dagRow is one rendered line of the task graph.
-type dagRow struct {
-	task  broker.TaskSnapshot
-	depth int
-	// last marks the final child at its depth, so the connector is └ not ├.
-	last bool
-	// prefix carries the vertical bars for ancestor levels that still have
-	// siblings below.
-	prefix string
-}
-
-// buildDAG lays the tasks out as a dependency tree.
-//
-// A task graph is a DAG, not a tree: a task can have several dependencies,
-// so it can be reachable by several paths. Rendering it as a tree means
-// picking one parent per node. We root each task under its first dependency
-// and mark the rest inline, which keeps the common shapes (fan-out, then a
-// synthesis node joining everything) readable without needing real graph
-// layout.
-//
-// Roots are tasks with no deps, in id order. Anything unreachable from a
-// root — a dependency that was never created — is appended at the end so it
-// is visible rather than silently dropped.
-func buildDAG(tasks []broker.TaskSnapshot) []dagRow {
-	byID := make(map[string]broker.TaskSnapshot, len(tasks))
-	for _, t := range tasks {
-		byID[t.ID] = t
-	}
-
-	children := make(map[string][]string)
-	var roots []string
-	for _, t := range tasks {
-		parent := ""
-		for _, d := range t.Deps {
-			if _, ok := byID[d]; ok {
-				parent = d
-				break
-			}
-		}
-		if parent == "" {
-			roots = append(roots, t.ID)
-			continue
-		}
-		children[parent] = append(children[parent], t.ID)
-	}
-	sort.Strings(roots)
-	for k := range children {
-		sort.Strings(children[k])
-	}
-
-	var rows []dagRow
-	seen := make(map[string]bool, len(tasks))
-
-	// Depth-first from each root would split siblings apart: with three
-	// independent tasks feeding one synthesis node, the synthesis row would
-	// land under the first root and push the other two roots below it.
-	// Emitting every root first, then their dependents, keeps a fan-in
-	// shape readable — which is the shape most runs have.
-	var emit func(ids []string, prefix string, depth int)
-	emit = func(ids []string, prefix string, depth int) {
-		pending := ids[:0:0]
-		for _, id := range ids {
-			if seen[id] {
-				continue
-			}
-			pending = append(pending, id)
-		}
-		for i, id := range pending {
-			seen[id] = true
-			rows = append(rows, dagRow{
-				task:   byID[id],
-				depth:  depth,
-				last:   i == len(pending)-1,
-				prefix: prefix,
-			})
-		}
-		// Collect the next level from all of this level's nodes.
-		var next []string
-		for _, id := range pending {
-			next = append(next, children[id]...)
-		}
-		if len(next) == 0 {
-			return
-		}
-		childPrefix := prefix
-		if depth > 0 {
-			childPrefix += "  "
-		}
-		emit(next, childPrefix, depth+1)
-	}
-	emit(roots, "", 0)
-
-	// Cycles or dangling deps leave tasks unvisited; show them anyway.
-	for _, t := range tasks {
-		if !seen[t.ID] {
-			rows = append(rows, dagRow{task: t, depth: 0})
-		}
-	}
-	return rows
-}
-
-// connector returns the branch glyph for a row.
-func (r dagRow) connector() string {
-	if r.depth == 0 {
-		return ""
-	}
-	if r.last {
-		return "└─"
-	}
-	return "├─"
-}
 
 func (m tuiModel) viewTasks(width, height int) string {
 	title := "Graph"
@@ -622,11 +518,11 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
 	switch p {
 	case broker.PriorityUrgent:
-		return "!", styRed
+		return icons.prioUrgent, styRed
 	case broker.PriorityFYI:
-		return "i", styDim
+		return icons.prioFYI, styDim
 	default:
-		return "·", styDim
+		return icons.prioNormal, styDim
 	}
 }
 
@@ -750,17 +646,17 @@ func mentionsLabel(m []string) string {
 func taskIconStyle(s broker.TaskState) (string, lipgloss.Style) {
 	switch s {
 	case broker.TaskCompleted:
-		return "✓", styGreen
+		return icons.taskCompleted, styGreen
 	case broker.TaskDispatched:
-		return "▶", styCyan
+		return icons.taskDispatched, styCyan
 	case broker.TaskReady:
-		return "○", styYellow
+		return icons.taskReady, styYellow
 	case broker.TaskFailed:
-		return "✗", styRed
+		return icons.taskFailed, styRed
 	case broker.TaskBlocked:
-		return "⊘", styRed
+		return icons.taskBlocked, styRed
 	default:
-		return "·", styDim
+		return icons.taskPending, styDim
 	}
 }
 

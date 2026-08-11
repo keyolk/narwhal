@@ -87,8 +87,9 @@ func TestFanInDrawsEveryEdge(t *testing.T) {
 		{ID: "sink", Deps: []string{"a", "b", "c"}},
 	})
 	sink := lines[len(lines)-1]
-	if n := strings.Count(sink, glyphJoinUp); n < 2 {
-		t.Fatalf("fan-in row should join every incoming lane, got %d joins in %q", n, sink)
+	joins := strings.Count(sink, glyphElbow) + strings.Count(sink, glyphTee)
+	if joins < 2 {
+		t.Fatalf("fan-in row should turn every incoming lane toward the node, got %d in %q", joins, sink)
 	}
 	if !strings.Contains(sink, glyphHoriz) {
 		t.Fatalf("fan-in row should draw a horizontal run: %q", sink)
@@ -190,5 +191,74 @@ func TestRenderRowsCarryTaskIdentity(t *testing.T) {
 func TestEmptyGraphRenders(t *testing.T) {
 	if rows := layoutGraph(nil).render(); len(rows) != 0 {
 		t.Fatalf("empty graph produced %d rows", len(rows))
+	}
+}
+
+func TestLaneEndingHereDrawsElbowNotTee(t *testing.T) {
+	// A tee says "this lane continues below". Deciding that from the state
+	// before the node consumed its incoming edges made every fan-in lane
+	// look like it kept going.
+	lines := renderPlain([]broker.TaskSnapshot{
+		{ID: "a"},
+		{ID: "b"},
+		{ID: "sink", Deps: []string{"a", "b"}},
+	})
+	sink := lines[len(lines)-1]
+	if strings.Contains(sink, glyphTee) {
+		t.Fatalf("lanes ending at the sink must not draw a tee: %q", sink)
+	}
+	if !strings.Contains(sink, glyphElbow) {
+		t.Fatalf("a terminating lane should draw an elbow: %q", sink)
+	}
+}
+
+func TestLaneContinuingDrawsTee(t *testing.T) {
+	// a feeds both b and d, so at b's row lane 0 still has work below it.
+	lines := renderPlain([]broker.TaskSnapshot{
+		{ID: "a"},
+		{ID: "b", Deps: []string{"a"}},
+		{ID: "c", Deps: []string{"a"}},
+	})
+	// One of the two dependent rows must show the lane still branching.
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, glyphTee) {
+		t.Fatalf("a lane with more dependents below should tee:\n%s", joined)
+	}
+}
+
+func TestIconSetOverride(t *testing.T) {
+	t.Setenv("NARWHAL_ICONS", "nerd")
+	if got := resolveIcons(); got != nerdIcons {
+		t.Fatal("NARWHAL_ICONS=nerd should select the Nerd Font set")
+	}
+	t.Setenv("NARWHAL_ICONS", "unicode")
+	if got := resolveIcons(); got != unicodeIcons {
+		t.Fatal("NARWHAL_ICONS=unicode should select the portable set")
+	}
+	// An explicit override must win over terminal detection.
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	if got := resolveIcons(); got != unicodeIcons {
+		t.Fatal("explicit override should beat terminal detection")
+	}
+}
+
+func TestIconSetDefaultsToUnicode(t *testing.T) {
+	// Guessing wrong toward Nerd Font fills the pane with tofu, so an
+	// unknown terminal must fall back to portable glyphs.
+	t.Setenv("NARWHAL_ICONS", "")
+	t.Setenv("TERM_PROGRAM", "some-unknown-terminal")
+	t.Setenv("NARWHAL_FONT", "")
+	t.Setenv("TERM_FONT", "")
+	if got := resolveIcons(); got != unicodeIcons {
+		t.Fatal("unknown terminal should default to the portable set")
+	}
+}
+
+func TestNerdFontDetectedFromFontName(t *testing.T) {
+	t.Setenv("NARWHAL_ICONS", "")
+	t.Setenv("TERM_PROGRAM", "")
+	t.Setenv("NARWHAL_FONT", "JetBrainsMono Nerd Font")
+	if got := resolveIcons(); got != nerdIcons {
+		t.Fatal("a font name containing 'nerd' should select the Nerd Font set")
 	}
 }

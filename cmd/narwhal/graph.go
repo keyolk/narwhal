@@ -180,16 +180,30 @@ type graphRow struct {
 	id         string
 }
 
-// Gutter glyphs. Two columns per lane keeps edges legible without eating
-// the pane: one for the node or line, one for spacing or a horizontal run.
+// Gutter glyphs.
+//
+// Two columns per lane: one for the node or line, one for spacing or a
+// horizontal run. The set is plain box-drawing plus two filled circles —
+// all in the Unicode BMP, so it renders in any terminal font without
+// needing a patched one. Nerd Font glyphs are used for task state icons
+// (see monitor_tui.go), where a missing glyph degrades to a visible box
+// rather than a broken graph.
 const (
-	glyphNode = "●" // a node opening a lane
-	// glyphNodeOnLine marks a node that continues its parent's lane, so a
-	// chain reads as one unbroken column rather than three loose dots.
+	// glyphNode opens a lane: nothing above it feeds this column.
+	glyphNode = "●"
+	// glyphNodeOnLine continues the parent's lane, so a chain reads as one
+	// unbroken column rather than a column of loose dots.
 	glyphNodeOnLine = "◉"
-	glyphVertical   = "│" // an edge passing through this lane
-	glyphJoinUp     = "┴" // an edge terminating at this row
-	glyphHoriz      = "─" // horizontal run joining a fan-in
+	// glyphVertical carries an edge past this row to a node further down.
+	glyphVertical = "│"
+	// glyphElbow ends a lane and turns right toward the node. Edges arrive
+	// from the left, so the corner has to open right — "┴" pointed the
+	// wrong way and read as a merge from below.
+	glyphElbow = "╰"
+	// glyphTee is an elbow for a lane that also continues downward.
+	glyphTee = "├"
+	// glyphHoriz is the run joining a fan-in to its node.
+	glyphHoriz = "─"
 )
 
 // render walks the layout and produces one row per task, drawing the edges
@@ -231,16 +245,10 @@ func (g graphLayout) render() []graphRow {
 			incoming[dep.col] = true
 		}
 
-		rows = append(rows, graphRow{
-			gutter:     drawGutter(g.width, n.col, incoming, active, inherited),
-			label:      n.task.ID,
-			node:       i,
-			state:      n.task.State,
-			dispatches: n.task.Dispatches,
-			id:         n.task.ID,
-		})
-
-		active[n.col] = remaining[n.task.ID] > 0
+		// Consume this node's incoming edges before drawing, so a lane that
+		// ends here is drawn as an elbow rather than a tee. Deciding from
+		// the pre-consumption state made every fan-in lane look like it
+		// continued downward.
 		for _, d := range n.task.Deps {
 			if dep, ok := g.index[d]; ok {
 				remaining[d]--
@@ -249,6 +257,17 @@ func (g graphLayout) render() []graphRow {
 				}
 			}
 		}
+		// The node's own lane stays live only if something below needs it.
+		active[n.col] = remaining[n.task.ID] > 0
+
+		rows = append(rows, graphRow{
+			gutter:     drawGutter(g.width, n.col, incoming, active, inherited),
+			label:      n.task.ID,
+			node:       i,
+			state:      n.task.State,
+			dispatches: n.task.Dispatches,
+			id:         n.task.ID,
+		})
 	}
 	return rows
 }
@@ -257,23 +276,24 @@ func (g graphLayout) render() []graphRow {
 //
 // nodeCol is where the node sits. incoming marks lanes whose edge
 // terminates here. active marks lanes carrying a line straight through.
-// inherited says the node continues its parent's own lane, which is drawn
-// as a node glyph on a line rather than a bare node.
+// inherited says the node continues its parent's own lane.
+//
+// Edges always arrive from a lane to the left or right of the node and turn
+// toward it, so a terminating lane draws a corner that opens in the node's
+// direction, connected by a horizontal run. Using "┴" here read as a merge
+// arriving from below, which is the one direction that cannot happen.
 func drawGutter(width, nodeCol int, incoming map[int]bool, active []bool, inherited bool) string {
 	if width == 0 {
 		return ""
 	}
-	// A horizontal run connects the leftmost incoming lane to the node.
-	minIncoming := nodeCol
+	// The horizontal run spans from the outermost incoming lane to the node.
+	lo, hi := nodeCol, nodeCol
 	for c := range incoming {
-		if c < minIncoming {
-			minIncoming = c
+		if c < lo {
+			lo = c
 		}
-	}
-	maxIncoming := nodeCol
-	for c := range incoming {
-		if c > maxIncoming {
-			maxIncoming = c
+		if c > hi {
+			hi = c
 		}
 	}
 
@@ -287,17 +307,24 @@ func drawGutter(width, nodeCol int, incoming map[int]bool, active []bool, inheri
 				b.WriteString(glyphNode)
 			}
 		case incoming[c]:
-			b.WriteString(glyphJoinUp)
+			// A lane still carrying edges to later rows keeps its trunk,
+			// so it branches rather than ends.
+			if active[c] {
+				b.WriteString(glyphTee)
+			} else {
+				b.WriteString(glyphElbow)
+			}
 		case active[c]:
 			b.WriteString(glyphVertical)
-		case c > minIncoming && c < maxIncoming:
-			// A lane the horizontal run crosses without terminating in.
+		case c > lo && c < hi:
+			// An untouched lane the run passes over.
 			b.WriteString(glyphHoriz)
 		default:
 			b.WriteString(" ")
 		}
+		// Spacer column, filled when it lies inside the horizontal run.
 		if c < width-1 {
-			if c >= minIncoming && c < maxIncoming {
+			if c >= lo && c < hi {
 				b.WriteString(glyphHoriz)
 			} else {
 				b.WriteString(" ")

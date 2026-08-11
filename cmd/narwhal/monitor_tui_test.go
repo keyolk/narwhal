@@ -359,8 +359,8 @@ func TestGraphPaneDrawsFanIn(t *testing.T) {
 		{ID: "sink", State: broker.TaskReady, Deps: []string{"a", "b"}},
 	}
 	out := m.viewTasks(40, 10)
-	if !strings.Contains(out, glyphJoinUp) {
-		t.Fatalf("fan-in should draw a join:\n%s", out)
+	if !strings.Contains(out, glyphElbow) && !strings.Contains(out, glyphTee) {
+		t.Fatalf("fan-in should turn the incoming lane toward the node:\n%s", out)
 	}
 }
 

@@ -30,6 +30,8 @@ func main() {
 	switch os.Args[1] {
 	case "run":
 		runCmd(os.Args[2:])
+	case "plan":
+		planCmd(os.Args[2:])
 	case "show":
 		showCmd(os.Args[2:])
 	case "experiment":

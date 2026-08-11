@@ -65,9 +65,20 @@ func planCmd(args []string) {
 	}
 	defer srv.Shutdown()
 
+	// Advertise this run so `narwhal monitor` can attach while it runs.
+	_ = store.RegisterLive(store.LiveRun{
+		RunID:     runID,
+		PID:       os.Getpid(),
+		BrokerURL: addr,
+		CWD:       *cwd,
+		Prompt:    *prompt,
+	})
+	defer store.DeregisterLive(os.Getpid())
+
 	fmt.Fprintf(os.Stderr, "[narwhal] plan %s started\n", runID)
 	fmt.Fprintf(os.Stderr, "[narwhal] broker: %s\n", addr)
 	fmt.Fprintf(os.Stderr, "[narwhal] cwd: %s\n", *cwd)
+	fmt.Fprintf(os.Stderr, "[narwhal] monitor: narwhal monitor --run %s\n", runID)
 
 	// Radio threads available to both the planning agent and workers.
 	r.CreateThread("planning", "planning", []string{"main"})

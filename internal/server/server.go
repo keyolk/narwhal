@@ -86,9 +86,42 @@ func (s *Server) handleV1(w http.ResponseWriter, r *http.Request, parts []string
 		s.handleRun(w, r, parts[1:])
 	case "agents":
 		s.handleAgent(w, r, parts[1:])
+	case "monitor":
+		s.handleMonitor(w, r, parts[1:])
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleMonitor serves read-only run state for the live monitor. It needs
+// no agent token: the monitor observes, it never sends. Binding is
+// localhost-only, so this is not an external exposure.
+func (s *Server) handleMonitor(w http.ResponseWriter, r *http.Request, parts []string) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET required"})
+		return
+	}
+	if len(parts) < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	run := s.broker.GetRun(parts[0])
+	if run == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
+		return
+	}
+	snap := run.Snapshot()
+	// Include which agents are registered so the monitor can show the roster.
+	agents := make([]string, 0)
+	for _, a := range s.registry.Agents() {
+		if a.RunID == run.ID {
+			agents = append(agents, a.ID)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"snapshot": snap,
+		"agents":   agents,
+	})
 }
 
 func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []string) {

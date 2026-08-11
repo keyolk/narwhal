@@ -27,9 +27,33 @@ narwhal run --workers 2 --cwd ~/src/myrepo --prompt "audit this codebase"
 # then the coordinator dispatches workers in dependency order
 narwhal plan --prompt "audit this codebase" --cwd ~/src/myrepo --concurrency 3
 
+# Watch a run as it happens (from another terminal)
+narwhal monitor            # attach to the newest live run
+narwhal monitor --run <id> # attach to a specific run
+
 # Inspect past runs
 narwhal show               # list recent runs
 narwhal show <run-id>      # full snapshot
+```
+
+The monitor shows the task DAG updating in place plus radio traffic as a
+scrolling transcript, so an operator can watch workers cross-correct each
+other, a split-request land, or a task fail and retry:
+
+```
+Narwhal  run-1786468655383  active
+
+Tasks  2 total   0 done  2 running  0 ready  0 pending  0 failed
+
+  ▶ task-1         worker-1
+  ▶ task-2         worker-2
+
+Agents  main, worker-task-1, worker-task-2
+
+Radio  6 messages
+    1 worker-task-1    ·                       task-1 starting security audit...
+    2 worker-task-2    URGENT → worker-task-1  ACK worker-1's split: I take PER-FILE DEPTH...
+    3 worker-task-2    URGENT → worker-task-1  INCONSISTENT CREDENTIAL SOURCE...
 ```
 
 ## Design
@@ -59,8 +83,12 @@ narwhal
 │   ├── per-agent identity token (endpoint = identity)
 │   └── wrapper scripts (send/drain/watch/state/task-done/split)
 │
-└── store
-    └── atomic JSON snapshots under ~/.narwhal/runs/<id>.json
+├── store
+│   ├── atomic JSON snapshots under ~/.narwhal/runs/<id>.json
+│   └── live registry (~/.narwhal/live.json) for monitor discovery
+│
+└── monitor
+    └── polls the broker's read-only endpoint; DAG in place, radio scrolling
 ```
 
 ### What graph and radio each own
@@ -94,6 +122,7 @@ launches workers as processes rather than as Workflow subagents.
 |---|---|
 | `narwhal run` | Flat parallel workers on a prompt |
 | `narwhal plan` | Planner agent decomposes request into DAG, then coordinator executes |
+| `narwhal monitor` | Live view of a running run (DAG + radio traffic) |
 | `narwhal experiment` | Two-worker passive-awareness validation scenario |
 | `narwhal show` | List recent runs (from disk) |
 | `narwhal show <id>` | Full run snapshot (from disk) |
@@ -113,6 +142,7 @@ launches workers as processes rather than as Workflow subagents.
 - ✓ Run terminal state (done/failed)
 - ✓ Run persistence + inspection
 - ✓ Coordinating agent (planner decomposes request into DAG)
+- ✓ Live monitor (DAG progress + radio traffic during a run)
 
 ### AgentRadio-style passive awareness
 

@@ -34,6 +34,8 @@ func main() {
 		planCmd(os.Args[2:])
 	case "show":
 		showCmd(os.Args[2:])
+	case "monitor":
+		monitorCmd(os.Args[2:])
 	case "experiment":
 		experimentCmd(os.Args[2:])
 	case "version":
@@ -82,10 +84,21 @@ func runCmd(args []string) {
 	}
 	defer srv.Shutdown()
 
+	// Advertise this run so `narwhal monitor` in another terminal can find
+	// its broker while the run is still in flight.
+	_ = store.RegisterLive(store.LiveRun{
+		RunID:     runID,
+		PID:       os.Getpid(),
+		BrokerURL: addr,
+		CWD:       *cwd,
+		Prompt:    *prompt,
+	})
+	defer store.DeregisterLive(os.Getpid())
+
 	fmt.Fprintf(os.Stderr, "[narwhal] run %s started\n", runID)
 	fmt.Fprintf(os.Stderr, "[narwhal] broker: %s\n", addr)
 	fmt.Fprintf(os.Stderr, "[narwhal] cwd: %s\n", *cwd)
-	fmt.Fprintf(os.Stderr, "[narwhal] prompt: %s\n", *prompt)
+	fmt.Fprintf(os.Stderr, "[narwhal] monitor: narwhal monitor --run %s\n", runID)
 
 	workerCount := 1
 	if *workers != "auto" {
@@ -192,13 +205,29 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `narwhal — graph-engineered multi-agent runtime with passive awareness
 
 Usage:
-  narwhal run --prompt "..." [--workers auto|N] [--cwd DIR] [--timeout DURATION]
-  narwhal show <run-id>
+  narwhal run   --prompt "..." [--workers N] [--cwd DIR] [--timeout DUR]
+                Flat parallel workers on one prompt.
+
+  narwhal plan  --prompt "..." [--cwd DIR] [--concurrency N] [--timeout DUR]
+                A planner agent decomposes the request into a task DAG,
+                then the coordinator dispatches workers in dependency order.
+
+  narwhal monitor [--run ID] [--interval DUR] [--no-color]
+                Live view of a running run: DAG progress and radio traffic.
+                Defaults to the newest live run.
+
+  narwhal show  [run-id]
+                List finished runs, or print one run's full snapshot.
+
+  narwhal experiment [--cwd DIR]
+                Two-worker passive-awareness validation scenario.
+
   narwhal version
 
-Options:
-  --prompt     task prompt for the run (required for run)
-  --workers    number of workers: "auto" or a number (default: auto)
-  --cwd        working directory (default: current directory)
-  --timeout    max wait time for workers (default: 30m)`)
+Common options:
+  --prompt       task prompt (required for run/plan)
+  --cwd          working directory (default: current directory)
+  --timeout      max wait time for the run (default: 30m)
+  --workers      worker count for run (default: 1)
+  --concurrency  max parallel workers for plan (default: 3)`)
 }

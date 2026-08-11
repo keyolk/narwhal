@@ -321,6 +321,14 @@ func (r *Run) GetTask(id string) *Task {
 	return r.Tasks[id]
 }
 
+// SetState updates the run's lifecycle state. Used by the coordinator to
+// transition a run to done/failed when the dispatch loop finishes.
+func (r *Run) SetState(s RunState) {
+	r.mu.Lock()
+	r.State = s
+	r.mu.Unlock()
+}
+
 // SnapshotTasks returns a stable view of every task's id and state, for
 // callers that need to classify the graph without holding locks.
 func (r *Run) SnapshotTasks() []TaskSnapshot {

@@ -132,6 +132,9 @@ func TestRespectsDependencyOrder(t *testing.T) {
 	if len(order) != 2 || order[0] != "first" || order[1] != "second" {
 		t.Fatalf("launch order = %v, want [first second]", order)
 	}
+	if run.State != broker.RunDone {
+		t.Fatalf("run state = %q, want done", run.State)
+	}
 }
 
 func TestConcurrencyCap(t *testing.T) {
@@ -235,6 +238,9 @@ func TestBlockedTaskIsReportedUnreached(t *testing.T) {
 	}
 	if len(res.Completed) != 0 {
 		t.Fatalf("nothing should complete, got %v", res.Completed)
+	}
+	if run.State != broker.RunFailed {
+		t.Fatalf("run state = %q, want failed", run.State)
 	}
 }
 

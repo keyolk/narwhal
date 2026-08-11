@@ -134,7 +134,8 @@ func (c *Coordinator) Run() Result {
 	}
 
 	// Classify the final state.
-	for _, t := range c.run.SnapshotTasks() {
+	tasks := c.run.SnapshotTasks()
+	for _, t := range tasks {
 		switch t.State {
 		case broker.TaskCompleted:
 			res.Completed = append(res.Completed, t.ID)
@@ -144,6 +145,18 @@ func (c *Coordinator) Run() Result {
 			res.Unreached = append(res.Unreached, t.ID)
 		}
 	}
+
+	// Set the run's terminal state so persisted snapshots reflect the
+	// outcome rather than "active".
+	switch {
+	case res.TimedOut:
+		c.run.SetState(broker.RunFailed)
+	case len(res.Failed) > 0 || len(res.Unreached) > 0:
+		c.run.SetState(broker.RunFailed)
+	default:
+		c.run.SetState(broker.RunDone)
+	}
+
 	return res
 }
 

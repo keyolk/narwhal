@@ -365,10 +365,10 @@ func TestBoxModeDrawsBoxesAndConnectors(t *testing.T) {
 		t.Fatalf("box mode should draw box borders:\n%s", out)
 	}
 	// A dependent's top border carries a tee where the edge lands.
-	if !strings.Contains(out, gutJoinUp) {
+	if !strings.Contains(out, jTeeUp) {
 		t.Fatalf("dependent box should show an incoming tee:\n%s", out)
 	}
-	if !strings.Contains(out, gutVert) {
+	if !strings.Contains(out, boxVert) {
 		t.Fatalf("box mode should draw a connector between boxes:\n%s", out)
 	}
 }

@@ -73,28 +73,26 @@ Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
 Graph                                    Radio (2)
-╭──────────────────────────────────────╮   1 · anthropic-path →mixed-path cross-path...
-│ ✓ anthropic-path                     │   2 ! mixed-path URGENT: provider lock releases...
-╰──────────────────────────────────────╯
-  │
-╭──────────────────────────────────────╮
-│ ▶ mixed-path                      ×2 │
-╰──────────────────────────────────────╯
-    │
-  ╭─┴──────────────────────────────────╮
-  │ · synthesis                        │
-  ╰────────────────────────────────────╯
+        ┌──────────┐  ┌────────┐           1 · auth →api cross-path asymmetries...
+        │ ▶ api ×2 │  │ ✓ auth │           2 ! api URGENT: provider lock releases...
+        └─────┬────┘  └────┬───┘
+              └────┬───────┘
+                   │
+            ┌──────┴──────┐
+            │ · synthesis │
+            └─────────────┘
 
-done 1  running 2  ready 0  failed 0  [following]
+done 1  running 1  ready 0  failed 0  [following]
 tab pane · j/k move · enter detail · b boxes · f follow · q quit
 ```
 
-Tasks are drawn as boxes joined by edges, in the style of Graph::Easy and
-`dgraph`. Two things differ from those tools, both forced by the pane: the
-flow is top-down rather than left-to-right so the view can scroll, and one
-box occupies one row — placing siblings side by side needs ~25 columns each,
-and two of them do not fit in a third of an 80-column terminal. Depth shows
-as indentation, and an incoming edge lands as a tee (`┴`) on the box border.
+Tasks are drawn as boxes wired together, in the style of Graph::Easy and
+`dgraph`. Boxes are sized to their label and centered, so there are margins
+for edges to route through; siblings share a row while they fit and wrap
+when they do not. A fan-out or fan-in is drawn as one shape — a single
+horizontal bar — rather than as independent edges that would overwrite each
+other, and a run that would otherwise cut through a wrapped row detours
+through the margin.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 

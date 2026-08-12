@@ -72,22 +72,42 @@ is where you actually read one.
 Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
-Graph                        Radio (3)
-●     ✓ anthropic-path         1 · anthropic-path →mixed-path cross-path asymmetries...
-│ ●   ▶ mixed-path ×2          2 ! mixed-path URGENT: provider lock releases on backend...
-│ │ ● ▶ session-identity       3 i session-identity lastCWD assumes one session per proxy.
-◉─╰─╰ · synthesis
-◉     · review
+Graph                                    Radio (2)
+╭──────────────────────────────────────╮   1 · anthropic-path →mixed-path cross-path...
+│ ✓ anthropic-path                     │   2 ! mixed-path URGENT: provider lock releases...
+╰──────────────────────────────────────╯
+  │
+╭──────────────────────────────────────╮
+│ ▶ mixed-path                      ×2 │
+╰──────────────────────────────────────╯
+    │
+  ╭─┴──────────────────────────────────╮
+  │ · synthesis                        │
+  ╰────────────────────────────────────╯
 
 done 1  running 2  ready 0  failed 0  [following]
-tab pane · j/k move · enter detail · f follow · q quit
+tab pane · j/k move · enter detail · b boxes · f follow · q quit
 ```
 
-The graph pane draws the DAG the way a commit graph does: every task gets a
-lane and every edge is drawn. A node joining several branches (`◉─╰─╰`)
-shows all of them; a linear chain stays in one column (`◉` continues the
-lane above it, `●` opens a new one); a lane with more work below branches
-with `├` instead of ending with `╰`. `×2` marks a retried dispatch.
+Tasks are drawn as boxes joined by edges, in the style of Graph::Easy and
+`dgraph`. Two things differ from those tools, both forced by the pane: the
+flow is top-down rather than left-to-right so the view can scroll, and one
+box occupies one row — placing siblings side by side needs ~25 columns each,
+and two of them do not fit in a third of an 80-column terminal. Depth shows
+as indentation, and an incoming edge lands as a tee (`┴`) on the box border.
+
+`b` switches to a compact lane view when the graph outgrows the pane:
+
+```
+●     ✓ anthropic-path
+│ ●   ▶ mixed-path ×2
+│ │ ● ▶ session-identity
+◉─╰─╰ · synthesis
+```
+
+Here every task is a dot in its own lane and every edge is drawn in the
+gutter, git-log style. `◉` continues the lane above it, `●` opens a new one,
+`╰` ends a lane and `├` branches one that still has work below.
 
 Graph glyphs are plain box-drawing, so they render in any font. Task and
 priority icons use Nerd Font when the terminal has one:
@@ -107,6 +127,7 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
+| `b` | Toggle between box and lane graph views |
 | `n` / `p` | Next / previous item inside the detail view |
 | `f` | Re-arm tail following after manual navigation |
 | `esc` | Close the detail view |

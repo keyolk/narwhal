@@ -74,6 +74,9 @@ type tuiModel struct {
 	followTail bool
 	detail     detailMode
 	detailScroll int
+	// boxMode draws tasks as connected boxes instead of a git-style lane
+	// gutter. Boxes read better as a diagram; lanes fit more on screen.
+	boxMode bool
 
 	width  int
 	height int
@@ -87,6 +90,7 @@ func newTUIModel(live store.LiveRun, interval time.Duration) tuiModel {
 		client:     &http.Client{Timeout: 5 * time.Second},
 		focus:      focusRadio,
 		followTail: true,
+		boxMode:    true,
 		width:      100,
 		height:     30,
 	}
@@ -196,6 +200,10 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Re-arm tail following after manual navigation.
 		m.followTail = true
 		m.jumpToEnd()
+	case "b":
+		// Boxes read as a diagram; lanes fit more tasks on screen. Which
+		// one is better depends on the graph, so it is a toggle.
+		m.boxMode = !m.boxMode
 	}
 	return m, nil
 }
@@ -328,12 +336,18 @@ func (m tuiModel) View() string {
 		bodyHeight = 3
 	}
 
+	// Boxes need room for two borders plus a readable label, so the graph
+	// pane gets a wider floor in box mode than the lane gutter needs.
 	leftWidth := m.width / 3
-	if leftWidth < 24 {
-		leftWidth = 24
+	minLeft, maxLeft := 24, 44
+	if m.boxMode {
+		minLeft, maxLeft = 30, 52
 	}
-	if leftWidth > 44 {
-		leftWidth = 44
+	if leftWidth < minLeft {
+		leftWidth = minLeft
+	}
+	if leftWidth > maxLeft {
+		leftWidth = maxLeft
 	}
 	rightWidth := m.width - leftWidth - 1
 	if rightWidth < 20 {
@@ -405,7 +419,7 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := styDim.Render("tab pane · j/k move · enter detail · f follow · q quit")
+	keys := styDim.Render("tab pane · j/k move · enter detail · b boxes · f follow · q quit")
 	return stats + tail + "\n" + keys
 }
 
@@ -416,6 +430,10 @@ func (m tuiModel) viewTasks(width, height int) string {
 		title = styPanel.Render(title)
 	} else {
 		title = styDim.Render(title)
+	}
+
+	if m.boxMode {
+		return m.viewTasksBoxed(title, width, height)
 	}
 
 	rows := m.graphRows()
@@ -431,6 +449,78 @@ func (m tuiModel) viewTasks(width, height int) string {
 		out = append(out, styDim.Render("(no tasks yet)"))
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+}
+
+// viewTasksBoxed renders the box view. Scrolling works in rendered lines
+// rather than tasks, because one task is several lines; the cursor still
+// selects a task, and the window is positioned to keep its box on screen.
+func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
+	rows := m.boxRows(width)
+	out := make([]string, 0, height)
+	out = append(out, title)
+
+	if len(rows) == 0 {
+		out = append(out, styDim.Render("(no tasks yet)"))
+		return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+	}
+
+	// Find the first line of the selected task's box so the window can be
+	// anchored on it.
+	anchor := 0
+	for i, r := range rows {
+		if r.node == m.taskCur {
+			anchor = i
+			break
+		}
+	}
+
+	visible := height - 1
+	start := scrollStart(anchor, visible, len(rows))
+	for i := start; i < len(rows) && len(out) < height; i++ {
+		r := rows[i]
+		line := truncate(r.text, width)
+		switch {
+		case r.node == m.taskCur && m.focus == focusTasks:
+			line = stySel.Render(padRight(line, width))
+		case r.part == partRoute:
+			line = styDim.Render(line)
+		default:
+			line = m.styleBoxLine(r, line)
+		}
+		out = append(out, line)
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+}
+
+// styleBoxLine colors a box by its task state: the body carries the state
+// color, borders stay dim so the graph does not fight the content.
+func (m tuiModel) styleBoxLine(r boxRow, line string) string {
+	if r.part != partBody {
+		return styDim.Render(line)
+	}
+	_, style := taskIconStyle(m.taskByIndex(r.node).State)
+	return style.Render(line)
+}
+
+// taskByIndex resolves a layout position to its task.
+func (m tuiModel) taskByIndex(i int) broker.TaskSnapshot {
+	nodes := layoutGraph(m.sortedTasks()).nodes
+	if i < 0 || i >= len(nodes) {
+		return broker.TaskSnapshot{}
+	}
+	return nodes[i].task
+}
+
+// boxRows lays out the DAG as boxes for the current snapshot.
+func (m tuiModel) boxRows(width int) []boxRow {
+	return layoutGraph(m.sortedTasks()).renderBoxes(width, taskIconPlain)
+}
+
+// taskIconPlain adapts taskIconStyle for the box renderer, which applies
+// color itself once the line is assembled.
+func taskIconPlain(s broker.TaskState) (string, string) {
+	icon, _ := taskIconStyle(s)
+	return icon, ""
 }
 
 // taskRow renders one graph line: the edge gutter, then the task.

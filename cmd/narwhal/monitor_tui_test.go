@@ -339,6 +339,7 @@ func TestTaskDetailShowsAssignmentAndEdges(t *testing.T) {
 func TestGraphPaneDrawsEdges(t *testing.T) {
 	m := testModel(0, 0)
 	m.width, m.height = 90, 20
+	m.boxMode = false // lane gutter
 	m.snap.Tasks = []broker.TaskSnapshot{
 		{ID: "root", State: broker.TaskCompleted},
 		{ID: "child", State: broker.TaskReady, Deps: []string{"root"}},
@@ -346,13 +347,51 @@ func TestGraphPaneDrawsEdges(t *testing.T) {
 	out := m.viewTasks(40, 10)
 	// child inherits root's lane, so the edge is the column itself.
 	if !strings.Contains(out, glyphNodeOnLine) {
-		t.Fatalf("graph pane should show the dependency edge:\n%s", out)
+		t.Fatalf("lane view should show the dependency edge:\n%s", out)
+	}
+}
+
+func TestBoxModeDrawsBoxesAndConnectors(t *testing.T) {
+	m := testModel(0, 0)
+	m.width, m.height = 90, 24
+	m.boxMode = true
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "root", State: broker.TaskCompleted},
+		{ID: "child", State: broker.TaskReady, Deps: []string{"root"}},
+	}
+	out := m.viewTasks(44, 14)
+
+	if !strings.Contains(out, boxTopLeft) || !strings.Contains(out, boxBottomRight) {
+		t.Fatalf("box mode should draw box borders:\n%s", out)
+	}
+	// A dependent's top border carries a tee where the edge lands.
+	if !strings.Contains(out, gutJoinUp) {
+		t.Fatalf("dependent box should show an incoming tee:\n%s", out)
+	}
+	if !strings.Contains(out, gutVert) {
+		t.Fatalf("box mode should draw a connector between boxes:\n%s", out)
+	}
+}
+
+func TestBoxModeToggle(t *testing.T) {
+	m := testModel(2, 1)
+	if !m.boxMode {
+		t.Fatal("box mode should be the default")
+	}
+	m = press(m, "b")
+	if m.boxMode {
+		t.Fatal("b should toggle box mode off")
+	}
+	m = press(m, "b")
+	if !m.boxMode {
+		t.Fatal("b should toggle box mode back on")
 	}
 }
 
 func TestGraphPaneDrawsFanIn(t *testing.T) {
 	m := testModel(0, 0)
 	m.width, m.height = 90, 20
+	m.boxMode = false // lane gutter
 	m.snap.Tasks = []broker.TaskSnapshot{
 		{ID: "a", State: broker.TaskCompleted},
 		{ID: "b", State: broker.TaskCompleted},

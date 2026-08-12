@@ -54,6 +54,12 @@ narwhal run --workers 2 --cwd ~/src/myrepo --prompt "audit this codebase"
 # then the coordinator dispatches workers in dependency order
 narwhal plan --prompt "audit this codebase" --cwd ~/src/myrepo --concurrency 3
 
+# Frontier planner, cheap workers, frontier synthesis — the Cursor
+# economics insight. Investigation is narrow and benefits from speed;
+# synthesis integrates peer findings and needs frontier intelligence.
+narwhal plan --prompt "audit this codebase" --cwd ~/src/myrepo \
+  --planner-model opus --worker-model haiku --synthesis-model opus
+
 # Watch a run as it happens (from another terminal)
 narwhal monitor            # attach to the newest live run
 narwhal monitor --run <id> # attach to a specific run
@@ -227,6 +233,36 @@ style passive awareness impossible there. Directly-executed `ccproxy claude
 --print` processes do receive these notifications, which is why Narwhal
 launches workers as processes rather than as Workflow subagents.
 
+### Model steering
+
+Narwhal decides what *tier* of intelligence a task needs; ccproxy decides what
+*backend model* serves that tier. The two layers are separate on purpose:
+
+```
+narwhal: "this task is narrow"  → --worker-model haiku
+  └→ ccproxy: haiku tier → cheapest available backend (fable/glm/haiku)
+  └→ token limit hit → auto-failover to next account
+
+narwhal: "this task is synthesis" → --synthesis-model opus
+  └→ ccproxy: opus tier → strongest available backend
+  └→ token limit hit → auto-failover to next account
+```
+
+Three working modes, chosen with `--worker-model` and `--synthesis-model`:
+
+| Mode | `--worker-model` | `--synthesis-model` | When |
+|---|---|---|---|
+| Uniform | (omit) | (omit) | 1–2 workers, narrow task, token-limit evasion via ccproxy rotation |
+| Smart | haiku | opus | code-understanding, broad investigation, division of labor |
+| Heavy | sonnet | opus | security audit, debugging, subtle dependency tracing |
+
+The coordinator applies `--synthesis-model` to any task whose name or
+assignment contains "synthesis" — the one that integrates peer findings with
+fidelity. A per-task `model` field on the broker API lets the planner
+override the model for an individual task, which wins over the run-level
+default. The priority is: per-task `model` > `--synthesis-model` (synthesis
+only) > `--worker-model` (everything else) > ccproxy rotation.
+
 ## CLI
 
 | Command | Description |
@@ -281,6 +317,16 @@ See `docs/experiments.md` for the full record:
 - **E3**: Live peer correction during a real run — **confirmed** (workers cross-corrected)
 - **E4**: Split-request — **confirmed** (worker created 3 new tasks mid-run)
 - **E5**: Multi-thread radio + coordinating agent — **confirmed** (planner built 5-task DAG, 10 radio messages, synthesis task integrated findings)
+
+### SWE-Atlas QnA benchmark slice
+
+Two slices of the benchmark AgentRadio publishes against, with Narwhal on
+one arm and a single Claude Code session (B0) on the other. Slice 1 (easy
+tasks) hits ceiling — both arms 100%. Slice 2 (harder tasks, 4 arms) shows
+Smart — haiku investigate + opus synthesis — at 94.9% rubric coverage,
+above Narwhal's 92.3% and B0's 89.7%, at wall-clock below B0 (52 min vs
+58 min). See [`docs/benchmark.md`](docs/benchmark.md) and
+[`docs/experiments.md`](docs/experiments.md) §E7–E8.
 
 ## License
 

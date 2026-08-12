@@ -40,6 +40,9 @@ func planCmd(args []string) {
 	timeout := fs.Duration("timeout", 30*time.Minute, "max time for the whole run")
 	planTimeout := fs.Duration("plan-timeout", 5*time.Minute, "max time for the planning phase")
 	maxConcurrency := fs.Int("concurrency", 3, "max parallel workers")
+	plannerModel := fs.String("planner-model", "", "claude --model for the planner (default: ccproxy rotation)")
+	workerModel := fs.String("worker-model", "", "claude --model for workers (default: ccproxy rotation)")
+	synthesisModel := fs.String("synthesis-model", "", "claude --model for the synthesis task (default: same as --worker-model)")
 	fs.Parse(args)
 
 	if *prompt == "" {
@@ -89,11 +92,15 @@ func planCmd(args []string) {
 	// The agent talks to the broker HTTP API to create tasks with deps.
 	planInstructions := buildPlanInstructions(runID, addr, mainAgent.Token, *prompt)
 	planDone := make(chan error, 1)
-	planCmd := exec.Command("ccproxy", "claude", "--print",
+	planArgs := []string{"claude", "--print",
 		"--permission-mode", "bypassPermissions",
 		"--append-system-prompt", planInstructions,
-		"Decompose the user's request into a task DAG and create the tasks via the broker API. When done, post PLAN_DONE to the planning thread.",
-	)
+	}
+	if *plannerModel != "" {
+		planArgs = append(planArgs, "--model", *plannerModel)
+	}
+	planArgs = append(planArgs, "Decompose the user's request into a task DAG and create the tasks via the broker API. When done, post PLAN_DONE to the planning thread.")
+	planCmd := exec.Command("ccproxy", planArgs...)
 	planCmd.Dir = *cwd
 	planLog, _ := os.Create(filepath.Join(launcher.New(addr, runID, *cwd).SessionDir(), "planner-output.txt"))
 	planCmd.Stdout = planLog
@@ -142,9 +149,16 @@ func planCmd(args []string) {
 
 	// Phase 2: run the coordinator over the planner's DAG.
 	l := launcher.New(addr, runID, *cwd)
+	l.SetWorkerModel(*workerModel)
 	cfg := coordinator.DefaultConfig()
 	cfg.MaxConcurrency = *maxConcurrency
 	cfg.Timeout = *timeout
+	// The synthesis task integrates every peer finding with fidelity —
+	// that needs frontier intelligence even when narrow investigation
+	// does not. Override the worker model for the synthesis task only.
+	if *synthesisModel != "" {
+		cfg.SynthesisModel = *synthesisModel
+	}
 
 	coord := coordinator.New(r, reg, l, cfg)
 	res := coord.Run()
@@ -197,9 +211,19 @@ Your job is to decompose the user's request into a task DAG.
    - name: short human-readable name
    - assignment: what the worker should do (be specific — include file paths)
    - deps: task IDs this depends on (empty array for independent tasks)
+   - model: (optional) claude model for this task's worker, e.g. "haiku",
+     "sonnet", "opus". Omit to use the launcher default. Use a cheaper model
+     for narrow investigation tasks and a stronger one for synthesis.
 
-3. Use a synthesis task at the end that depends on all investigation tasks:
-   "deps":["task-1","task-2","task-3"]
+3. Use a synthesis task with NO deps (so it starts in parallel with the
+   investigation tasks). Its assignment must state that it:
+     - starts a background watcher on the radio immediately
+     - drains the radio repeatedly, accumulating peer findings as they arrive
+     - waits until every investigation task has called task-done before writing
+       the final answer
+   Set the synthesis task's "model" to "opus" — it integrates peer findings
+   with fidelity, which needs frontier intelligence. Investigation tasks
+   should use a cheaper model (haiku) since they are narrow.
 
 4. After creating ALL tasks, signal completion by sending a message:
 

@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -816,6 +818,9 @@ func (m tuiModel) taskByID(id string) broker.TaskSnapshot {
 
 // viewTaskDetail shows the selected task's state, its place in the graph,
 // and its full assignment — which the graph pane can only show truncated.
+// If the task has a running or completed worker, the tail of its
+// claude-output.txt is appended so the operator can see what the worker is
+// actually doing without leaving the monitor.
 func (m tuiModel) viewTaskDetail() string {
 	rows := m.graphRows()
 	if len(rows) == 0 {
@@ -855,6 +860,15 @@ func (m tuiModel) viewTaskDetail() string {
 	}
 
 	body := wrapText(t.Assignment, m.width-2)
+
+	// Append the worker's live output tail, if any. The session directory is
+	// ~/.narwhal/sessions/<run-id>/agents/worker-<task-id>/claude-output.txt.
+	// This is the same path the launcher writes to, so the operator sees the
+	// same view the harness would collect after the run.
+	if workerTail := m.workerOutputTail(t.ID); workerTail != "" {
+		body = append(body, "", styDim.Render("── worker output (tail) ──"), workerTail)
+	}
+
 	footer := styDim.Render("j/k scroll · n/p task · esc back · q close")
 
 	avail := m.height - 5
@@ -865,6 +879,31 @@ func (m tuiModel) viewTaskDetail() string {
 
 	return head + pos + "\n" + styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
 		strings.Join(body[scroll:end], "\n") + "\n" + footer
+}
+
+// workerOutputTail reads the last ~30 lines of the worker's claude-output.txt.
+// The path mirrors what the launcher writes: ~/.narwhal/sessions/<run-id>/
+// agents/worker-<task-id>/claude-output.txt. Returns "" if the file does not
+// exist yet (task not dispatched, or running under a batch-mode run that uses
+// a different session directory layout).
+func (m tuiModel) workerOutputTail(taskID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	agentID := "worker-" + taskID
+	path := filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
+		"agents", agentID, "claude-output.txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	const tail = 30
+	if len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // scrollWindow clamps a scroll offset to a body length and returns the

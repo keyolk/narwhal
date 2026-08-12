@@ -19,6 +19,7 @@ package coordinator
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,13 @@ type Config struct {
 
 	// Timeout bounds the whole run.
 	Timeout time.Duration
+
+	// SynthesisModel overrides the worker model for the synthesis task —
+	// the one that integrates peer findings with fidelity. Empty means use
+	// the same model as every other worker. The Cursor economics
+	// insight: frontier intelligence is needed for decomposition and
+	// integration, not for narrow investigation.
+	SynthesisModel string
 }
 
 // DefaultConfig returns conservative defaults.
@@ -204,6 +212,14 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 		AgentID:    agentID,
 		TaskID:     task.ID,
 		Assignment: task.Assignment,
+		Model:      task.Model,
+	}
+	// The synthesis task integrates peer findings — it needs frontier
+	// intelligence even when the investigation workers do not. Apply the
+	// config-level synthesis model unless the planner already set a
+	// per-task model (per-task wins; it is more specific).
+	if cfg.Model == "" && c.cfg.SynthesisModel != "" && isSynthesisTask(task) {
+		cfg.Model = c.cfg.SynthesisModel
 	}
 
 	agentDir, err := c.launcher.SetupAgent(agent, cfg)
@@ -236,38 +252,79 @@ func (c *Coordinator) reapFinishedWorkers() {
 	}
 
 	c.mu.Lock()
-	var exited []string
+	type exitedTask struct {
+		taskID  string
+		agentID string
+	}
+	var exited []exitedTask
 	for taskID, agentID := range c.running {
 		if !active[agentID] {
-			exited = append(exited, taskID)
+			exited = append(exited, exitedTask{taskID, agentID})
 		}
 	}
-	for _, taskID := range exited {
-		delete(c.running, taskID)
+	for _, et := range exited {
+		delete(c.running, et.taskID)
 	}
 	c.mu.Unlock()
 
-	for _, taskID := range exited {
-		task := c.run.GetTask(taskID)
+	for _, et := range exited {
+		task := c.run.GetTask(et.taskID)
 		if task == nil {
 			continue
 		}
 		state := task.CurrentState()
 		if state == broker.TaskCompleted || state == broker.TaskFailed {
 			c.mu.Lock()
-			c.finished[taskID] = true
+			c.finished[et.taskID] = true
 			c.mu.Unlock()
 			continue
 		}
-		// Worker exited without declaring completion.
-		log.Printf("[coordinator] %s exited without task-done; recording failure", taskID)
+		// Worker exited without declaring completion. Before failing the
+		// dispatch, check whether the worker actually posted findings to the
+		// radio — a worker that did its job but forgot the task-done call
+		// should not be retried and waste another 10 minutes. The synthesis
+		// task can still drain whatever the worker posted.
+		if c.workerPostedToRadio(et.agentID) {
+			log.Printf("[coordinator] %s exited without task-done but posted to radio; marking complete", et.taskID)
+			task.CompleteDispatch("completed via radio activity", c.run)
+			c.mu.Lock()
+			c.finished[et.taskID] = true
+			c.mu.Unlock()
+			continue
+		}
+		log.Printf("[coordinator] %s exited without task-done; recording failure", et.taskID)
 		task.FailDispatch("worker exited without calling task-done", c.run)
 		if task.CurrentState() == broker.TaskFailed {
 			c.mu.Lock()
-			c.finished[taskID] = true
+			c.finished[et.taskID] = true
 			c.mu.Unlock()
 		}
 	}
+}
+
+// isSynthesisTask returns true if the task is the synthesis step — the
+// one that drains peer findings and writes the final answer. The planner
+// names it with "synthesis" in the name or assignment by convention.
+func isSynthesisTask(task *broker.Task) bool {
+	name := strings.ToLower(task.Name)
+	if strings.Contains(name, "synthesis") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(task.Assignment), "synthesis task")
+}
+
+// workerPostedToRadio returns true if the agent sent any message to the run's
+// radio channel. A worker that posted findings but forgot to call task-done
+// still produced usable output — the synthesis task can drain it — so the
+// coordinator marks the task complete rather than retrying and wasting
+// another full worker run.
+func (c *Coordinator) workerPostedToRadio(agentID string) bool {
+	for _, m := range c.run.MessagesSince(0) {
+		if m.Sender == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 // intakeSplitRequests scans the planning thread for split-request messages

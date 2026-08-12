@@ -13,3 +13,5 @@
 
 # Go
 /vendor/
+bench/repos/
+bench/results/

@@ -215,6 +215,12 @@ type Task struct {
 	State      TaskState
 	CreatedAt  time.Time
 	Dispatches []*Dispatch
+	// Model overrides the launcher's default worker model for this task.
+	// Empty means use the launcher default. Set by the planner when a task
+	// needs a specific model — e.g. a synthesis task on opus, investigation
+	// tasks on haiku. See bench/run_hybrid.sh and the Cursor economics note
+	// in README.md.
+	Model string
 }
 
 // Dispatch is one attempt to execute a Task. A retry mints a new Dispatch;
@@ -344,6 +350,7 @@ func (r *Run) SnapshotTasks() []TaskSnapshot {
 			Deps:       append([]string(nil), t.Deps...),
 			State:      t.State,
 			Dispatches: len(t.Dispatches),
+			Model:      t.Model,
 		})
 		t.mu.RUnlock()
 	}
@@ -541,6 +548,7 @@ type TaskSnapshot struct {
 	Deps       []string      `json:"deps"`
 	State      TaskState     `json:"state"`
 	Dispatches int           `json:"dispatches"`
+	Model      string        `json:"model,omitempty"`
 }
 
 type ThreadSnapshot struct {

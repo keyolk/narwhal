@@ -182,13 +182,100 @@ MCP server does not orphan in-flight runs. Single-instance safety uses flock
 on the pidfile rather than a pid liveness check, so a stale pidfile from
 `kill -9` cannot let a second daemon bind a different port and split state.
 
-## Implications for the design1. Workers must be directly executed processes, not Workflow subagents.
+## E7 — SWE-Atlas QnA benchmark slice: CONFIRMED
+
+**Date:** 2026-08-12
+**Environment:** host checkout of `kovidgoyal/kitty` extracted from
+`ghcr.io/scaleapi/swe-atlas:swe_atlas_QnA_kovidgoyal_kitty_1.0`; judge pinned
+to `claude --print --model opus`; three tasks with fully static rubrics.
+
+A three-task slice of the benchmark AgentRadio publishes against, run with
+Narwhal on one arm and a single Claude Code session (B0) on the other. Full
+setup and caveats in [`benchmark.md`](./benchmark.md).
+
+| Task | Rubrics | B0 | Narwhal | B0 wall | Narwhal wall | Narwhal DAG |
+|---|---:|---:|---:|---:|---:|---|
+| …9e5 rewrap | 8 | 8/8 | 8/8 | 28 min | 33 min | 4 tasks, 5 msgs |
+| …9e4 ssh kitten | 9 | 8/8 | 9/9 | 36 min | 17 min | 4 tasks, 4 msgs |
+| …9fc Python/C boundary | 8 | 8/8 | 8/8 | 58 min | 31 min | 5 tasks, 32 msgs |
+| **total** | **25** | **24/24** | **25/25** | **122 min** | **81 min** | |
+
+Both arms score reward=1 on every task; task accuracy is tied 3/3. Narwhal
+covers one rubric B0 missed (9e4) and is 34% faster overall, 2× on the two
+longer tasks. The slice cannot reproduce the published task-accuracy gap
+because the static-rubric tasks it uses are ones B0 already aces — the gap
+opens on runtime-heavy tasks this slice excludes.
+
+### Bugs found during the run
+
+Three harness bugs surfaced, two of which would have manufactured a Narwhal
+loss had they gone unnoticed:
+
+1. **cwd confound** — `--add-dir` grants access but does not change the
+   working directory; the first B0 pilot ran inside the harness repo. Fixed
+   with `cd "$REPO"`.
+2. **Username path split** — Claude Code's scratchpad encodes the username
+   with dots→hyphens, but a worker rebuilding a path under `$HOME` writes
+   the dotted form. Both directories exist; the worker reported success and
+   the judge found nothing. Narwhal's first answer (36 KB, 8/8 when
+   recovered) was scored 0. Fixed by writing to `/tmp/narwhal-bench/…`.
+3. **`send` positional-argument collision** — `send worklog "…" urgent`
+   put `urgent` in the mentions slot, addressing a nonexistent agent. The
+   synthesis worker on 9e4 worked around it by reading the state snapshot
+   directly. Fixed in the wrapper with a priority-detection case + 4 tests.
+
+## E8 — Per-task model assignment and synthesis parallelization: CONFIRMED
+
+**Date:** 2026-08-13
+**Environment:** same kitty slice as E7, 60-min timeout, 4 arms
+
+E7's slice hit a ceiling: both arms scored 100% on easy (8–9 rubric) tasks.
+E8 used harder tasks (11–17 rubrics) where B0 starts missing some, and tested
+a fourth arm — Smart — that applies the Cursor economics insight at task
+granularity rather than run granularity.
+
+| Arm | Rubric pass | Wall clock | What it does |
+|---|---:|---:|---|
+| B0 | 89.7% | 58 min | single agent |
+| Narwhal (all opus) | 92.3% | 100 min | planner + workers + synthesis, all opus |
+| Hybrid (all haiku) | 74.4% | 33 min | same, all haiku |
+| **Smart** | **94.9%** | **52 min** | haiku investigate + opus synthesis |
+
+Smart has the highest rubric coverage and the lowest wall-clock of any arm
+that beats B0. The rubric-level breakdown on 9f0 (17 rubrics, the hardest
+task) shows why: 2 rubrics were passed only by Smart — opus synthesis filled
+gaps the haiku investigators left. 2 rubrics were missed by Smart/Hybrid
+(haiku cannot do them) but passed by B0/Narwhal (opus investigation needed).
+1 rubric was passed only by B0 — a single thorough read beating every
+multi-agent configuration, the overlap failure the paper's L1→L2 step
+isolates.
+
+### Improvements made during E8
+
+Five issues found during E7/E8 were fixed:
+
+1. **drain mention-filtering** — `drain` now returns all messages, not just
+   mentioned ones. Mention filtering belongs on the watch path.
+2. **Worker exit without `task-done`** — coordinator checks if the worker
+   posted to the radio before failing the dispatch; marks complete if so.
+3. **Per-task model** — `Task.Model` field + broker API `model` field let
+   the planner assign a model per task, not per run.
+4. **Synthesis parallelization** — synthesis task has no deps, starts
+   alongside investigation, drains radio as peers post. Depth-1 DAG.
+
+## Implications for the design
+
+1. Workers must be directly executed processes, not Workflow subagents.
 2. `--permission-mode bypassPermissions` is mandatory for headless workers;
    without it the agent workspace is unreachable.
 3. `drain` remains useful as a belt-and-braces check at natural boundaries,
    covering messages that land between watcher cycles.
 4. The "exactly one watcher" invariant from AgentRadio carries over: the
    worker must restart its watcher as soon as one resolves.
+5. Synthesis should run in parallel with investigation, not after it — a
+   depth-2 DAG costs roughly 2× wall-clock of a single agent.
+6. Model assignment is per-task, not per-run: synthesis needs frontier
+   intelligence even when investigation does not.
 
 ## Reproducing
 

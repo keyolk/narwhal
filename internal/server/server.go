@@ -156,12 +156,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 			Name       string   `json:"name"`
 			Assignment string   `json:"assignment"`
 			Deps       []string `json:"deps"`
+			Model      string   `json:"model"`
 		}
 		if err := decodeBody(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
 		t := run.AddTask(req.ID, req.Name, req.Assignment, req.Deps)
+		t.Model = req.Model
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":    t.ID,
 			"state": string(t.State),
@@ -322,7 +324,13 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request, agent *brok
 	}
 	_ = decodeBody(r, &req)
 
-	msgs := run.MessagesMentioning(req.After, agent.ID)
+	// Drain returns ALL messages after the cursor, not just mentioned ones.
+	// A synthesis task needs every peer finding; mention filtering here is
+	// what caused the "drain skipped seq N" symptom — a message whose
+	// mentions slot held a priority ("urgent") was filtered out as addressing
+	// a nonexistent agent. Mention-based filtering belongs on the watch
+	// (notification) path, not on the manual read path.
+	msgs := run.MessagesSince(req.After)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agent_id": agent.ID,
 		"after":    req.After,

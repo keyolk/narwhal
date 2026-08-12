@@ -28,21 +28,23 @@ import (
 
 // WorkerConfig describes one worker to launch.
 type WorkerConfig struct {
-	AgentID     string
-	TaskID      string
-	Assignment  string
+	AgentID       string
+	TaskID        string
+	Assignment    string
 	IsCoordinator bool
+	Model         string // --model flag for claude; empty = ccproxy default
 }
 
 // Launcher owns worker process lifecycle for a Run.
 type Launcher struct {
-	brokerURL string
-	runID     string
-	cwd       string
-	sessionDir string
+	brokerURL   string
+	runID       string
+	cwd         string
+	sessionDir  string
+	workerModel string // default --model for workers when WorkerConfig.Model is empty
 
-	mu       sync.Mutex
-	workers  map[string]*exec.Cmd
+	mu      sync.Mutex
+	workers map[string]*exec.Cmd
 }
 
 // New creates a Launcher for the given run.
@@ -56,6 +58,12 @@ func New(brokerURL, runID, cwd string) *Launcher {
 		workers:    make(map[string]*exec.Cmd),
 	}
 }
+
+// SetWorkerModel sets the default --model passed to worker processes. Pass
+// "" to use ccproxy's account rotation. This is the Cursor economics insight:
+// a frontier planner decomposes, a cheaper model executes — quality stays
+// close while worker cost drops by an order of magnitude.
+func (l *Launcher) SetWorkerModel(model string) { l.workerModel = model }
 
 // SessionDir returns the on-disk directory for this run's agent workspaces.
 func (l *Launcher) SessionDir() string { return l.sessionDir }
@@ -81,6 +89,16 @@ func (l *Launcher) SetupAgent(a *broker.Agent, cfg WorkerConfig) (string, error)
 # Send a radio message. Sender identity is baked into this script.
 set -euo pipefail
 THREAD="$1"; CONTENT="$2"; MENTIONS="${3:-}"; PRIO="${4:-normal}"
+# A bare priority in the mentions slot is what a caller writing
+#   send worklog "..." urgent
+# means — the alternative reading, an @-mention of an agent named "urgent",
+# addresses a peer that cannot exist. Left alone this silently narrows the
+# message to a nonexistent recipient and peers never see it, which is exactly
+# the failure that is hardest to notice from the sending side.
+case "$MENTIONS" in
+  fyi|normal|urgent)
+    if [ $# -lt 4 ]; then PRIO="$MENTIONS"; MENTIONS=""; fi ;;
+esac
 curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":sys.argv[1],"content":sys.argv[2],"mentions":sys.argv[3].split(",") if sys.argv[3] else [],"priority":sys.argv[4]}))' "$THREAD" "$CONTENT" "$MENTIONS" "$PRIO")"
@@ -173,6 +191,10 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "Your identity is baked into each script — never pass a URL or token.\n\n")
 	fmt.Fprintf(&b, "- bash %s/send <threadId> \"<content>\" [mentionsCSV] [priority]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Send a message. threadId is usually \"worklog\". priority: fyi, normal, urgent.\n")
+	fmt.Fprintf(&b, "    A message with no mentions is a broadcast, which is what you usually want:\n")
+	fmt.Fprintf(&b, "      bash %s/send worklog \"finding\" \"\" urgent\n", scriptsDir)
+	fmt.Fprintf(&b, "    Mention a peer only to address it specifically:\n")
+	fmt.Fprintf(&b, "      bash %s/send worklog \"finding\" task-2,task-3 urgent\n", scriptsDir)
 	fmt.Fprintf(&b, "- bash %s/drain [afterSeq]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Non-blocking check for new messages. Run after each investigation unit.\n")
 	fmt.Fprintf(&b, "- bash %s/watch [afterSeq] [timeoutMs]\n", scriptsDir)
@@ -229,11 +251,22 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	// touching the agent workspace (wrapper scripts, ack artifacts) is
 	// blocked by the permission gate and the worker cannot do its job.
 	// AgentRadio's own startup scripts use the same flag for this reason.
-	cmd := exec.Command("ccproxy", "claude", "--print",
+	args := []string{"claude", "--print",
 		"--permission-mode", "bypassPermissions",
 		"--append-system-prompt", string(instructions),
-		cfg.Assignment,
-	)
+	}
+	// Per-worker model override, then the launcher default, then ccproxy's
+	// own account rotation. The planner picks the model; workers default to
+	// whatever the launcher was configured with.
+	model := cfg.Model
+	if model == "" {
+		model = l.workerModel
+	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	args = append(args, cfg.Assignment)
+	cmd := exec.Command("ccproxy", args...)
 	cmd.Dir = l.cwd
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

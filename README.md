@@ -107,6 +107,29 @@ Here every task is a dot in its own lane and every edge is drawn in the
 gutter, git-log style. `◉` continues the lane above it, `●` opens a new one,
 `╰` ends a lane and `├` branches one that still has work below.
 
+### Several runs at once
+
+An interactive session starts a run per request, so more than one is usually
+live. Opening the monitor with several running shows a picker:
+
+```
+Narwhal  3 live runs
+
+▸ s1786471179534-1       daemon
+    account routing 경로의 일관성 검증
+  s1786472797321-2       daemon
+    auth 모듈 보안 감사
+  s1786473001-3          daemon
+    monitor TUI 리팩터링 계획
+```
+
+Runs are named by timestamp, so the prompt is what actually distinguishes
+them. Inside a run the header shows its position (`[2/3]`), `[` and `]` move
+between runs, and `r` returns to the picker. The list refreshes while the
+monitor is open — a run started afterwards appears, a finished one drops
+out — and the selection follows the run being watched rather than its index.
+`narwhal monitor --run <id>` opens one directly.
+
 Graph glyphs are plain box-drawing, so they render in any font. Task and
 priority icons use Nerd Font when the terminal has one:
 
@@ -126,6 +149,8 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
 | `b` | Toggle between box and lane graph views |
+| `[` / `]` | Previous / next live run |
+| `r` | Open the run picker |
 | `n` / `p` | Next / previous item inside the detail view |
 | `f` | Re-arm tail following after manual navigation |
 | `esc` | Close the detail view |

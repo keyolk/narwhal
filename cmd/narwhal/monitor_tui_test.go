@@ -12,7 +12,8 @@ import (
 )
 
 func testModel(tasks int, msgs int) tuiModel {
-	m := newTUIModel(store.LiveRun{RunID: "r1", BrokerURL: "http://x"}, time.Second)
+	runs := []store.LiveRun{{RunID: "r1", BrokerURL: "http://x"}}
+	m := newTUIModel(runs, 0, time.Second, false)
 	snap := broker.Snapshot{RunID: "r1", State: broker.RunActive}
 	for i := 0; i < tasks; i++ {
 		snap.Tasks = append(snap.Tasks, broker.TaskSnapshot{
@@ -385,6 +386,178 @@ func TestBoxModeToggle(t *testing.T) {
 	m = press(m, "b")
 	if !m.boxMode {
 		t.Fatal("b should toggle box mode back on")
+	}
+}
+
+// multiRunModel builds a model watching several live runs.
+func multiRunModel(n int) tuiModel {
+	runs := make([]store.LiveRun, n)
+	for i := range runs {
+		runs[i] = store.LiveRun{
+			RunID:     string(rune('a'+i)) + "-run",
+			BrokerURL: "http://x",
+			Prompt:    "prompt " + string(rune('a'+i)),
+		}
+	}
+	m := newTUIModel(runs, 0, time.Second, false)
+	m.width, m.height = 100, 24
+	m.snap = broker.Snapshot{RunID: runs[0].RunID, State: broker.RunActive}
+	return m
+}
+
+func TestBracketKeysSwitchRuns(t *testing.T) {
+	// An interactive session creates a run per request, so moving between
+	// them has to be cheap.
+	m := multiRunModel(3)
+	if m.live.RunID != "a-run" {
+		t.Fatalf("initial run = %q, want a-run", m.live.RunID)
+	}
+	m = press(m, "]")
+	if m.live.RunID != "b-run" {
+		t.Fatalf("] should advance to b-run, got %q", m.live.RunID)
+	}
+	m = press(m, "[")
+	if m.live.RunID != "a-run" {
+		t.Fatalf("[ should go back to a-run, got %q", m.live.RunID)
+	}
+}
+
+func TestRunSwitchClearsPreviousRunState(t *testing.T) {
+	// Cursors and messages belong to a run; carrying them across would
+	// point at rows that do not exist in the new one.
+	m := multiRunModel(2)
+	m.snap.Messages = []*broker.Message{
+		{Seq: 1, Sender: "w", Content: "old"},
+		{Seq: 2, Sender: "w", Content: "older"},
+	}
+	m.radioCur = 1
+	m.taskCur = 3
+	m.followTail = false
+
+	m = press(m, "]")
+
+	if len(m.snap.Messages) != 0 {
+		t.Fatalf("messages from the previous run survived: %d", len(m.snap.Messages))
+	}
+	if m.radioCur != 0 || m.taskCur != 0 {
+		t.Fatalf("cursors not reset: radio=%d task=%d", m.radioCur, m.taskCur)
+	}
+	if m.detail != detailClosed {
+		t.Fatal("detail view should be closed on the new run")
+	}
+	if !m.followTail {
+		t.Fatal("tail following should re-arm for the new run")
+	}
+}
+
+func TestDetailViewCapturesKeysBeforeRunSwitch(t *testing.T) {
+	// While a message is open, ] belongs to the detail view's own
+	// navigation, not to run switching — otherwise reading a message
+	// could yank the whole view to another run.
+	m := multiRunModel(2)
+	m.snap.Messages = []*broker.Message{{Seq: 1, Sender: "w", Content: "body"}}
+	m = press(m, "enter")
+	if m.detail != detailMessage {
+		t.Fatal("expected the detail view to open")
+	}
+	m = press(m, "]")
+	if m.live.RunID != "a-run" {
+		t.Fatalf("] inside the detail view should not switch runs, got %q", m.live.RunID)
+	}
+}
+
+func TestSwitchStopsAtEnds(t *testing.T) {
+	m := multiRunModel(2)
+	m = press(m, "[") // already at the first
+	if m.live.RunID != "a-run" {
+		t.Fatalf("[ at the start should stay put, got %q", m.live.RunID)
+	}
+	m = press(m, "]", "]") // past the last
+	if m.live.RunID != "b-run" {
+		t.Fatalf("] at the end should stay put, got %q", m.live.RunID)
+	}
+}
+
+func TestPickerOpensAndSelects(t *testing.T) {
+	m := multiRunModel(3)
+	m = press(m, "r")
+	if !m.picker {
+		t.Fatal("r should open the run picker")
+	}
+	m = press(m, "j", "j")
+	if m.runCur != 2 {
+		t.Fatalf("picker cursor = %d, want 2", m.runCur)
+	}
+	m = press(m, "enter")
+	if m.picker {
+		t.Fatal("enter should leave the picker")
+	}
+	if m.live.RunID != "c-run" {
+		t.Fatalf("selected run = %q, want c-run", m.live.RunID)
+	}
+}
+
+func TestPickerNotOfferedForASingleRun(t *testing.T) {
+	// With one run there is nothing to pick, and stealing 'r' would be
+	// surprising.
+	m := testModel(1, 1)
+	m = press(m, "r")
+	if m.picker {
+		t.Fatal("picker should not open when only one run is live")
+	}
+}
+
+func TestPickerViewListsRuns(t *testing.T) {
+	m := multiRunModel(2)
+	m.picker = true
+	out := m.View()
+	for _, want := range []string{"a-run", "b-run", "prompt a", "2 live runs"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("picker view missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHeaderShowsRunPosition(t *testing.T) {
+	m := multiRunModel(3)
+	if !strings.Contains(m.View(), "[1/3]") {
+		t.Fatalf("header should show which run is open:\n%s", m.View())
+	}
+	// A single run needs no counter.
+	single := testModel(1, 1)
+	single.width, single.height = 100, 24
+	if strings.Contains(single.View(), "[1/1]") {
+		t.Fatal("a lone run should not show a position counter")
+	}
+}
+
+func TestMergeRunsKeepsWatchedRun(t *testing.T) {
+	// Runs come and go while the monitor is open; the selection must
+	// follow the run being watched, not its index.
+	m := multiRunModel(3)
+	m.runCur = 2
+	m.live = m.runs[2]
+
+	// A new run appears at the front, shifting every index.
+	refreshed := append([]store.LiveRun{
+		{RunID: "z-run", BrokerURL: "http://x"},
+	}, m.runs...)
+	m.mergeRuns(refreshed)
+
+	if m.runs[m.runCur].RunID != "c-run" {
+		t.Fatalf("cursor drifted to %q after the list shifted", m.runs[m.runCur].RunID)
+	}
+}
+
+func TestMergeRunsHandlesWatchedRunEnding(t *testing.T) {
+	m := multiRunModel(3)
+	m.runCur = 2
+	m.live = m.runs[2]
+
+	m.mergeRuns(m.runs[:1]) // the watched run finished and dropped out
+
+	if m.runCur < 0 || m.runCur >= len(m.runs) {
+		t.Fatalf("cursor out of range after the watched run ended: %d", m.runCur)
 	}
 }
 

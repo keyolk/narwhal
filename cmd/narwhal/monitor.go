@@ -67,18 +67,32 @@ func monitorCmd(args []string) {
 		return
 	}
 
-	live, ok := store.FindLiveIn(entries, *runID)
-	if !ok {
-		if *runID == "" {
-			fmt.Fprintf(os.Stderr, "no live runs.\n%s", store.SummarizeRuns(entries))
-		} else {
-			fmt.Fprintf(os.Stderr, "run %q is not live.\n%s", *runID, store.SummarizeRuns(entries))
-			fmt.Fprintf(os.Stderr, "\nFor a finished run, use: narwhal show %s\n", *runID)
-		}
+	if len(entries) == 0 {
+		fmt.Fprintf(os.Stderr, "no live runs.\n%s", store.SummarizeRuns(entries))
 		os.Exit(1)
 	}
 
-	p := tea.NewProgram(newTUIModel(live, *interval), tea.WithAltScreen())
+	// With an explicit --run, open it directly. Without one, open the
+	// newest run but start on the picker when several are live — an
+	// interactive session creates a run per request, so silently choosing
+	// one of several would hide the rest.
+	cur, picker := 0, len(entries) > 1
+	if *runID != "" {
+		found := false
+		for i, e := range entries {
+			if e.RunID == *runID {
+				cur, picker, found = i, false, true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "run %q is not live.\n%s", *runID, store.SummarizeRuns(entries))
+			fmt.Fprintf(os.Stderr, "\nFor a finished run, use: narwhal show %s\n", *runID)
+			os.Exit(1)
+		}
+	}
+
+	p := tea.NewProgram(newTUIModel(entries, cur, *interval, picker), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
 		os.Exit(1)

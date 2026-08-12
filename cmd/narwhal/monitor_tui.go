@@ -56,10 +56,20 @@ type snapshotMsg struct {
 	err    error
 }
 
+// runsMsg carries a refreshed list of live runs.
+type runsMsg []store.LiveRun
+
 type tuiModel struct {
 	live     store.LiveRun
 	interval time.Duration
 	client   *http.Client
+
+	// runs is every live run, so the user can switch without restarting
+	// the monitor. An interactive session creates a run per request, so
+	// several are live at once routinely.
+	runs    []store.LiveRun
+	runCur  int
+	picker  bool // showing the run list instead of a run
 
 	snap   broker.Snapshot
 	agents []string
@@ -83,21 +93,37 @@ type tuiModel struct {
 	quit   bool
 }
 
-func newTUIModel(live store.LiveRun, interval time.Duration) tuiModel {
-	return tuiModel{
-		live:       live,
+// newTUIModel builds the model. runs is every live run and cur indexes the
+// one to open; the picker is shown when the caller did not single one out.
+func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker bool) tuiModel {
+	m := tuiModel{
 		interval:   interval,
 		client:     &http.Client{Timeout: 5 * time.Second},
 		focus:      focusRadio,
 		followTail: true,
 		boxMode:    true,
+		runs:       runs,
+		runCur:     cur,
+		picker:     picker,
 		width:      100,
 		height:     30,
 	}
+	if cur >= 0 && cur < len(runs) {
+		m.live = runs[cur]
+	}
+	return m
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(m.poll(), tick(m.interval))
+	return tea.Batch(m.poll(), m.refreshRuns(), tick(m.interval))
+}
+
+// refreshRuns re-discovers live runs so a run started after the monitor
+// opened still shows up, and a finished one drops out of the list.
+func (m tuiModel) refreshRuns() tea.Cmd {
+	return func() tea.Msg {
+		return runsMsg(store.Discover(daemonRunLister))
+	}
 }
 
 func tick(d time.Duration) tea.Cmd {
@@ -127,6 +153,50 @@ func (m tuiModel) poll() tea.Cmd {
 	}
 }
 
+// mergeRuns takes a refreshed run list while keeping the cursor on the run
+// the user is watching. Runs come and go on their own — an interactive
+// session starts one per request — so a naive replace would move the
+// selection out from under them.
+func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
+	watching := m.live.RunID
+	m.runs = runs
+
+	for i, r := range runs {
+		if r.RunID == watching {
+			m.runCur = i
+			return
+		}
+	}
+	// The watched run ended. Stay put rather than jumping elsewhere: its
+	// final state is still worth reading, and the broker keeps answering
+	// until the daemon drops it.
+	if m.runCur >= len(runs) {
+		m.runCur = len(runs) - 1
+	}
+	if m.runCur < 0 {
+		m.runCur = 0
+	}
+}
+
+// selectRun switches the view to another run, clearing per-run state so
+// the new run does not inherit the previous one's cursors or message
+// history.
+func (m *tuiModel) selectRun(i int) tea.Cmd {
+	if i < 0 || i >= len(m.runs) {
+		return nil
+	}
+	m.runCur = i
+	m.live = m.runs[i]
+	m.snap = broker.Snapshot{}
+	m.agents = nil
+	m.err = nil
+	m.taskCur, m.radioCur = 0, 0
+	m.followTail = true
+	m.detail = detailClosed
+	m.detailScroll = 0
+	return m.poll()
+}
+
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -134,7 +204,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(m.poll(), tick(m.interval))
+		return m, tea.Batch(m.poll(), m.refreshRuns(), tick(m.interval))
+
+	case runsMsg:
+		m.mergeRuns(msg)
+		return m, nil
 
 	case snapshotMsg:
 		if msg.err != nil {
@@ -156,7 +230,44 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handlePickerKey drives the run list. It is a separate mode rather than a
+// third pane because switching runs replaces everything on screen.
+func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q", "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "j", "down":
+		if m.runCur < len(m.runs)-1 {
+			m.runCur++
+		}
+	case "k", "up":
+		if m.runCur > 0 {
+			m.runCur--
+		}
+	case "g", "home":
+		m.runCur = 0
+	case "G", "end":
+		m.runCur = len(m.runs) - 1
+	case "enter", "l", "right":
+		cmd := m.selectRun(m.runCur)
+		m.picker = false
+		return m, cmd
+	case "esc":
+		// Only leave the picker if there is a run to go back to.
+		if len(m.runs) > 0 {
+			cmd := m.selectRun(m.runCur)
+			m.picker = false
+			return m, cmd
+		}
+	}
+	return m, nil
+}
+
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.picker {
+		return m.handlePickerKey(msg)
+	}
 	if m.detail != detailClosed {
 		return m.handleDetailKey(msg)
 	}
@@ -204,6 +315,24 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Boxes read as a diagram; lanes fit more tasks on screen. Which
 		// one is better depends on the graph, so it is a toggle.
 		m.boxMode = !m.boxMode
+	case "r":
+		// Back to the run list. Cheap to reach because an interactive
+		// session accumulates runs and switching is a common move.
+		if len(m.runs) > 1 {
+			m.picker = true
+		}
+	case "]", "shift+right":
+		if m.runCur+1 < len(m.runs) {
+			// selectRun mutates m, so run it before m is copied into the
+			// return value — otherwise the switch is silently discarded.
+			cmd := m.selectRun(m.runCur + 1)
+			return m, cmd
+		}
+	case "[", "shift+left":
+		if m.runCur > 0 {
+			cmd := m.selectRun(m.runCur - 1)
+			return m, cmd
+		}
 	}
 	return m, nil
 }
@@ -322,6 +451,9 @@ func (m tuiModel) View() string {
 	if m.quit {
 		return ""
 	}
+	if m.picker {
+		return m.viewPicker()
+	}
 	switch m.detail {
 	case detailMessage:
 		return m.viewMessageDetail()
@@ -373,10 +505,62 @@ var (
 	styPanel  = lipgloss.NewStyle().Bold(true).Underline(true)
 )
 
+// viewPicker lists the live runs.
+//
+// It shows more than ids: an interactive session names runs by timestamp,
+// so the prompt is the only thing that distinguishes them at a glance.
+func (m tuiModel) viewPicker() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s  %s\n\n",
+		styTitle.Render("Narwhal"),
+		styDim.Render(fmt.Sprintf("%d live runs", len(m.runs))))
+
+	if len(m.runs) == 0 {
+		b.WriteString(styDim.Render("(no live runs)\n"))
+		return b.String()
+	}
+
+	visible := m.height - 5
+	if visible < 3 {
+		visible = 3
+	}
+	start := scrollStart(m.runCur, visible, len(m.runs))
+
+	for i := start; i < len(m.runs) && i < start+visible; i++ {
+		r := m.runs[i]
+		origin := styDim.Render("daemon")
+		if r.PID > 0 {
+			origin = styDim.Render(fmt.Sprintf("pid %d", r.PID))
+		}
+		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
+		if prompt == "" {
+			prompt = styDim.Render("(no prompt)")
+		}
+
+		head := fmt.Sprintf("%-22s %s", r.RunID, origin)
+		line := "  " + head
+		if i == m.runCur {
+			line = stySel.Render(padRight("▸ "+head, m.width-1))
+		}
+		b.WriteString(truncate(line, m.width) + "\n")
+		b.WriteString(styDim.Render(truncate("    "+prompt, m.width)) + "\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styDim.Render("j/k move · enter open · q quit"))
+	return b.String()
+}
+
+
 func (m tuiModel) viewHeader() string {
 	icon, state := runGlyph(m.snap.State)
 	line := fmt.Sprintf("%s  %s  %s %s",
 		styTitle.Render("Narwhal"), m.snap.RunID, icon, state)
+	// With several runs live, say which one this is — otherwise the view
+	// gives no hint that the others exist.
+	if len(m.runs) > 1 {
+		line += styDim.Render(fmt.Sprintf("  [%d/%d]", m.runCur+1, len(m.runs)))
+	}
 	if m.err != nil {
 		line += "  " + styRed.Render("(broker unreachable)")
 	}
@@ -419,8 +603,11 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := styDim.Render("tab pane · j/k move · enter detail · b boxes · f follow · q quit")
-	return stats + tail + "\n" + keys
+	keys := "tab pane · j/k move · enter detail · b boxes · f follow · q quit"
+	if len(m.runs) > 1 {
+		keys = "tab pane · j/k move · enter detail · [ ] run · r runs · b boxes · q quit"
+	}
+	return stats + tail + "\n" + styDim.Render(keys)
 }
 
 

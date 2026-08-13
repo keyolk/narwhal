@@ -39,7 +39,10 @@ type Dispatcher struct {
 
 	mu      sync.Mutex
 	running map[string]string // taskKey → agentID
-	stop    chan struct{}
+	// saved is the last-written fingerprint per run, so the tick only
+	// touches disk when the graph actually changed.
+	saved map[string]runFingerprint
+	stop  chan struct{}
 }
 
 // NewDispatcher creates a dispatcher for a session.
@@ -89,6 +92,11 @@ func (d *Dispatcher) tick() {
 		}
 		d.reap(runID, run, l.ActiveWorkers())
 		d.dispatchReady(runID, run)
+		// Persist after the graph has settled for this tick, so a crash
+		// or a restart leaves the run readable rather than erasing it.
+		// The write is gated on an actual change, so an idle run costs
+		// nothing.
+		d.persistRun(runID, run)
 	}
 }
 

@@ -72,8 +72,8 @@ func ListRuns() ([]string, error) {
 		return nil, err
 	}
 	type entry struct {
-		id   string
-		mod  int64
+		id  string
+		mod int64
 	}
 	var items []entry
 	for _, e := range entries {

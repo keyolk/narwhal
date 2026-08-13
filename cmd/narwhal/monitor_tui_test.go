@@ -313,10 +313,6 @@ func TestSplitRequestIsTaggedInList(t *testing.T) {
 	}
 }
 
-
-
-
-
 func TestTaskDetailShowsAssignmentAndEdges(t *testing.T) {
 	m := testModel(0, 0)
 	m.width, m.height = 80, 24

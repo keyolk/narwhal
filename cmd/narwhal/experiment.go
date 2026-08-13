@@ -163,13 +163,13 @@ Step 4. Print the exact output of step 3.`,
 
 	// Report durable evidence alongside the run snapshot.
 	result := map[string]any{
-		"run_id":        runID,
-		"session_dir":   l.SessionDir(),
-		"ack_exists":    fileExists(ackPath),
-		"ready_exists":  fileExists(readyPath),
-		"snapshot":      run.Snapshot(),
-		"receiver_log":  filepath.Join(l.SessionDir(), "agents", "receiver", "claude-output.txt"),
-		"sender_log":    filepath.Join(l.SessionDir(), "agents", "sender", "claude-output.txt"),
+		"run_id":       runID,
+		"session_dir":  l.SessionDir(),
+		"ack_exists":   fileExists(ackPath),
+		"ready_exists": fileExists(readyPath),
+		"snapshot":     run.Snapshot(),
+		"receiver_log": filepath.Join(l.SessionDir(), "agents", "receiver", "claude-output.txt"),
+		"sender_log":   filepath.Join(l.SessionDir(), "agents", "sender", "claude-output.txt"),
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

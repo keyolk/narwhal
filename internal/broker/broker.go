@@ -44,8 +44,8 @@ const (
 type TaskState string
 
 const (
-	TaskPending   TaskState = "pending"
-	TaskReady     TaskState = "ready"
+	TaskPending    TaskState = "pending"
+	TaskReady      TaskState = "ready"
 	TaskDispatched TaskState = "dispatched"
 	TaskCompleted  TaskState = "completed"
 	TaskFailed     TaskState = "failed"
@@ -93,7 +93,8 @@ const SplitRequestPrefix = "SPLIT_REQUEST"
 // mid-run and adjust the graph without a planner round.
 //
 // Format: "DEP_ADD|<taskId>|<dep1,dep2,...>"
-//        "DEP_REMOVE|<taskId>|<dep1,dep2,...>"
+//
+//	"DEP_REMOVE|<taskId>|<dep1,dep2,...>"
 const (
 	DepAddPrefix    = "DEP_ADD"
 	DepRemovePrefix = "DEP_REMOVE"
@@ -111,7 +112,8 @@ const (
 // with a file gives it up so a peer can take it.
 //
 // Format: "FILE_CLAIM|<taskId>|<path1,path2,...>"
-//        "FILE_RELEASE|<taskId>|<path1,path2,...>"
+//
+//	"FILE_RELEASE|<taskId>|<path1,path2,...>"
 const (
 	FileClaimPrefix   = "FILE_CLAIM"
 	FileReleasePrefix = "FILE_RELEASE"
@@ -255,12 +257,12 @@ type Run struct {
 	CWD         string
 	State       RunState
 	CreatedAt   time.Time
-	Coordinator string    // agent id currently bound as coordinator
+	Coordinator string // agent id currently bound as coordinator
 	Tasks       map[string]*Task
 	Threads     map[string]*Thread
-	seqCounter  int64     // monotonic message sequence, global per Run
-	messages    []*Message // append-only log, indexed by Seq-1
-	msgMu       sync.Mutex // guards messages slice and watcher signaling
+	seqCounter  int64       // monotonic message sequence, global per Run
+	messages    []*Message  // append-only log, indexed by Seq-1
+	msgMu       sync.Mutex  // guards messages slice and watcher signaling
 	watchers    []watchSink // active long-poll sessions waiting for new messages
 
 	// fileClaims maps a path to the task that claimed it. Guarded by
@@ -428,12 +430,12 @@ type Dispatch struct {
 // Thread is a named conversation channel within a Run's radio layer.
 // Typical threads: "planning", "worklog", "results".
 type Thread struct {
-	mu        sync.RWMutex
-	ID        string
-	RunID     string
-	Name      string
+	mu           sync.RWMutex
+	ID           string
+	RunID        string
+	Name         string
 	Participants []string
-	CreatedAt time.Time
+	CreatedAt    time.Time
 }
 
 // Message is one radio message. Seq is a monotonic cursor global per Run
@@ -817,11 +819,11 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 // CreateThread opens a named conversation thread in the run's radio channel.
 func (r *Run) CreateThread(id, name string, participants []string) *Thread {
 	th := &Thread{
-		ID:          id,
-		RunID:       r.ID,
-		Name:        name,
+		ID:           id,
+		RunID:        r.ID,
+		Name:         name,
 		Participants: append([]string(nil), participants...),
-		CreatedAt:   time.Now(),
+		CreatedAt:    time.Now(),
 	}
 	r.mu.Lock()
 	r.Threads[id] = th
@@ -908,27 +910,27 @@ func (r *Run) PostMessage(threadID, sender string, mentions []string, priority P
 // by the HTTP API and the viewer. It is safe to serialize and hand to
 // callers without holding any locks.
 type Snapshot struct {
-	RunID    string         `json:"run_id"`
-	Prompt   string         `json:"prompt"`
-	State    RunState       `json:"state"`
-	Tasks    []TaskSnapshot `json:"tasks"`
+	RunID    string           `json:"run_id"`
+	Prompt   string           `json:"prompt"`
+	State    RunState         `json:"state"`
+	Tasks    []TaskSnapshot   `json:"tasks"`
 	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []*Message   `json:"messages"`
+	Messages []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Assignment string        `json:"assignment"`
-	Deps       []string      `json:"deps"`
-	State      TaskState     `json:"state"`
-	Dispatches int           `json:"dispatches"`
-	Model      string        `json:"model,omitempty"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Assignment string    `json:"assignment"`
+	Deps       []string  `json:"deps"`
+	State      TaskState `json:"state"`
+	Dispatches int       `json:"dispatches"`
+	Model      string    `json:"model,omitempty"`
 }
 
 type ThreadSnapshot struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
 	Participants []string `json:"participants"`
 }
 
@@ -956,8 +958,8 @@ func (r *Run) Snapshot() Snapshot {
 	for _, th := range r.Threads {
 		th.mu.RLock()
 		s.Threads = append(s.Threads, ThreadSnapshot{
-			ID:          th.ID,
-			Name:        th.Name,
+			ID:           th.ID,
+			Name:         th.Name,
 			Participants: append([]string(nil), th.Participants...),
 		})
 		th.mu.RUnlock()

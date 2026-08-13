@@ -178,8 +178,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 
 	if len(parts) == 2 && parts[1] == "thread" && r.Method == http.MethodPost {
 		var req struct {
-			ID          string   `json:"id"`
-			Name        string   `json:"name"`
+			ID           string   `json:"id"`
+			Name         string   `json:"name"`
 			Participants []string `json:"participants"`
 		}
 		if err := decodeBody(r, &req); err != nil {
@@ -446,10 +446,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			// act on this.
 			if arrived := run.MessagesSince(seen); len(arrived) > 0 && !req.Final {
 				writeJSON(w, http.StatusAccepted, map[string]any{
-					"task_id":       task.ID,
-					"state":         string(task.CurrentState()),
-					"new_messages":  arrived,
-					"waited_for":    pending,
+					"task_id":      task.ID,
+					"state":        string(task.CurrentState()),
+					"new_messages": arrived,
+					"waited_for":   pending,
 					"hint": "Your peers finished while this call was waiting, and these " +
 						"messages arrived after you wrote your outcome. Fold them in and " +
 						"call task-done again with the updated answer — the next call " +

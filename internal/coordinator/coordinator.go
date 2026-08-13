@@ -104,11 +104,11 @@ func New(run *broker.Run, reg *broker.AgentRegistry, l WorkerRunner, cfg Config)
 
 // Result summarizes a finished run.
 type Result struct {
-	RunID      string
-	Completed  []string
-	Failed     []string
-	Unreached  []string // still pending/blocked when the loop stopped
-	TimedOut   bool
+	RunID     string
+	Completed []string
+	Failed    []string
+	Unreached []string // still pending/blocked when the loop stopped
+	TimedOut  bool
 }
 
 // Run drives the graph until every task is terminal, nothing can make

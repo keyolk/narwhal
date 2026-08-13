@@ -7,16 +7,16 @@ import (
 func TestParseDepEdgeRequest(t *testing.T) {
 	cases := []struct {
 		content string
-		action string
-		taskID string
-		deps   []string
-		ok     bool
+		action  string
+		taskID  string
+		deps    []string
+		ok      bool
 	}{
 		{"DEP_ADD|task-3|task-1,task-2", DepAddPrefix, "task-3", []string{"task-1", "task-2"}, true},
 		{"DEP_REMOVE|task-5|task-4", DepRemovePrefix, "task-5", []string{"task-4"}, true},
 		{"DEP_ADD|solo|", DepAddPrefix, "solo", nil, true},
 		{"SPLIT_REQUEST|task-1|name|assignment|", "", "", nil, false}, // wrong prefix
-		{"DEP_ADDnopipe", "", "", nil, false},                 // no separator after prefix
+		{"DEP_ADDnopipe", "", "", nil, false},                         // no separator after prefix
 	}
 	for _, c := range cases {
 		action, taskID, deps, ok := ParseDepEdgeRequest(c.content)

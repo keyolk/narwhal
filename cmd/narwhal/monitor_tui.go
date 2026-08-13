@@ -74,22 +74,22 @@ type tuiModel struct {
 	// runs is every live run, so the user can switch without restarting
 	// the monitor. An interactive session creates a run per request, so
 	// several are live at once routinely.
-	runs    []store.LiveRun
-	runCur  int
-	picker  bool // showing the run list instead of a run
+	runs   []store.LiveRun
+	runCur int
+	picker bool // showing the run list instead of a run
 
 	snap   broker.Snapshot
 	agents []string
 	err    error
 
-	focus     focusPane
-	taskCur   int
-	radioCur  int
+	focus    focusPane
+	taskCur  int
+	radioCur int
 	// followTail keeps the radio list pinned to the newest message. Any
 	// manual navigation releases it, so reading an older message is not
 	// yanked away by the next poll.
-	followTail bool
-	detail     detailMode
+	followTail   bool
+	detail       detailMode
 	detailScroll int
 	// sessionTail keeps the session view pinned to the newest output while
 	// the worker is still writing. Scrolling up releases it, the same way
@@ -825,7 +825,6 @@ func (m tuiModel) viewPicker() string {
 	return b.String()
 }
 
-
 func (m tuiModel) viewHeader() string {
 	icon, state := runGlyph(m.snap.State)
 	line := fmt.Sprintf("%s  %s  %s %s",
@@ -883,7 +882,6 @@ func (m tuiModel) viewFooter() string {
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }
-
 
 func (m tuiModel) viewTasks(width, height int) string {
 	title := "Graph"
@@ -1422,7 +1420,6 @@ func scrollWindow(scroll, avail, total int) (int, int, string) {
 	}
 	return scroll, end, pos
 }
-
 
 func (m tuiModel) viewMessageDetail() string {
 	if len(m.snap.Messages) == 0 {

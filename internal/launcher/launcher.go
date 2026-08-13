@@ -190,7 +190,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"planning","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"dep-add": fmt.Sprintf(`#!/bin/bash
+		"dep-add": fmt.Sprintf(`#!/bin/bash
 # usage: dep-add "<taskId>" "<dep1,dep2,...>"
 # Add dependency edges to an existing task. The task itself is immutable;
 # only its dependency list changes. Use when a worker discovers a
@@ -202,7 +202,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"dep-remove": fmt.Sprintf(`#!/bin/bash
+		"dep-remove": fmt.Sprintf(`#!/bin/bash
 # usage: dep-remove "<taskId>" "<dep1,dep2,...>"
 # Remove dependency edges from an existing task. Use when a relationship
 # the planner assumed turns out not to hold.
@@ -213,7 +213,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"file-claim": fmt.Sprintf(`#!/bin/bash
+		"file-claim": fmt.Sprintf(`#!/bin/bash
 # usage: file-claim "<taskId>" "<path1,path2,...>"
 # Claim the files you are about to modify. If a peer already holds one,
 # the coordinator replies on the radio with who holds it — negotiate there
@@ -225,7 +225,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"file-release": fmt.Sprintf(`#!/bin/bash
+		"file-release": fmt.Sprintf(`#!/bin/bash
 # usage: file-release "<taskId>" "<path1,path2,...>"
 # Give up files you are done with so a peer can take them. Claims are
 # released automatically when you exit, but releasing early unblocks peers.
@@ -236,7 +236,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"escalate": fmt.Sprintf(`#!/bin/bash
+		"escalate": fmt.Sprintf(`#!/bin/bash
 # usage: escalate "<taskId>" "<model|empty>" "<reason>"
 # Ask the coordinator to retry this task on a stronger model. Use when the
 # area turns out to need more than the tier you were given — a thin answer

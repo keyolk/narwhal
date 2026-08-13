@@ -172,7 +172,15 @@ func (m tuiModel) poll() tea.Cmd {
 // session starts one per request — so a naive replace would move the
 // selection out from under them.
 func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
-	watching := m.live.RunID
+	// What the cursor should follow depends on the mode. Inside a run the
+	// cursor tracks the run being watched. In the picker the user is moving
+	// the cursor themselves and has not opened anything yet, so following
+	// m.live would drag the highlight back to the watched run on every
+	// poll — the cursor would refuse to stay where it was put.
+	anchor := m.live.RunID
+	if m.picker && m.runCur >= 0 && m.runCur < len(m.runs) {
+		anchor = m.runs[m.runCur].RunID
+	}
 
 	// Order the list here rather than trusting the source. The daemon holds
 	// its runs in a map, and Go randomizes map iteration, so an unsorted
@@ -189,12 +197,12 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	m.runs = sorted
 
 	for i, r := range m.runs {
-		if r.RunID == watching {
+		if r.RunID == anchor {
 			m.runCur = i
 			return
 		}
 	}
-	// The watched run ended. Stay put rather than jumping elsewhere: its
+	// The anchored run ended. Stay put rather than jumping elsewhere: its
 	// final state is still worth reading, and the broker keeps answering
 	// until the daemon drops it.
 	if m.runCur >= len(m.runs) {

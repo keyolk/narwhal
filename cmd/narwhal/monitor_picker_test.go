@@ -130,3 +130,65 @@ func TestPickerRowsDoNotLeakStyleAcrossLines(t *testing.T) {
 func stripTrailingSpace(s string) string {
 	return strings.TrimRight(s, " ")
 }
+
+func TestPickerCursorSurvivesPolls(t *testing.T) {
+	// Regression: mergeRuns re-anchored the cursor on m.live — the run being
+	// watched — which the picker has not changed. Moving down and waiting a
+	// second snapped the highlight back to the top.
+	runs := []store.LiveRun{
+		{RunID: "r1", BrokerURL: "u", Prompt: "one", StartedAt: 300},
+		{RunID: "r2", BrokerURL: "u", Prompt: "two", StartedAt: 200},
+		{RunID: "r3", BrokerURL: "u", Prompt: "three", StartedAt: 100},
+	}
+	m := newTUIModel(runs, 0, time.Second, true)
+	m.width, m.height = 100, 24
+
+	m = press(m, "j", "j") // move to r3
+	if m.runs[m.runCur].RunID != "r3" {
+		t.Fatalf("cursor = %q before the poll, want r3", m.runs[m.runCur].RunID)
+	}
+
+	for i := 0; i < 3; i++ {
+		m.mergeRuns(runs)
+		if got := m.runs[m.runCur].RunID; got != "r3" {
+			t.Fatalf("poll %d moved the cursor to %q, want it to stay on r3", i+1, got)
+		}
+	}
+}
+
+func TestPickerCursorFollowsItsRunWhenTheListShifts(t *testing.T) {
+	// A newer run appearing pushes every row down; the highlight should ride
+	// along with the run it was on, not stay at the same index.
+	runs := []store.LiveRun{
+		{RunID: "r1", BrokerURL: "u", StartedAt: 300},
+		{RunID: "r2", BrokerURL: "u", StartedAt: 200},
+	}
+	m := newTUIModel(runs, 0, time.Second, true)
+	m = press(m, "j") // on r2
+
+	m.mergeRuns(append([]store.LiveRun{
+		{RunID: "r0", BrokerURL: "u", StartedAt: 900},
+	}, runs...))
+
+	if got := m.runs[m.runCur].RunID; got != "r2" {
+		t.Fatalf("cursor = %q after a new run appeared, want r2", got)
+	}
+}
+
+func TestWatchedRunStillAnchorsTheCursorOutsideThePicker(t *testing.T) {
+	// Inside a run the cursor tracks what is being watched, so [ and ] and
+	// the header position stay consistent as runs come and go.
+	runs := []store.LiveRun{
+		{RunID: "r1", BrokerURL: "u", StartedAt: 300},
+		{RunID: "r2", BrokerURL: "u", StartedAt: 200},
+	}
+	m := newTUIModel(runs, 1, time.Second, false) // watching r2, not in the picker
+
+	m.mergeRuns(append([]store.LiveRun{
+		{RunID: "r0", BrokerURL: "u", StartedAt: 900},
+	}, runs...))
+
+	if got := m.runs[m.runCur].RunID; got != "r2" {
+		t.Fatalf("cursor = %q, want the watched run r2", got)
+	}
+}

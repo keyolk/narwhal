@@ -93,6 +93,17 @@ func (d *Dispatcher) tick() {
 		if run == nil || l == nil {
 			continue
 		}
+		// A canceled run is done being driven. Cancel kills the workers and
+		// sets the state, but nothing used to read it back, so the next
+		// tick cheerfully launched them again — a run cancelled before its
+		// first task started would start it anyway. Reap and persist still
+		// run: the processes that were killed need recording, and the
+		// final state is worth keeping.
+		if run.CurrentState() == broker.RunCanceled {
+			d.reap(runID, run, l.ActiveWorkers())
+			d.persistRun(runID, run)
+			continue
+		}
 		// Read the radio before touching the graph. Workers are given six
 		// wrapper scripts that mutate the run — split, dep-add, dep-remove,
 		// file-claim, file-release, escalate — and every one of them was
@@ -168,6 +179,15 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 		case broker.TaskCompleted, broker.TaskFailed:
 			// Worker declared its own outcome; nothing to record.
 		default:
+			// On a canceled run the worker did not exit — it was killed,
+			// by us. Recording that as a failed dispatch would blame the
+			// task for the user's decision and, before the tick learned to
+			// skip canceled runs, would have driven a retry.
+			if run.CurrentState() == broker.RunCanceled {
+				log.Printf("[dispatch] %s/%s killed by cancel", runID, task.ID)
+				task.CancelDispatch("run canceled")
+				continue
+			}
 			// A worker that posted findings did its job even if it never
 			// called task-done — retrying it would redo work already on
 			// the radio, and on the third retry the breaker would fail a

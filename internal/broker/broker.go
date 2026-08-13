@@ -635,6 +635,17 @@ func (r *Run) SetState(s RunState) {
 	r.mu.Unlock()
 }
 
+// CurrentState reads the run's lifecycle state under the lock.
+//
+// SetState takes the lock, so reading the field directly is a data race —
+// and the dispatch loop reads it on every tick while an HTTP handler can be
+// setting it.
+func (r *Run) CurrentState() RunState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.State
+}
+
 // SnapshotTasks returns a stable view of every task's id and state, for
 // callers that need to classify the graph without holding locks.
 func (r *Run) SnapshotTasks() []TaskSnapshot {
@@ -814,6 +825,28 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 	}
 	t.State = TaskReady
 	t.mu.Unlock()
+}
+
+// CancelDispatch marks a task's in-flight dispatch as failed and puts the
+// task in a terminal state.
+//
+// This is not FailDispatch: that one is the circuit breaker's path and
+// returns the task to ready so it can be retried. A task whose worker was
+// killed because the user cancelled the run must not be retried — becoming
+// ready again is exactly how a cancelled run kept relaunching.
+func (t *Task) CancelDispatch(reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.Dispatches) > 0 {
+		d := t.Dispatches[len(t.Dispatches)-1]
+		if d.Status == DispatchRunning {
+			d.Status = DispatchFailed
+			d.Output = reason
+		}
+	}
+	if t.State != TaskCompleted {
+		t.State = TaskFailed
+	}
 }
 
 // CreateThread opens a named conversation thread in the run's radio channel.

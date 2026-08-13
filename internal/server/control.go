@@ -315,6 +315,19 @@ func (s *Server) handleControlCancel(w http.ResponseWriter, r *http.Request) {
 	killed := l.KillAll()
 	if run := s.broker.GetRun(req.RunID); run != nil {
 		run.SetState(broker.RunCanceled)
+		// Retire whatever had not finished. Killing the workers stops the
+		// processes, but a task left in ready or pending is a task the
+		// dispatcher would pick up again the moment anything changed, and
+		// one left dispatched describes a worker that no longer exists.
+		for _, snap := range run.SnapshotTasks() {
+			switch snap.State {
+			case broker.TaskCompleted, broker.TaskFailed:
+			default:
+				if task := run.GetTask(snap.ID); task != nil {
+					task.CancelDispatch("run canceled")
+				}
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"run_id": req.RunID,

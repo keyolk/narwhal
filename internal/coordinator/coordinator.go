@@ -104,11 +104,11 @@ func New(run *broker.Run, reg *broker.AgentRegistry, l WorkerRunner, cfg Config)
 
 // Result summarizes a finished run.
 type Result struct {
-	RunID      string
-	Completed  []string
-	Failed     []string
-	Unreached  []string // still pending/blocked when the loop stopped
-	TimedOut   bool
+	RunID     string
+	Completed []string
+	Failed    []string
+	Unreached []string // still pending/blocked when the loop stopped
+	TimedOut  bool
 }
 
 // Run drives the graph until every task is terminal, nothing can make
@@ -180,7 +180,10 @@ func (c *Coordinator) dispatchReady() int {
 		return 0
 	}
 
-	ready := c.run.ReadyTasks()
+	// Dispatchable, not just ready: a synthesis task is launched ahead of
+	// its dependencies so it can listen while its peers work. Its deps
+	// still hold — the broker refuses its task-done until they finish.
+	ready := c.run.DispatchableTasks()
 	dispatched := 0
 	for _, task := range ready {
 		if dispatched >= slots {
@@ -220,7 +223,7 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 	// intelligence even when the investigation workers do not. Apply the
 	// config-level synthesis model unless the planner already set a
 	// per-task model (per-task wins; it is more specific).
-	if cfg.Model == "" && c.cfg.SynthesisModel != "" && isSynthesisTask(task) {
+	if cfg.Model == "" && c.cfg.SynthesisModel != "" && task.IsSynthesis() {
 		cfg.Model = c.cfg.SynthesisModel
 	}
 
@@ -290,7 +293,7 @@ func (c *Coordinator) reapFinishedWorkers() {
 		// radio — a worker that did its job but forgot the task-done call
 		// should not be retried and waste another 10 minutes. The synthesis
 		// task can still drain whatever the worker posted.
-		if c.workerPostedToRadio(et.agentID) {
+		if c.run.AgentPostedToRadio(et.agentID) {
 			log.Printf("[coordinator] %s exited without task-done but posted to radio; marking complete", et.taskID)
 			task.CompleteDispatch("completed via radio activity", c.run)
 			c.mu.Lock()
@@ -308,17 +311,6 @@ func (c *Coordinator) reapFinishedWorkers() {
 	}
 }
 
-// isSynthesisTask returns true if the task is the synthesis step — the
-// one that drains peer findings and writes the final answer. The planner
-// names it with "synthesis" in the name or assignment by convention.
-func isSynthesisTask(task *broker.Task) bool {
-	name := strings.ToLower(task.Name)
-	if strings.Contains(name, "synthesis") {
-		return true
-	}
-	return strings.Contains(strings.ToLower(task.Assignment), "synthesis task")
-}
-
 // releaseTaskFiles gives up every path a task still holds. Called when a
 // worker exits, so a forgotten FILE_RELEASE cannot strand a path for the
 // rest of the run.
@@ -334,20 +326,6 @@ func (c *Coordinator) releaseTaskFiles(taskID string) {
 	}
 	c.run.ReleaseFiles(taskID, held)
 	log.Printf("[coordinator] released %d file(s) held by exited %s", len(held), taskID)
-}
-
-// workerPostedToRadio returns true if the agent sent any message to the run's
-// radio channel. A worker that posted findings but forgot to call task-done
-// still produced usable output — the synthesis task can drain it — so the
-// coordinator marks the task complete rather than retrying and wasting
-// another full worker run.
-func (c *Coordinator) workerPostedToRadio(agentID string) bool {
-	for _, m := range c.run.MessagesSince(0) {
-		if m.Sender == agentID {
-			return true
-		}
-	}
-	return false
 }
 
 // intakeSplitRequests scans the planning thread for split-request messages

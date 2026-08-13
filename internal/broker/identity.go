@@ -22,9 +22,9 @@ type AgentRegistry struct {
 
 // Agent is one participant in a Run's radio channel.
 type Agent struct {
-	ID        string // logical name, e.g. "worker-1", "main"
-	Token     string // opaque endpoint secret
-	RunID     string
+	ID            string // logical name, e.g. "worker-1", "main"
+	Token         string // opaque endpoint secret
+	RunID         string
 	IsCoordinator bool
 }
 
@@ -39,9 +39,9 @@ func NewAgentRegistry() *AgentRegistry {
 func (ar *AgentRegistry) Register(agentID, runID string, isCoordinator bool) *Agent {
 	token := generateToken()
 	a := &Agent{
-		ID:           agentID,
-		Token:        token,
-		RunID:        runID,
+		ID:            agentID,
+		Token:         token,
+		RunID:         runID,
 		IsCoordinator: isCoordinator,
 	}
 	ar.mu.Lock()

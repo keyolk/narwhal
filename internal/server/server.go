@@ -178,8 +178,8 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 
 	if len(parts) == 2 && parts[1] == "thread" && r.Method == http.MethodPost {
 		var req struct {
-			ID          string   `json:"id"`
-			Name        string   `json:"name"`
+			ID           string   `json:"id"`
+			Name         string   `json:"name"`
 			Participants []string `json:"participants"`
 		}
 		if err := decodeBody(r, &req); err != nil {
@@ -383,9 +383,82 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			return
 		}
 		var req struct {
-			Outcome string `json:"outcome"`
+			Outcome   string `json:"outcome"`
+			TimeoutMs int    `json:"timeout_ms"`
+			// Final says the worker has already folded in what arrived
+			// during the wait. Without it a second call would be handed
+			// the same messages again and the task would never complete.
+			Final bool `json:"final"`
 		}
 		_ = decodeBody(r, &req)
+
+		// Gate completion, not dispatch. A task with deps is launched
+		// immediately — synthesis drains the radio as peers post, which is
+		// why it does not queue behind them — but declaring itself done
+		// while a peer is still writing means the final answer was
+		// assembled from a partial picture. Observed on real runs: the
+		// synthesis worker stopped four messages before its peer posted
+		// its final summary, and nothing noticed.
+		//
+		// The call BLOCKS rather than refusing outright. A refusal was the
+		// first design and it failed in a way worth recording: the worker
+		// read it, said "I will keep the watcher up and wait", and then
+		// its turn ended. `claude --print` exits when the model stops
+		// producing output, so intending to wait is not waiting — the
+		// process died, the coordinator recorded a dispatch with no
+		// task-done, and the circuit breaker failed the task on the third
+		// try. Holding the HTTP request open keeps the worker's turn alive,
+		// which is the only thing that actually makes it wait.
+		if pending := run.PendingDeps(taskID); len(pending) > 0 {
+			// Everything the worker has already seen. Messages that land
+			// during the wait are the ones it could not have folded in.
+			seen := lastSeq(run.MessagesSince(0))
+
+			run.PostMessage(broker.WorklogThread, "coordinator",
+				[]string{task.ID}, broker.PriorityNormal,
+				fmt.Sprintf("WAITING|%s|task-done is holding until %s finish.",
+					task.ID, strings.Join(pending, ", ")))
+
+			if remaining := s.awaitDeps(r, run, taskID, waitTimeout(req.TimeoutMs)); len(remaining) > 0 {
+				// Timed out with peers still running. Answer rather than
+				// hanging forever: a stuck peer must not take the
+				// synthesis worker down with it, and the worker can call
+				// again.
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":        "dependencies still running",
+					"task_id":      task.ID,
+					"pending_deps": remaining,
+					"hint": "Peers are still working. Call task-done again — it " +
+						"blocks until they finish.",
+				})
+				return
+			}
+
+			// The wait is over, but the outcome the worker submitted was
+			// written before it. Waiting fixed the ordering and left the
+			// content stale: on the run that exposed this, task-done held
+			// 100 seconds, the peer posted its finding during the hold,
+			// and the recorded outcome still read "nothing to synthesize".
+			//
+			// So do not complete yet. Hand back what arrived during the
+			// wait and ask for one more call. The worker is alive and in
+			// the middle of a tool call, which is the only moment it can
+			// act on this.
+			if arrived := run.MessagesSince(seen); len(arrived) > 0 && !req.Final {
+				writeJSON(w, http.StatusAccepted, map[string]any{
+					"task_id":      task.ID,
+					"state":        string(task.CurrentState()),
+					"new_messages": arrived,
+					"waited_for":   pending,
+					"hint": "Your peers finished while this call was waiting, and these " +
+						"messages arrived after you wrote your outcome. Fold them in and " +
+						"call task-done again with the updated answer — the next call " +
+						"completes the task.",
+				})
+				return
+			}
+		}
+
 		task.CompleteDispatch(req.Outcome, run)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"task_id": task.ID,
@@ -393,6 +466,43 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		})
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+// waitTimeout bounds how long task-done holds the request open. The
+// default is generous because the thing being waited on is another agent
+// investigating a codebase, which takes minutes, not seconds.
+func waitTimeout(ms int) time.Duration {
+	if ms <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// awaitDeps blocks until every dependency of taskID has finished, the
+// timeout elapses, or the client goes away. Returns whatever is still
+// outstanding — empty means the wait succeeded.
+//
+// Polling rather than a wake channel: a task reaching a terminal state is
+// not a radio event, and the two existing signals (message posted, watch
+// registered) do not fire for it. A second granularity is far finer than
+// the minutes these waits actually last.
+func (s *Server) awaitDeps(r *http.Request, run *broker.Run, taskID string, timeout time.Duration) []string {
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := run.PendingDeps(taskID)
+		if len(pending) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return pending
+		}
+		select {
+		case <-r.Context().Done():
+			// The worker hung up; nothing to answer.
+			return pending
+		case <-time.After(time.Second):
+		}
 	}
 }
 

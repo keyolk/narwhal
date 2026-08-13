@@ -15,6 +15,8 @@
 package launcher
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,6 +47,10 @@ type Launcher struct {
 
 	mu      sync.Mutex
 	workers map[string]*exec.Cmd
+	// sessions maps agent id → the Claude session UUID its worker runs
+	// under, so a caller in this process can resume one without reading
+	// the agent directory back.
+	sessions map[string]string
 }
 
 // New creates a Launcher for the given run.
@@ -131,11 +137,46 @@ curl -s %s/state
 		"task-done": fmt.Sprintf(`#!/bin/bash
 # usage: task-done <taskId> <outcome>
 # Mark a task as completed with the given outcome text.
+#
+# If the task has dependencies that are still running, this call BLOCKS
+# until they finish — that is the mechanism that keeps a synthesis task
+# from writing its answer early. Blocking here rather than returning and
+# asking the worker to retry is deliberate: a --print worker's process
+# exits when its turn ends, so a worker that is told to "wait and try
+# again" simply dies. Holding this request open holds the turn open.
+#
+# When peers post during the wait, the server answers 202 with those
+# messages instead of completing: the outcome was written before they
+# arrived, so completing on it would record a synthesis that had not seen
+# them. The 202 is surfaced to the worker, which is expected to fold them
+# in and call again.
+#
+# No --max-time: the wait is bounded by the server, and a client-side
+# timeout would defeat the whole point.
 set -euo pipefail
-TASK="$1"; OUTCOME="$2"
-curl -s -X POST %s/task/$TASK/done \
-  -H "Content-Type: application/json" \
-  -d "$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")"
+TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final"}))' "$OUTCOME" "$FINAL")
+OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
+  -H "Content-Type: application/json" -d "$BODY")
+CODE="${OUT##*$'\n'}"
+echo "${OUT%%$'\n'*}"
+if [ "$CODE" = "202" ]; then
+  echo "" >&2
+  echo "NOT COMPLETE YET. Your peers finished while this call waited, and the" >&2
+  echo "messages above arrived after you wrote your outcome. Fold them into" >&2
+  echo "your answer and run:" >&2
+  echo "  bash $0 $TASK \"<updated answer>\" final" >&2
+  exit 4
+fi
+if [ "$CODE" = "409" ]; then
+  echo "task-done timed out waiting for peers listed in pending_deps." >&2
+  echo "Call task-done again — it blocks until they finish." >&2
+  exit 3
+fi
+if [ "$CODE" != "200" ]; then
+  echo "task-done failed with HTTP $CODE" >&2
+  exit 1
+fi
 `, base),
 		"split": fmt.Sprintf(`#!/bin/bash
 # usage: split "<taskId>" "<name>" "<assignment>" [depsCSV]
@@ -149,7 +190,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"planning","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"dep-add": fmt.Sprintf(`#!/bin/bash
+		"dep-add": fmt.Sprintf(`#!/bin/bash
 # usage: dep-add "<taskId>" "<dep1,dep2,...>"
 # Add dependency edges to an existing task. The task itself is immutable;
 # only its dependency list changes. Use when a worker discovers a
@@ -161,7 +202,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"dep-remove": fmt.Sprintf(`#!/bin/bash
+		"dep-remove": fmt.Sprintf(`#!/bin/bash
 # usage: dep-remove "<taskId>" "<dep1,dep2,...>"
 # Remove dependency edges from an existing task. Use when a relationship
 # the planner assumed turns out not to hold.
@@ -172,7 +213,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"file-claim": fmt.Sprintf(`#!/bin/bash
+		"file-claim": fmt.Sprintf(`#!/bin/bash
 # usage: file-claim "<taskId>" "<path1,path2,...>"
 # Claim the files you are about to modify. If a peer already holds one,
 # the coordinator replies on the radio with who holds it — negotiate there
@@ -184,7 +225,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"file-release": fmt.Sprintf(`#!/bin/bash
+		"file-release": fmt.Sprintf(`#!/bin/bash
 # usage: file-release "<taskId>" "<path1,path2,...>"
 # Give up files you are done with so a peer can take them. Claims are
 # released automatically when you exit, but releasing early unblocks peers.
@@ -195,7 +236,7 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
-	"escalate": fmt.Sprintf(`#!/bin/bash
+		"escalate": fmt.Sprintf(`#!/bin/bash
 # usage: escalate "<taskId>" "<model|empty>" "<reason>"
 # Ask the coordinator to retry this task on a stronger model. Use when the
 # area turns out to need more than the tier you were given — a thin answer
@@ -305,6 +346,15 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "  bash %s/task-done %s \"summary of your findings\"\n\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "You MUST call task-done, otherwise the coordinator records a failed\n")
 	fmt.Fprintf(&b, "dispatch and retries your task.\n\n")
+	fmt.Fprintf(&b, "If your task depends on peers, task-done BLOCKS until they finish.\n")
+	fmt.Fprintf(&b, "That is the intended behaviour, not a hang — call it when you have\n")
+	fmt.Fprintf(&b, "written what you can and let it hold. Do NOT decide to \"wait and call\n")
+	fmt.Fprintf(&b, "it later\": your process ends when your turn does, so a plan to wait\n")
+	fmt.Fprintf(&b, "is not waiting. Blocking inside task-done is what keeps you alive.\n\n")
+	fmt.Fprintf(&b, "If peers posted while you were held, task-done exits 4 and prints what\n")
+	fmt.Fprintf(&b, "arrived. Your task is NOT complete. Those messages landed after you\n")
+	fmt.Fprintf(&b, "wrote your answer, so fold them in and call it once more:\n\n")
+	fmt.Fprintf(&b, "  bash %s/task-done %s \"<updated answer>\" final\n\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")
@@ -326,6 +376,46 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "already held, do not write it — say what you need on the radio and\n")
 	fmt.Fprintf(&b, "let the holder either hand it over or make the change for you.\n")
 	return b.String()
+}
+
+// newSessionUUID mints the UUID a worker's Claude session will be recorded
+// under. Claude Code accepts --session-id, so choosing it here rather than
+// letting Claude pick means the monitor can hand the user an exact
+// `claude --resume <id>` instead of guessing which transcript in
+// ~/.claude/projects belongs to which worker.
+//
+// Format is UUIDv4 as Claude requires; the version and variant bits are set
+// explicitly because a plain random hex string is rejected.
+func newSessionUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+}
+
+// recordSession writes the worker's Claude session id next to its other
+// artifacts. The monitor is a separate process — it polls the broker over
+// HTTP and never shares memory with the launcher — so the id has to reach
+// it through the filesystem or not at all.
+func (l *Launcher) recordSession(agentID, sessionID string) {
+	path := filepath.Join(l.sessionDir, "agents", agentID, "claude-session-id")
+	if err := os.WriteFile(path, []byte(sessionID+"\n"), 0o600); err != nil {
+		// Not worth failing a launch over: the worker runs fine, the
+		// monitor just cannot offer to resume it.
+		fmt.Fprintf(os.Stderr, "[launcher] warning: record session id for %s: %v\n", agentID, err)
+	}
+}
+
+// SessionID returns the Claude session UUID a worker was launched with,
+// or "" if it has not been launched or the id could not be minted.
+func (l *Launcher) SessionID(agentID string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessions[agentID]
 }
 
 // Launch starts a worker as a `ccproxy claude --print` process.
@@ -352,6 +442,26 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	args := []string{"claude", "--print",
 		"--permission-mode", "bypassPermissions",
 		"--append-system-prompt", string(instructions),
+	}
+	// Pin the session id so the worker's transcript can be found later.
+	// A --print worker writes nothing to stdout until it finishes, so the
+	// captured log is empty for the whole run and there is nothing to
+	// attach to; the transcript under ~/.claude/projects is the live
+	// record. Claude picks a random UUID unless told otherwise, which
+	// would leave the monitor guessing which of several transcripts in a
+	// shared cwd belongs to which worker.
+	//
+	// A failure here is not fatal: the worker still runs, it just cannot
+	// be resumed by id.
+	if sid, err := newSessionUUID(); err == nil {
+		args = append(args, "--session-id", sid)
+		l.mu.Lock()
+		if l.sessions == nil {
+			l.sessions = map[string]string{}
+		}
+		l.sessions[cfg.AgentID] = sid
+		l.mu.Unlock()
+		l.recordSession(cfg.AgentID, sid)
 	}
 	// Per-worker model override, then the launcher default, then ccproxy's
 	// own account rotation. The planner picks the model; workers default to

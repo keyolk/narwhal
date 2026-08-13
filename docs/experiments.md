@@ -262,6 +262,8 @@ Five issues found during E7/E8 were fixed:
    the planner assign a model per task, not per run.
 4. **Synthesis parallelization** — synthesis task has no deps, starts
    alongside investigation, drains radio as peers post. Depth-1 DAG.
+   *(Superseded — see E9. Running early was right; dropping the deps to
+   achieve it was not.)*
 
 ## Implications for the design
 
@@ -273,9 +275,106 @@ Five issues found during E7/E8 were fixed:
 4. The "exactly one watcher" invariant from AgentRadio carries over: the
    worker must restart its watcher as soon as one resolves.
 5. Synthesis should run in parallel with investigation, not after it — a
-   depth-2 DAG costs roughly 2× wall-clock of a single agent.
+   depth-2 DAG costs roughly 2× wall-clock of a single agent. Running it
+   early must not mean dropping its dependencies; see E9.
 6. Model assignment is per-task, not per-run: synthesis needs frontier
    intelligence even when investigation does not.
+
+## E9 — "Wait for your peers" as an instruction: REFUTED
+
+**Question.** E8 removed the synthesis task's dependencies so it could run
+alongside the investigators, and moved the ordering requirement into its
+assignment: *wait until every investigation task has called task-done
+before writing the final answer.* Does a worker follow that?
+
+**Method.** Read the radio log of every planner run executed after the
+change, comparing the sequence number of the synthesis worker's last
+message against its peers' last messages. If synthesis was still listening
+when its peers finished, its last message is the later one.
+
+**Result: refuted.** All three runs have it backwards.
+
+| Run | synthesis last | peers last | |
+|---|---|---|---|
+| plan-1786554611131 | seq 10 | seq 14 | finished first |
+| plan-1786553326689 | seq 8 | seq 9 | finished first |
+| plan-1786551892357 | seq 8 | seq 9 | finished first |
+
+The first is the clearest. The synthesis worker stopped at seq 10;
+`worker-task-1` then posted seq 11, 12, 13 and — at seq 14 — its **final
+summary**. Whatever synthesis wrote could not have contained it.
+
+A second failure mode appears in the same log. At seq 6 the synthesis
+worker announced it had run its own runtime verification "to fill the gap
+left by task-4's one-line report". Rather than waiting for a peer, it
+re-did the peer's work: a frontier model spent on duplicate investigation,
+which is the opposite of the economics the arrangement exists to capture.
+
+**Why the instruction could not be followed.** A worker has no way to
+observe that a peer has finished. `drain` returns messages, not task
+states; nothing in the worker's toolkit answers "is task-2 done?". So
+"wait until every task has called task-done" is not an instruction a worker
+can execute — it can only guess when it has heard enough, and three out of
+three times it guessed early.
+
+**Resolution.** Deps are restored on the synthesis task, but they gate
+*completion* rather than *dispatch*:
+
+- The coordinator dispatches a pending synthesis task without waiting for
+  its deps, so it is alive and listening while its peers work (E8's real
+  finding, which stands).
+- `task-done` blocks until every dep has finished, announcing the wait on
+  the radio so a held worker is not mistaken for a hung one.
+
+A failed dep counts as finished — waiting on a peer that will never post
+would strand the run.
+
+**The first fix did not work, for an instructive reason.** `task-done`
+initially *refused* — `409` with `pending_deps`, plus an urgent radio
+message telling the worker to keep draining and call again. An end-to-end
+run shows the worker receiving it and answering correctly:
+
+> `fact-a`가 끝날 때까지 워처를 유지하고 대기합니다. 워처가 메시지를 받으면
+> 재시작한 뒤 `task-done`을 다시 호출하겠습니다.
+
+Then its process exited. `claude --print` ends when the model's turn ends,
+so a worker that announces it will wait has, by announcing it, finished
+speaking and died. The coordinator recorded a dispatch with no `task-done`,
+retried, and the circuit breaker failed the task on the third attempt —
+taking the peer down with it when the run went terminal.
+
+The generalization: **you cannot make a `--print` worker wait by telling it
+to.** Anything a worker must do *later* has to be attached to a call it is
+making *now*. Blocking inside `task-done` holds the turn open, which is the
+only thing that holds the process open.
+
+**And waiting alone was not enough.** With the blocking gate in place, a
+verification run behaved correctly and the synthesis worker still reported
+the remaining hole itself:
+
+> **task-done**: 100초 블로킹 후 반환. […] 다만 한 가지 짚을 점: 제가
+> task-done에 넘긴 outcome 문자열은 **블로킹 시작 시점의 상태**로 고정돼
+> 있습니다. 게이트가 저를 살려둔 덕에 fact A를 받긴 했지만, 그 내용은 이미
+> 제출된 outcome에 반영되지 못했습니다.
+
+The ordering was fixed and the content was still stale: the outcome is an
+argument, evaluated before the call blocks. So the gate no longer completes
+the task when messages arrive during the wait. It answers `202` with those
+messages and asks for one more call — which the worker can act on, because
+it is alive and mid-tool-call, the only moment it can. A `final` flag on
+the second call completes it, so the same messages are not handed back
+forever.
+
+Three iterations, each exposed only by running it: instruction → refusal →
+blocking → blocking with a fold-in round. The pattern across all of them is
+that a guarantee must be attached to something the runtime does, not to
+something the worker is asked to remember.
+
+**Method note.** The regression was invisible to the benchmark. E8 measured
+rubric coverage, and a synthesis written from 3 of 4 peers can still score
+well when the missing peer's findings overlap the others'. Ordering was
+never asserted. A benchmark that improves on the metric it measures can
+still hide a correctness change underneath it.
 
 ## Reproducing
 

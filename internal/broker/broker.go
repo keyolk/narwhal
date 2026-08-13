@@ -23,6 +23,7 @@
 package broker
 
 import (
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -43,8 +44,8 @@ const (
 type TaskState string
 
 const (
-	TaskPending   TaskState = "pending"
-	TaskReady     TaskState = "ready"
+	TaskPending    TaskState = "pending"
+	TaskReady      TaskState = "ready"
 	TaskDispatched TaskState = "dispatched"
 	TaskCompleted  TaskState = "completed"
 	TaskFailed     TaskState = "failed"
@@ -92,7 +93,8 @@ const SplitRequestPrefix = "SPLIT_REQUEST"
 // mid-run and adjust the graph without a planner round.
 //
 // Format: "DEP_ADD|<taskId>|<dep1,dep2,...>"
-//        "DEP_REMOVE|<taskId>|<dep1,dep2,...>"
+//
+//	"DEP_REMOVE|<taskId>|<dep1,dep2,...>"
 const (
 	DepAddPrefix    = "DEP_ADD"
 	DepRemovePrefix = "DEP_REMOVE"
@@ -110,7 +112,8 @@ const (
 // with a file gives it up so a peer can take it.
 //
 // Format: "FILE_CLAIM|<taskId>|<path1,path2,...>"
-//        "FILE_RELEASE|<taskId>|<path1,path2,...>"
+//
+//	"FILE_RELEASE|<taskId>|<path1,path2,...>"
 const (
 	FileClaimPrefix   = "FILE_CLAIM"
 	FileReleasePrefix = "FILE_RELEASE"
@@ -254,12 +257,12 @@ type Run struct {
 	CWD         string
 	State       RunState
 	CreatedAt   time.Time
-	Coordinator string    // agent id currently bound as coordinator
+	Coordinator string // agent id currently bound as coordinator
 	Tasks       map[string]*Task
 	Threads     map[string]*Thread
-	seqCounter  int64     // monotonic message sequence, global per Run
-	messages    []*Message // append-only log, indexed by Seq-1
-	msgMu       sync.Mutex // guards messages slice and watcher signaling
+	seqCounter  int64       // monotonic message sequence, global per Run
+	messages    []*Message  // append-only log, indexed by Seq-1
+	msgMu       sync.Mutex  // guards messages slice and watcher signaling
 	watchers    []watchSink // active long-poll sessions waiting for new messages
 
 	// fileClaims maps a path to the task that claimed it. Guarded by
@@ -427,12 +430,12 @@ type Dispatch struct {
 // Thread is a named conversation channel within a Run's radio layer.
 // Typical threads: "planning", "worklog", "results".
 type Thread struct {
-	mu        sync.RWMutex
-	ID        string
-	RunID     string
-	Name      string
+	mu           sync.RWMutex
+	ID           string
+	RunID        string
+	Name         string
 	Participants []string
-	CreatedAt time.Time
+	CreatedAt    time.Time
 }
 
 // Message is one radio message. Seq is a monotonic cursor global per Run
@@ -506,6 +509,115 @@ func (r *Run) AddTask(id, name, assignment string, deps []string) *Task {
 	}
 	r.mu.Unlock()
 	return t
+}
+
+// PendingDeps returns the ids of a task's dependencies that have not
+// completed yet, in a stable order.
+//
+// This exists to gate completion rather than dispatch. The synthesis task
+// is launched immediately — it spends its life draining the radio as peers
+// post, which is the whole reason it does not wait its turn — but it must
+// not declare itself done while a peer is still working. Blocking dispatch
+// on deps would serialize it; blocking completion keeps the parallelism
+// and still guarantees the final answer saw every finding.
+func (r *Run) PendingDeps(taskID string) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t := r.Tasks[taskID]
+	if t == nil {
+		return nil
+	}
+	t.mu.RLock()
+	deps := append([]string(nil), t.Deps...)
+	t.mu.RUnlock()
+
+	var pending []string
+	for _, d := range deps {
+		dep := r.Tasks[d]
+		if dep == nil {
+			// A dep naming a task that does not exist cannot block: the
+			// graph layer already draws these as unreachable rather than
+			// silently dropping them, and waiting forever on a typo is
+			// worse than proceeding.
+			continue
+		}
+		dep.mu.RLock()
+		state := dep.State
+		dep.mu.RUnlock()
+		if state != TaskCompleted && state != TaskFailed {
+			pending = append(pending, d)
+		}
+	}
+	sort.Strings(pending)
+	return pending
+}
+
+// DispatchableTasks returns every task a dispatcher may launch now: the
+// ready ones, plus synthesis tasks still pending on their deps.
+//
+// A synthesis worker's job is to be listening while its peers work — it
+// keeps a watcher on the radio and folds findings in as they land — which
+// only works if it is alive at the same time as them. Its deps are still
+// real: task-done is refused until they finish (see PendingDeps). So the
+// dependency is a completion gate, not a dispatch gate.
+//
+// This lives on the Run because there are two dispatchers — the batch
+// coordinator and the daemon — and a rule that only one of them knows is a
+// rule that silently does not apply to interactive runs.
+func (r *Run) DispatchableTasks() []*Task {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*Task
+	for _, t := range r.Tasks {
+		t.mu.RLock()
+		state := t.State
+		isSynth := isSynthesisName(t.Name, t.Assignment)
+		t.mu.RUnlock()
+		if state == TaskReady || (state == TaskPending && isSynth) {
+			out = append(out, t)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+// IsSynthesis reports whether this task is the synthesis step.
+func (t *Task) IsSynthesis() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return isSynthesisName(t.Name, t.Assignment)
+}
+
+// isSynthesisName reports whether a task is the synthesis step — the one
+// that drains peer findings and writes the final answer. The planner marks
+// it by convention rather than with a flag, since the task is created
+// through the same API as any other.
+func isSynthesisName(name, assignment string) bool {
+	if strings.Contains(strings.ToLower(name), "synthesis") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(assignment), "synthesis task")
+}
+
+// AgentPostedToRadio reports whether an agent sent any message to the
+// run's radio channel.
+//
+// A worker that posted findings but exited without calling task-done still
+// produced usable output — peers and the synthesis task can drain it — so
+// the dispatcher marks the task complete rather than retrying and spending
+// another full worker run on work already done.
+//
+// This lives on the Run because both dispatchers need it. The check
+// existed on the batch coordinator only, and the interactive path failed
+// tasks whose workers had posted their findings — the same
+// one-dispatcher-knows-the-rule split that DispatchableTasks had.
+func (r *Run) AgentPostedToRadio(agentID string) bool {
+	for _, m := range r.MessagesSince(0) {
+		if m.Sender == agentID {
+			return true
+		}
+	}
+	return false
 }
 
 // GetTask returns a task by id within the run.
@@ -707,11 +819,11 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 // CreateThread opens a named conversation thread in the run's radio channel.
 func (r *Run) CreateThread(id, name string, participants []string) *Thread {
 	th := &Thread{
-		ID:          id,
-		RunID:       r.ID,
-		Name:        name,
+		ID:           id,
+		RunID:        r.ID,
+		Name:         name,
 		Participants: append([]string(nil), participants...),
-		CreatedAt:   time.Now(),
+		CreatedAt:    time.Now(),
 	}
 	r.mu.Lock()
 	r.Threads[id] = th
@@ -798,27 +910,27 @@ func (r *Run) PostMessage(threadID, sender string, mentions []string, priority P
 // by the HTTP API and the viewer. It is safe to serialize and hand to
 // callers without holding any locks.
 type Snapshot struct {
-	RunID    string         `json:"run_id"`
-	Prompt   string         `json:"prompt"`
-	State    RunState       `json:"state"`
-	Tasks    []TaskSnapshot `json:"tasks"`
+	RunID    string           `json:"run_id"`
+	Prompt   string           `json:"prompt"`
+	State    RunState         `json:"state"`
+	Tasks    []TaskSnapshot   `json:"tasks"`
 	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []*Message   `json:"messages"`
+	Messages []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Assignment string        `json:"assignment"`
-	Deps       []string      `json:"deps"`
-	State      TaskState     `json:"state"`
-	Dispatches int           `json:"dispatches"`
-	Model      string        `json:"model,omitempty"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Assignment string    `json:"assignment"`
+	Deps       []string  `json:"deps"`
+	State      TaskState `json:"state"`
+	Dispatches int       `json:"dispatches"`
+	Model      string    `json:"model,omitempty"`
 }
 
 type ThreadSnapshot struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
 	Participants []string `json:"participants"`
 }
 
@@ -846,8 +958,8 @@ func (r *Run) Snapshot() Snapshot {
 	for _, th := range r.Threads {
 		th.mu.RLock()
 		s.Threads = append(s.Threads, ThreadSnapshot{
-			ID:          th.ID,
-			Name:        th.Name,
+			ID:           th.ID,
+			Name:         th.Name,
 			Participants: append([]string(nil), th.Participants...),
 		})
 		th.mu.RUnlock()

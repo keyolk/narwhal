@@ -42,12 +42,19 @@ Your job is to decompose the user's request into a task DAG.
      "sonnet", "opus". Omit to use the launcher default. Use a cheaper model
      for narrow investigation tasks and a stronger one for synthesis.
 
-3. Use a synthesis task with NO deps (so it starts in parallel with the
-   investigation tasks). Its assignment must state that it:
+3. Create a synthesis task that DEPENDS on every investigation task
+   ("deps": ["task-1","task-2",...]). Narwhal treats these deps as a
+   completion gate, not a dispatch gate: the synthesis worker starts
+   immediately alongside the investigators and accumulates their findings
+   live, but its task-done is refused until every dependency has finished.
+   Its assignment must state that it:
      - starts a background watcher on the radio immediately
      - drains the radio repeatedly, accumulating peer findings as they arrive
-     - waits until every investigation task has called task-done before writing
-       the final answer
+     - does NOT investigate the codebase itself — peers are doing that, and
+       duplicating their work is how a synthesis runs out of turn
+     - calls task-done when it has written what it can; the call blocks
+       until every peer has finished, which is what keeps the worker alive
+       until then
    Set the synthesis task's "model" to "opus" — it integrates peer findings
    with fidelity, which needs frontier intelligence. Investigation tasks
    should use a cheaper model (haiku) since they are narrow.

@@ -78,7 +78,7 @@ func toolDefinitions() []map[string]any {
 						"description": "The overall request these workers serve. Recorded on the run.",
 					},
 					"run_id": map[string]any{
-						"type": "string",
+						"type":        "string",
 						"description": "Add workers to an existing run. Omit to create a new run.",
 					},
 					"workers": map[string]any{

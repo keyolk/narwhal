@@ -27,7 +27,7 @@ session. Your session stays in the conversation; workers run headless
 underneath and report back.
 
 ```bash
-go build -o ~/.local/bin/narwhal ./cmd/narwhal
+make install   # builds and puts narwhal on PATH (~/.local/bin)
 claude mcp add --scope user narwhal narwhal mcp
 ```
 
@@ -86,10 +86,35 @@ the right, and a detail pane for reading a full message. Radio messages are
 long — that is the point of them — so the list truncates and the detail view
 is where you actually read one.
 
-`s` opens the selected task's Claude session: the worker's full output with
-scrollback, pinned to the newest line until you scroll up. This is how you
-watch a worker work rather than inferring it from what it has posted —
-`n`/`p` walk between workers without leaving the view.
+`s` opens the selected task's session: a live activity feed of what the
+worker is doing — its reasoning, each tool call, and a clipped result —
+read from the session transcript and following new events until you scroll
+up. `n`/`p` walk between workers without leaving the view.
+
+```
+Session  ▶ fact-a  dispatched          agent=worker-fact-a  23 events  [following]
+
+14:33:07 · I'll start the background watcher and read note.md first.
+14:33:08 → Bash  watch
+14:33:08 → Read  narwhal-gate-e2e/note.md
+           1 # Gate E2E fixture
+           … 3 more lines
+14:34:28 → Bash  send worklog "fact A: the color is blue (from note.md line 3)"
+           {"Seq":2,"RunID":"s1786631577522-1","ThreadID":"worklog",…
+14:34:31 · worklog 게시 완료. 이제 task-done을 호출합니다.
+```
+
+The transcript, not the captured stdout: a `claude --print` worker buffers
+its output until it exits, so the log is empty for the whole time you would
+want to watch. The transcript is appended as the session happens. When the
+worker finishes, its final answer is appended to the end of the same feed.
+
+`a` attaches to the session itself, handing the terminal to a real Claude
+session — for reading the whole thing or intervening. The launcher pins
+each worker's session id with `--session-id`, so both the feed and the
+attach find exactly that worker's conversation rather than guessing which
+transcript belongs to whom. Attaching opens forked (`--fork-session`):
+watching a worker must not append to the transcript it is still writing.
 
 ```
 Narwhal  s1786471179534-1  ▶ active
@@ -106,7 +131,7 @@ Graph                                    Radio (2)
             └─────────────┘
 
 done 1  running 1  ready 0  failed 0  [following]
-tab pane · j/k move · enter detail · s session · esc runs · b boxes · q quit
+tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
 ```
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
@@ -116,6 +141,11 @@ when they do not. A fan-out or fan-in is drawn as one shape — a single
 horizontal bar — rather than as independent edges that would overwrite each
 other, and a run that would otherwise cut through a wrapped row detours
 through the margin.
+
+The graph is two-dimensional, so navigation is too: `h` and `l` step between
+boxes in the order they are drawn, row by row and left to right. Backing out
+of the graph is `esc`, not `h` — a direction key inside a diagram should
+move, not exit.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 
@@ -170,10 +200,12 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 |---|---|
 | `tab` | Switch between the graph and radio panes |
 | `j` / `k` | Move the cursor (also `↓` / `↑`) |
+| `h` / `l` | Move between boxes in the graph (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
-| `s` | Open the selected task's Claude session (full output, follows live) |
+| `s` | Open the selected task's session activity feed (follows live) |
+| `a` | Attach to the worker's Claude session itself (forked) |
 | `b` | Toggle between box and lane graph views |
 | `[` / `]` | Previous / next live run |
 | `esc` | Back out: detail → run, run → run list, list → quit |
@@ -210,6 +242,7 @@ narwhal
 ├── launcher
 │   ├── each worker: ccproxy claude --print --permission-mode bypassPermissions
 │   ├── per-agent identity token (endpoint = identity)
+│   ├── pinned --session-id, so the monitor can attach to a live worker
 │   └── wrapper scripts (send/drain/watch/state/task-done/split)
 │
 ├── store
@@ -224,7 +257,8 @@ narwhal
 │   └── stdio JSON-RPC server; thin client of the daemon's /control API
 │
 └── monitor
-    └── Bubble Tea TUI: task list, radio traffic, message detail pane
+    └── Bubble Tea TUI: task list, radio traffic, message detail,
+        per-worker session activity read from the Claude transcript
 ```
 
 ### What graph and radio each own
@@ -243,6 +277,38 @@ discovery granularity (seconds to minutes).
 Existing tasks are immutable. New tasks can be added to the same Run
 (split-request). This is a deliberate compromise between Orca's strict
 immutability and AgentRadio's free-form plan negotiation.
+
+### Deps gate completion, not dispatch
+
+The synthesis task depends on every investigation task, but it is
+dispatched immediately alongside them. Its job is to be listening while
+they work — a watcher on the radio, folding findings in as they land — and
+that only works if it is alive at the same time as its peers.
+
+The dependency is enforced at the other end: `task-done` blocks until every
+dep has finished, announcing the wait on the radio so a held worker is
+distinguishable from a hung one. If peers posted while the call was held,
+it answers `202` with those messages instead of completing — the outcome
+was written before they arrived — and the worker folds them in and calls
+once more.
+
+Blocking rather than refusing is the part that took two tries. The first
+version answered `409` and told the worker to try again later. The worker
+read it, replied "I will keep the watcher up and wait" — and its process
+exited, because `claude --print` ends when the model's turn ends. Intending
+to wait is not waiting. The coordinator saw a dispatch with no `task-done`,
+retried, and the circuit breaker failed the task on the third attempt.
+Holding the HTTP request open is what actually keeps the worker alive.
+
+This replaced an instruction-only version, where the synthesis task had no
+deps at all and its assignment simply told it to wait. It did not. Across
+three consecutive runs the synthesis worker posted its last message before
+its peers posted theirs — in one case four messages early, missing the
+peer's final summary entirely — and in another it gave up waiting and
+re-ran a peer's investigation itself, spending a frontier model on
+duplicate work. A worker has no way to observe that a peer has finished, so
+"wait until they are done" was not a followable instruction. The gate makes
+it one.
 
 ### Why directly-executed workers, not Workflow subagents
 
@@ -304,10 +370,12 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ DAG dependency-driven readiness
 - ✓ Parallel dispatch with concurrency cap
 - ✓ Circuit breaker (3 failures → task failed)
+- ✓ Radio activity counts as completion (a worker that posted but forgot task-done is not retried)
 - ✓ Diamond dependency (A→B, A→C, B+C→D)
 - ✓ Partial failure → dependents unreached
 - ✓ Dynamic task addition (split-request, immutable existing tasks)
 - ✓ Dynamic dependency edges (DEP_ADD / DEP_REMOVE mid-run)
+- ✓ Completion gate (synthesis runs early, but cannot finish before its deps)
 - ✓ File ownership (claim / release, conflicts answered on the radio)
 - ✓ Model escalation (worker asks for a stronger tier, breaker still bounds retries)
 - ✓ Run terminal state (done/failed)
@@ -339,6 +407,7 @@ See `docs/experiments.md` for the full record:
 - **E3**: Live peer correction during a real run — **confirmed** (workers cross-corrected)
 - **E4**: Split-request — **confirmed** (worker created 3 new tasks mid-run)
 - **E5**: Multi-thread radio + coordinating agent — **confirmed** (planner built 5-task DAG, 10 radio messages, synthesis task integrated findings)
+- **E9**: "Wait for your peers" as an instruction — **refuted** (synthesis finished early in 3 of 3 runs; deps now gate completion)
 
 ### SWE-Atlas QnA benchmark slice
 
@@ -349,6 +418,21 @@ Smart — haiku investigate + opus synthesis — at 94.9% rubric coverage,
 above Narwhal's 92.3% and B0's 89.7%, at wall-clock below B0 (52 min vs
 58 min). See [`docs/benchmark.md`](docs/benchmark.md) and
 [`docs/experiments.md`](docs/experiments.md) §E7–E8.
+
+## Development
+
+```bash
+make            # list targets
+make install    # build with a version stamp, replace the binary on PATH
+make check      # go vet + tests under the race detector
+make cover      # coverage summary
+make daemon-restart   # reinstall, then restart the daemon detached
+```
+
+`make install` removes the old binary before copying the new one. macOS
+will not overwrite a running Mach-O in place, and the failure mode is not
+an error message — the binary is left in a state where every invocation
+dies with SIGKILL.
 
 ## License
 

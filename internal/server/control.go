@@ -336,12 +336,12 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		CWD            string `json:"cwd"`
+		CWD             string `json:"cwd"`
 		Prompt          string `json:"prompt"`
 		PlannerModel    string `json:"planner_model"`
 		WorkerModel     string `json:"worker_model"`
 		SynthesisModel  string `json:"synthesis_model"`
-		PlanTimeoutSecs int  `json:"plan_timeout_secs"`
+		PlanTimeoutSecs int    `json:"plan_timeout_secs"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -412,7 +412,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"run_id":         runID,
+		"run_id":          runID,
 		"broker_url":      s.baseURL(),
 		"planner_model":   req.PlannerModel,
 		"worker_model":    req.WorkerModel,

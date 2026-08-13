@@ -115,9 +115,7 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		run = s.broker.CreateRun(req.RunID, req.Prompt, req.CWD, "main")
 		// Register the operator's own session so it can send and drain.
 		s.registry.Register("main", req.RunID, true)
-		run.CreateThread("planning", "planning", []string{"main"})
-		run.CreateThread("worklog", "worklog", []string{"main"})
-		run.CreateThread("results", "results", []string{"main"})
+		run.CreateStandardThreads()
 	}
 
 	l := s.control.LauncherFor(req.RunID, req.CWD)
@@ -358,9 +356,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	runID := s.control.NewRunID()
 	run := s.broker.CreateRun(runID, req.Prompt, req.CWD, "main")
 	mainAgent := s.registry.Register("main", runID, true)
-	run.CreateThread("planning", "planning", []string{"main"})
-	run.CreateThread("worklog", "worklog", []string{"main"})
-	run.CreateThread("results", "results", []string{"main"})
+	run.CreateStandardThreads()
 
 	l := s.control.LauncherFor(runID, req.CWD)
 	l.SetWorkerModel(req.WorkerModel)

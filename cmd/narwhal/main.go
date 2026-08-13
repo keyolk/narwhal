@@ -114,8 +114,7 @@ func runCmd(args []string) {
 	// Radio threads: planning carries decisions, worklog carries in-flight
 	// findings. Keeping them separate mirrors AgentRadio's protocol so
 	// decision traffic does not drown out live discovery sharing.
-	r.CreateThread("planning", "planning", []string{"main"})
-	r.CreateThread("worklog", "worklog", []string{"main"})
+	r.CreateStandardThreads()
 
 	// Phase 2: the caller declares a flat set of independent tasks. A
 	// coordinating agent will later build a real DAG and add tasks mid-run

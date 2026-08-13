@@ -84,9 +84,7 @@ func planCmd(args []string) {
 	fmt.Fprintf(os.Stderr, "[narwhal] monitor: narwhal monitor --run %s\n", runID)
 
 	// Radio threads available to both the planning agent and workers.
-	r.CreateThread("planning", "planning", []string{"main"})
-	r.CreateThread("worklog", "worklog", []string{"main"})
-	r.CreateThread("results", "results", []string{"main"})
+	r.CreateStandardThreads()
 
 	// Phase 1: run the coordinating agent to decompose the request into a DAG.
 	// The agent talks to the broker HTTP API to create tasks with deps.

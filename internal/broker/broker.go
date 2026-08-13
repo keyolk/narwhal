@@ -719,6 +719,37 @@ func (r *Run) CreateThread(id, name string, participants []string) *Thread {
 	return th
 }
 
+// Standard thread ids. Every run gets these four; anything else is created
+// on demand by the planner or a worker.
+//
+// EnvironmentThread carries facts about the shared execution environment
+// rather than findings about the question: the build is broken, a tool is
+// missing, a quota was hit. Those belong somewhere every worker reads by
+// default — Cursor's swarm calls the same idea a field guide. Without a
+// dedicated thread the first worker to hit a broken build reports it into
+// worklog, where it reads as one more finding, and the next three workers
+// rediscover it independently.
+const (
+	PlanningThread    = "planning"
+	WorklogThread     = "worklog"
+	ResultsThread     = "results"
+	EnvironmentThread = "environment"
+)
+
+// CreateStandardThreads opens the four threads every run has. Callers that
+// build a run by hand (batch CLI, daemon, plan endpoint) use this so the
+// thread set cannot drift between them.
+func (r *Run) CreateStandardThreads(participants ...string) {
+	if len(participants) == 0 {
+		participants = []string{"main"}
+	}
+	for _, id := range []string{
+		PlanningThread, WorklogThread, ResultsThread, EnvironmentThread,
+	} {
+		r.CreateThread(id, id, participants)
+	}
+}
+
 // PostMessage appends a message to the run's radio channel, stores it in
 // the append-only log, and wakes any active long-poll watchers. The caller
 // must set Sender; the broker assigns Seq atomically. Returns the stored

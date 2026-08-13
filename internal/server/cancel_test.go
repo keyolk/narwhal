@@ -21,6 +21,7 @@ func (c *cancelController) NextID() int                                      { r
 func (c *cancelController) LauncherFor(runID, cwd string) *launcher.Launcher { return c.l }
 func (c *cancelController) Launcher(runID string) *launcher.Launcher         { return c.l }
 func (c *cancelController) ActiveRuns() []string                             { return []string{"r-cancel"} }
+func (c *cancelController) KnownRuns() []string                              { return []string{"r-cancel"} }
 func (c *cancelController) DropLauncher(runID string)                        {}
 
 func TestCancelRetiresEveryUnfinishedTask(t *testing.T) {

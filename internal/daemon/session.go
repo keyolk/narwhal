@@ -25,7 +25,11 @@ type Session struct {
 
 	mu        sync.Mutex
 	launchers map[string]*launcher.Launcher // runID → launcher
-	seq       int                           // monotonic id source for runs/tasks
+	// retired is runs whose launcher has been released, in retirement
+	// order. They are finished, but the user still wants to see them —
+	// finishing is when they go looking for the result.
+	retired []string
+	seq     int // monotonic id source for runs/tasks
 }
 
 // NewSession creates empty daemon state. URL is filled in once the HTTP
@@ -67,14 +71,19 @@ func (s *Session) Launcher(runID string) *launcher.Launcher {
 	return s.launchers[runID]
 }
 
-// DropLauncher forgets a run's launcher once the run is finished.
+// DropLauncher forgets a run's launcher once the run is finished. The run
+// itself stays in the broker, so its result is still readable.
 func (s *Session) DropLauncher(runID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := s.launchers[runID]; ok {
+		s.retired = append(s.retired, runID)
+	}
 	delete(s.launchers, runID)
 }
 
-// ActiveRuns returns run ids that still have a launcher registered.
+// ActiveRuns returns run ids that still have a launcher registered — the
+// ones the dispatch loop has work to do for.
 func (s *Session) ActiveRuns() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,6 +95,26 @@ func (s *Session) ActiveRuns() []string {
 	// the monitor's run picker reshuffle on every poll.
 	sort.Strings(out)
 	return out
+}
+
+// KnownRuns returns every run this session has driven, finished ones
+// included, newest last.
+//
+// ActiveRuns answers "what does the dispatcher still have to do", which is
+// the wrong question for a status listing: retiring a settled run would
+// make it vanish from `narwhal_status` the moment it finished, which is
+// exactly when the user goes looking for its result.
+func (s *Session) KnownRuns() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := make([]string, 0, len(s.launchers))
+	for id := range s.launchers {
+		live = append(live, id)
+	}
+	sort.Strings(live)
+	// Retired first, in the order they retired, then whatever is live —
+	// so a listing reads oldest to newest.
+	return append(append([]string(nil), s.retired...), live...)
 }
 
 // NewRunID mints a run id. Interactive runs are keyed by wall clock plus a

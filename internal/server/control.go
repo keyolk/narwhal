@@ -34,8 +34,14 @@ type Controller interface {
 	LauncherFor(runID, cwd string) *launcher.Launcher
 	// Launcher returns the existing launcher for a run, or nil.
 	Launcher(runID string) *launcher.Launcher
-	// ActiveRuns lists runs that still have a launcher.
+	// ActiveRuns lists runs that still have a launcher — the ones with
+	// work left to drive.
 	ActiveRuns() []string
+	// KnownRuns lists every run this session has driven, finished ones
+	// included. Status listings use this rather than ActiveRuns: a run
+	// that just settled would otherwise vanish at the exact moment the
+	// user goes looking for its result.
+	KnownRuns() []string
 }
 
 // SetController attaches a controller, enabling the /control routes.
@@ -213,7 +219,7 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 	runID := r.URL.Query().Get("run_id")
 	if runID == "" {
 		runs := make([]map[string]any, 0)
-		for _, id := range s.control.ActiveRuns() {
+		for _, id := range s.control.KnownRuns() {
 			run := s.broker.GetRun(id)
 			if run == nil {
 				continue

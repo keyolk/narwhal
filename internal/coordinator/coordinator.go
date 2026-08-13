@@ -78,6 +78,7 @@ type Coordinator struct {
 	running     map[string]string // taskID → agentID
 	finished    map[string]bool   // taskID → true once terminal
 	splitCursor int64             // last processed message Seq for split-request intake
+	depCursor   int64             // last processed message Seq for dep-edge intake
 }
 
 // New creates a Coordinator for a run.
@@ -124,6 +125,7 @@ func (c *Coordinator) Run() Result {
 
 		c.reapFinishedWorkers()
 		c.intakeSplitRequests()
+		c.intakeDepEdgeRequests()
 		dispatched := c.dispatchReady()
 
 		c.mu.Lock()
@@ -354,6 +356,36 @@ func (c *Coordinator) intakeSplitRequests() {
 	}
 	if len(msgs) > 0 {
 		c.splitCursor = msgs[len(msgs)-1].Seq
+	}
+}
+
+// intakeDepEdgeRequests scans every thread for DEP_ADD / DEP_REMOVE messages
+// the coordinator has not yet processed and applies them to the graph.
+// Unlike split-request, dep-edge messages can come on any thread — a
+// worker discovers a relationship and posts it to worklog, not planning.
+func (c *Coordinator) intakeDepEdgeRequests() {
+	msgs := c.run.MessagesSince(c.depCursor)
+	for _, m := range msgs {
+		action, taskID, deps, ok := broker.ParseDepEdgeRequest(m.Content)
+		if !ok {
+			continue
+		}
+		task := c.run.GetTask(taskID)
+		if task == nil {
+			log.Printf("[coordinator] dep-edge for unknown task %s, ignoring", taskID)
+			continue
+		}
+		switch action {
+		case broker.DepAddPrefix:
+			task.AddDep(deps, c.run)
+			log.Printf("[coordinator] dep-edge added: %s ← %v from %s", taskID, deps, m.Sender)
+		case broker.DepRemovePrefix:
+			task.RemoveDep(deps)
+			log.Printf("[coordinator] dep-edge removed: %s ⊘ %v from %s", taskID, deps, m.Sender)
+		}
+	}
+	if len(msgs) > 0 {
+		c.depCursor = msgs[len(msgs)-1].Seq
 	}
 }
 

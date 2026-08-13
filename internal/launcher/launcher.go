@@ -149,6 +149,29 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"planning","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
+	"dep-add": fmt.Sprintf(`#!/bin/bash
+# usage: dep-add "<taskId>" "<dep1,dep2,...>"
+# Add dependency edges to an existing task. The task itself is immutable;
+# only its dependency list changes. Use when a worker discovers a
+# relationship mid-run that the planner did not know about.
+set -euo pipefail
+TASK="$1"; DEPS="${2:-}"
+BODY="DEP_ADD|$TASK|$DEPS"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
+`, base),
+	"dep-remove": fmt.Sprintf(`#!/bin/bash
+# usage: dep-remove "<taskId>" "<dep1,dep2,...>"
+# Remove dependency edges from an existing task. Use when a relationship
+# the planner assumed turns out not to hold.
+set -euo pipefail
+TASK="$1"; DEPS="${2:-}"
+BODY="DEP_REMOVE|$TASK|$DEPS"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
+`, base),
 	}
 
 	for name, content := range scripts {
@@ -208,8 +231,14 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "- bash %s/split \"<newTaskId>\" \"<name>\" \"<assignment>\" [depsCSV]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Request a NEW task be added to the run. Use when you discover work\n")
 	fmt.Fprintf(&b, "    that is genuinely independent of yours and should run in parallel.\n")
-	fmt.Fprintf(&b, "    Existing tasks are immutable — you cannot edit your own task.\n\n")
-	fmt.Fprintf(&b, "## Passive Awareness (CRITICAL)\n\n")
+	fmt.Fprintf(&b, "    Existing tasks are immutable — you cannot edit your own task.\n")
+	fmt.Fprintf(&b, "- bash %s/dep-add \"<taskId>\" \"<dep1,dep2,...>\"\n", scriptsDir)
+	fmt.Fprintf(&b, "    Add dependency edges to an existing task. Use when you discover a\n")
+	fmt.Fprintf(&b, "    relationship mid-run that the planner did not know about — e.g.\n")
+	fmt.Fprintf(&b, "    'this area depends on that area being finished first.'\n")
+	fmt.Fprintf(&b, "- bash %s/dep-remove \"<taskId>\" \"<dep1,dep2,...>\"\n", scriptsDir)
+	fmt.Fprintf(&b, "    Remove dependency edges that turn out not to hold.\n")
+	fmt.Fprintf(&b, "\n## Passive Awareness (CRITICAL)\n\n")
 	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
 	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)
 	fmt.Fprintf(&b, "   Run it with run_in_background=true so it never blocks your turn.\n")

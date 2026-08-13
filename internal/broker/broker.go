@@ -83,6 +83,21 @@ const MaxDispatchFailures = 3
 // Format: "SPLIT_REQUEST|<taskId>|<name>|<assignment>|<dep1,dep2,...>"
 const SplitRequestPrefix = "SPLIT_REQUEST"
 
+// DepEdgePrefix marks a radio message as a request to add or remove a
+// dependency edge on an existing task. Unlike split-request (which mints
+// a new task), a dep-edge request mutates only the dependency list —
+// the task itself (id, name, assignment) stays immutable. This is the
+// generalization of split-request that Dynamic Graph Communication
+// (arXiv:2501.00165) motivates: workers discover relationships
+// mid-run and adjust the graph without a planner round.
+//
+// Format: "DEP_ADD|<taskId>|<dep1,dep2,...>"
+//        "DEP_REMOVE|<taskId>|<dep1,dep2,...>"
+const (
+	DepAddPrefix    = "DEP_ADD"
+	DepRemovePrefix = "DEP_REMOVE"
+)
+
 // ParseSplitRequest extracts the fields from a split-request message body.
 // Returns ok=false if the body is not a well-formed split request.
 func ParseSplitRequest(content string) (taskID, name, assignment string, deps []string, ok bool) {
@@ -114,6 +129,36 @@ func FormatSplitRequest(taskID, name, assignment string, deps []string) string {
 		depStr = strings.Join(deps, ",")
 	}
 	return SplitRequestPrefix + "|" + taskID + "|" + name + "|" + assignment + "|" + depStr
+}
+
+// ParseDepEdgeRequest extracts the fields from a DEP_ADD or DEP_REMOVE
+// message body. action is the prefix that matched. Returns ok=false if
+// the body is not well-formed.
+func ParseDepEdgeRequest(content string) (action, taskID string, deps []string, ok bool) {
+	for _, p := range []string{DepAddPrefix, DepRemovePrefix} {
+		if strings.HasPrefix(content, p) {
+			action = p
+			rest := content[len(p):]
+			if len(rest) == 0 || rest[0] != '|' {
+				return "", "", nil, false
+			}
+			parts := strings.SplitN(rest[1:], "|", 2)
+			if len(parts) < 1 {
+				return "", "", nil, false
+			}
+			taskID = parts[0]
+			if len(parts) == 2 && parts[1] != "" {
+				deps = strings.Split(parts[1], ",")
+			}
+			return action, taskID, deps, true
+		}
+	}
+	return "", "", nil, false
+}
+
+// FormatDepEdgeRequest builds a DEP_ADD or DEP_REMOVE message body.
+func FormatDepEdgeRequest(action, taskID string, deps []string) string {
+	return action + "|" + taskID + "|" + strings.Join(deps, ",")
 }
 
 // Run is a namespace holding one or more task graphs plus a radio channel.
@@ -408,6 +453,37 @@ func (t *Task) recomputeReady(r *Run) {
 		dep.mu.RUnlock()
 	}
 	t.State = TaskReady
+}
+
+// AddDep appends dependency edges to an existing task. The task itself
+// (id, name, assignment) stays immutable — only the dep list changes.
+// This is the dep-edge path that generalizes split-request: a worker
+// discovers a relationship mid-run and adjusts the graph without a planner
+// round. Adding a dep on a completed task is fine; recomputeReady is
+// called by the coordinator's next tick.
+func (t *Task) AddDep(deps []string, r *Run) {
+	t.mu.Lock()
+	t.Deps = append(t.Deps, deps...)
+	t.mu.Unlock()
+}
+
+// RemoveDep removes dependency edges from an existing task. Edges that no
+// longer hold are dropped; a task that loses its last dep becomes ready
+// if it was pending only because of that dep.
+func (t *Task) RemoveDep(deps []string) {
+	t.mu.Lock()
+	set := make(map[string]bool, len(deps))
+	for _, d := range deps {
+		set[d] = true
+	}
+	filtered := t.Deps[:0]
+	for _, d := range t.Deps {
+		if !set[d] {
+			filtered = append(filtered, d)
+		}
+	}
+	t.Deps = filtered
+	t.mu.Unlock()
 }
 
 // StartDispatch records a new dispatch attempt on a task and marks it

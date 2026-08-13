@@ -135,7 +135,7 @@ curl -s -X POST %s/watch \
 curl -s %s/state
 `, base),
 		"task-done": fmt.Sprintf(`#!/bin/bash
-# usage: task-done <taskId> <outcome>
+# usage: task-done <taskId> <outcome> [final]
 # Mark a task as completed with the given outcome text.
 #
 # If the task has dependencies that are still running, this call BLOCKS
@@ -153,13 +153,39 @@ curl -s %s/state
 #
 # No --max-time: the wait is bounded by the server, and a client-side
 # timeout would defeat the whole point.
-set -euo pipefail
+set -uo pipefail
 TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"
 BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final"}))' "$OUTCOME" "$FINAL")
-OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
-  -H "Content-Type: application/json" -d "$BODY")
-CODE="${OUT##*$'\n'}"
-echo "${OUT%%$'\n'*}"
+OUTFILE="%s/outcome-$TASK.json"
+
+# The broker can be gone: it is a separate long-lived process, and
+# restarting it under a running worker is an ordinary thing to do by
+# accident. A worker that finishes into a closed port has done the work and
+# written the files, so losing the result to a connection error is the
+# worst possible outcome. Retry, then record locally so the run can be
+# reconciled from disk.
+ATTEMPT=0
+while :; do
+  OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
+    -H "Content-Type: application/json" -d "$BODY")
+  RC=$?
+  CODE="${OUT##*$'\n'}"
+  if [ $RC -eq 0 ] && [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+    break
+  fi
+  ATTEMPT=$((ATTEMPT + 1))
+  if [ $ATTEMPT -ge 4 ]; then
+    printf '%%s' "$BODY" > "$OUTFILE"
+    echo "task-done could not reach the broker after $ATTEMPT attempts." >&2
+    echo "Your outcome was written to $OUTFILE so it is not lost." >&2
+    exit 2
+  fi
+  # Short backoff: a restarting broker is back in a couple of seconds, and
+  # a broker that is gone for good should not hold the worker hostage.
+  sleep $ATTEMPT
+done
+
+echo "${OUT%%%%$'\n'*}"
 if [ "$CODE" = "202" ]; then
   echo "" >&2
   echo "NOT COMPLETE YET. Your peers finished while this call waited, and the" >&2
@@ -177,7 +203,7 @@ if [ "$CODE" != "200" ]; then
   echo "task-done failed with HTTP $CODE" >&2
   exit 1
 fi
-`, base),
+`, agentDir, base),
 		"split": fmt.Sprintf(`#!/bin/bash
 # usage: split "<taskId>" "<name>" "<assignment>" [depsCSV]
 # Request the coordinator to add a new task to the run. Existing tasks

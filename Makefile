@@ -68,8 +68,15 @@ cover:
 	go tool cover -func=coverage.out | tail -20
 
 ## daemon-restart: stop the running daemon and start a fresh one detached
+#
+# `daemon stop` refuses while workers are in flight, and that refusal must
+# stop the restart — the `-` prefix that used to ignore it turned a routine
+# rebuild into a killed run. Pass FORCE=1 when you mean it.
 daemon-restart: install
-	-@$(BINDIR)/$(BIN) daemon stop >/dev/null 2>&1
+	@if $(BINDIR)/$(BIN) daemon status >/dev/null 2>&1; then \
+		$(BINDIR)/$(BIN) daemon stop $(if $(FORCE),--force,) || \
+			{ echo "make daemon-restart: aborted (use FORCE=1 to stop anyway)"; exit 1; }; \
+	fi
 	@sleep 1
 	@nohup $(BINDIR)/$(BIN) daemon start >/tmp/narwhal-daemon.log 2>&1 & sleep 2
 	@$(BINDIR)/$(BIN) daemon status

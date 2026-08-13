@@ -24,11 +24,7 @@ func daemonCmd(args []string) {
 	case "start":
 		daemonStart(args[1:])
 	case "stop":
-		if err := nd.Stop(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("daemon stopped")
+		daemonStop(args[1:])
 	case "status":
 		out, _ := nd.StatusJSON()
 		fmt.Println(string(out))
@@ -36,6 +32,24 @@ func daemonCmd(args []string) {
 		fmt.Fprintf(os.Stderr, "unknown daemon subcommand: %s\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// daemonStop asks the running daemon to shut down.
+//
+// It refuses while workers are in flight, because stopping the broker does
+// not stop them: they are detached processes that keep working and then
+// report to a closed port. --force is for a wedged daemon, where the
+// alternative is worse.
+func daemonStop(args []string) {
+	fs := flag.NewFlagSet("daemon stop", flag.ExitOnError)
+	force := fs.Bool("force", false, "stop even while workers are running")
+	fs.Parse(args)
+
+	if err := nd.Stop(*force); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("daemon stopped")
 }
 
 func daemonStart(args []string) {
@@ -86,5 +100,13 @@ func daemonStart(args []string) {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
 	fmt.Fprintf(os.Stderr, "[narwhal] received %s, shutting down\n", sig)
+
+	// Write every run down before letting go of the process. The dispatch
+	// loop already persists on change, but a run that was mid-flight when
+	// the signal arrived should not lose its last state to the shutdown —
+	// that is exactly the moment the record matters most.
+	if n := dispatcher.PersistAll(); n > 0 {
+		fmt.Fprintf(os.Stderr, "[narwhal] saved %d run(s)\n", n)
+	}
 	srv.Shutdown()
 }

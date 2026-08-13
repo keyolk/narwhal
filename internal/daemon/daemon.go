@@ -18,11 +18,13 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // StateDir is the root for daemon state files.
@@ -154,10 +156,30 @@ func lockHeld() bool {
 }
 
 // Stop signals the running daemon to shut down.
-func Stop() error {
+//
+// It refuses while workers are still running unless force is set. Stopping
+// the broker does not stop the workers — they are detached processes that
+// keep going — so a stop mid-run leaves them alive with nowhere to report:
+// their task-done calls hit a closed port and the work vanishes even though
+// the files were written. That happened to a four-worker run, triggered by
+// a routine `make daemon-restart` in another terminal, which is exactly how
+// this will happen again.
+func Stop(force bool) error {
 	info, err := Status()
 	if err != nil {
 		return err
+	}
+	if !force {
+		if busy, err := activeWorkers(info.URL); err != nil {
+			// Could not ask. Say so rather than guessing either way: a
+			// silent stop is the failure this exists to prevent, and a
+			// silent refusal would strand a wedged daemon.
+			return fmt.Errorf("cannot tell whether workers are running (%w); "+
+				"use --force to stop anyway", err)
+		} else if busy > 0 {
+			return fmt.Errorf("%d worker(s) still running; they would keep going "+
+				"with no broker to report to. Wait, or use --force", busy)
+		}
 	}
 	proc, err := os.FindProcess(info.PID)
 	if err != nil {
@@ -167,6 +189,35 @@ func Stop() error {
 		return fmt.Errorf("signal process %d: %w", info.PID, err)
 	}
 	return nil
+}
+
+// activeWorkers asks the running daemon how many workers are in flight.
+//
+// This has to go over HTTP: `narwhal daemon stop` is a separate process
+// from the daemon and shares no memory with it.
+func activeWorkers(baseURL string) (int, error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(baseURL + "/api/v1/control/status")
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("broker returned %d", resp.StatusCode)
+	}
+	var payload struct {
+		Runs []struct {
+			ActiveWorkers int `json:"active_workers"`
+		} `json:"runs"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range payload.Runs {
+		n += r.ActiveWorkers
+	}
+	return n, nil
 }
 
 // StatusJSON renders the daemon status for machine consumption.

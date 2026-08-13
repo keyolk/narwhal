@@ -3,7 +3,7 @@
 // Usage:
 //
 //	narwhal run --workers auto --prompt "analyze this repo's auth flow"
-//	narwhal run --workers 3 --prompt "..." --cwd ~/src/sendbird/ccproxy
+//	narwhal run --workers 3 --prompt "..." --cwd ~/src/myrepo
 //	narwhal show <run-id>
 package main
 

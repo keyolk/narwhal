@@ -42,7 +42,10 @@ type Dispatcher struct {
 	// saved is the last-written fingerprint per run, so the tick only
 	// touches disk when the graph actually changed.
 	saved map[string]runFingerprint
-	stop  chan struct{}
+	// cursors is how far the radio has been read per run, so a request is
+	// applied once rather than on every tick.
+	cursors map[string]broker.IntakeCursors
+	stop    chan struct{}
 }
 
 // NewDispatcher creates a dispatcher for a session.
@@ -90,6 +93,14 @@ func (d *Dispatcher) tick() {
 		if run == nil || l == nil {
 			continue
 		}
+		// Read the radio before touching the graph. Workers are given six
+		// wrapper scripts that mutate the run — split, dep-add, dep-remove,
+		// file-claim, file-release, escalate — and every one of them was
+		// silently inert here: the daemon only reaped and dispatched, so a
+		// worker's split request sat on the radio unread. Nearly every run
+		// is interactive, so the documented half of the worker protocol did
+		// not work where it was actually used.
+		d.intake(runID, run)
 		d.reap(runID, run, l.ActiveWorkers())
 		d.dispatchReady(runID, run)
 		// Persist after the graph has settled for this tick, so a crash
@@ -98,6 +109,24 @@ func (d *Dispatcher) tick() {
 		// nothing.
 		d.persistRun(runID, run)
 	}
+}
+
+// intake applies the graph-mutating requests a run's workers have posted
+// since the last tick.
+func (d *Dispatcher) intake(runID string, run *broker.Run) {
+	d.mu.Lock()
+	if d.cursors == nil {
+		d.cursors = make(map[string]broker.IntakeCursors)
+	}
+	cur := d.cursors[runID]
+	d.mu.Unlock()
+
+	cur.Split = run.IntakeSplitRequests(cur.Split)
+	cur.Graph = run.IntakeGraphRequests(cur.Graph)
+
+	d.mu.Lock()
+	d.cursors[runID] = cur
+	d.mu.Unlock()
 }
 
 // reap notices workers that exited. A worker that exits without calling
@@ -130,6 +159,11 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 		if task == nil {
 			continue
 		}
+		// Give up whatever files the worker still held. A claim outlives
+		// the process that made it, so a worker that exits before its
+		// FILE_RELEASE strands the path for the rest of the run and every
+		// peer that asks for it is told to negotiate with a dead task.
+		run.ReleaseTaskFiles(task.ID)
 		switch task.CurrentState() {
 		case broker.TaskCompleted, broker.TaskFailed:
 			// Worker declared its own outcome; nothing to record.

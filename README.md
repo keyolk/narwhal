@@ -267,7 +267,12 @@ narwhal
 │   └── ccproxy claude --print decomposes request → task DAG via API
 │
 ├── coordinator
-│   └── deps-driven parallel dispatch, split-request intake, terminal state
+│   └── deps-driven parallel dispatch, terminal state (batch runs)
+│
+│   Graph-mutating intake — split-request, dep edges, file claims, model
+│   escalation — lives on broker.Run, because the daemon drives the same
+│   protocol and a rule only one dispatcher knows is a rule that silently
+│   does not apply to interactive runs.
 │
 ├── launcher
 │   ├── each worker: ccproxy claude --print --permission-mode bypassPermissions

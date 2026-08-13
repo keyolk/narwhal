@@ -72,7 +72,7 @@ func TestSessionViewExplainsAnAbsentLog(t *testing.T) {
 	m.snap.Tasks[0].Dispatches = 0
 	m.snap.Tasks[0].State = broker.TaskPending
 	m = press(m, "s")
-	if out := m.View(); !strings.Contains(out, "not been dispatched") {
+	if out := m.View(); !strings.Contains(out, "not dispatched yet") {
 		t.Fatalf("absent log not explained:\n%s", out)
 	}
 }

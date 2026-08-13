@@ -86,18 +86,35 @@ the right, and a detail pane for reading a full message. Radio messages are
 long — that is the point of them — so the list truncates and the detail view
 is where you actually read one.
 
-`s` opens the selected task's Claude session: the worker's full output with
-scrollback, pinned to the newest line until you scroll up. `n`/`p` walk
-between workers without leaving the view.
+`s` opens the selected task's session: a live activity feed of what the
+worker is doing — its reasoning, each tool call, and a clipped result —
+read from the session transcript and following new events until you scroll
+up. `n`/`p` walk between workers without leaving the view.
 
-`a` attaches to the worker's live Claude session. This is the one that
-matters while a worker is still running: a `claude --print` worker buffers
-its output until it exits, so the captured log is empty for the whole run
-and `s` has nothing to show. The launcher pins each worker's session id with
-`--session-id`, so attaching resumes exactly that worker's conversation
-rather than guessing which transcript belongs to whom. It opens forked
-(`--fork-session`) — watching a worker must not append to the transcript the
-worker is still writing.
+```
+Session  ▶ fact-a  dispatched          agent=worker-fact-a  23 events  [following]
+
+14:33:07 · I'll start the background watcher and read note.md first.
+14:33:08 → Bash  watch
+14:33:08 → Read  narwhal-gate-e2e/note.md
+           1 # Gate E2E fixture
+           … 3 more lines
+14:34:28 → Bash  send worklog "fact A: the color is blue (from note.md line 3)"
+           {"Seq":2,"RunID":"s1786631577522-1","ThreadID":"worklog",…
+14:34:31 · worklog 게시 완료. 이제 task-done을 호출합니다.
+```
+
+The transcript, not the captured stdout: a `claude --print` worker buffers
+its output until it exits, so the log is empty for the whole time you would
+want to watch. The transcript is appended as the session happens. When the
+worker finishes, its final answer is appended to the end of the same feed.
+
+`a` attaches to the session itself, handing the terminal to a real Claude
+session — for reading the whole thing or intervening. The launcher pins
+each worker's session id with `--session-id`, so both the feed and the
+attach find exactly that worker's conversation rather than guessing which
+transcript belongs to whom. Attaching opens forked (`--fork-session`):
+watching a worker must not append to the transcript it is still writing.
 
 ```
 Narwhal  s1786471179534-1  ▶ active
@@ -187,8 +204,8 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
-| `s` | Open the selected task's Claude session output (full, follows live) |
-| `a` | Attach to the worker's live Claude session (forked) |
+| `s` | Open the selected task's session activity feed (follows live) |
+| `a` | Attach to the worker's Claude session itself (forked) |
 | `b` | Toggle between box and lane graph views |
 | `[` / `]` | Previous / next live run |
 | `esc` | Back out: detail → run, run → run list, list → quit |
@@ -240,7 +257,8 @@ narwhal
 │   └── stdio JSON-RPC server; thin client of the daemon's /control API
 │
 └── monitor
-    └── Bubble Tea TUI: task list, radio traffic, message detail pane
+    └── Bubble Tea TUI: task list, radio traffic, message detail,
+        per-worker session activity read from the Claude transcript
 ```
 
 ### What graph and radio each own

@@ -1138,10 +1138,16 @@ func (m tuiModel) selectedTask() (broker.TaskSnapshot, bool) {
 	return m.taskByID(rows[cur].id), true
 }
 
-// viewSessionDetail shows a worker's full Claude session output. The task
-// detail summarizes with a short tail; this is the view for actually
-// watching a worker work — full scrollback, and it follows new output until
-// you scroll up.
+// viewSessionDetail shows what a worker is doing, as a live activity feed
+// read from its Claude session transcript.
+//
+// The transcript rather than the captured stdout log, because the log is
+// empty for the entire time you would want to watch: a `--print` worker
+// buffers its output until it exits. The transcript is appended as the
+// session happens, so a running worker's tool calls and reasoning show up
+// within a second. Once the worker finishes, its final answer is appended
+// to the feed — that is what the log holds, and it is the last thing said
+// rather than a separate view.
 func (m tuiModel) viewSessionDetail() string {
 	t, ok := m.selectedTask()
 	if !ok {
@@ -1160,41 +1166,48 @@ func (m tuiModel) viewSessionDetail() string {
 		meta = append(meta, fmt.Sprintf("dispatches=%d", t.Dispatches))
 	}
 
-	body := m.workerOutputLines(t.ID)
+	width := m.width - 2
+	var body []string
+
+	entries := m.workerActivity(t.ID)
+	if len(entries) > 0 {
+		meta = append(meta, fmt.Sprintf("%d events", len(entries)))
+		body = renderTranscript(entries, width)
+	}
+
+	// The final answer only exists once the worker has exited. Append it
+	// rather than showing it instead: it is the end of the same story.
+	if final := m.workerOutputLines(t.ID); len(final) > 0 {
+		if len(body) > 0 {
+			body = append(body, "")
+		}
+		body = append(body, styDim.Render("── final answer ──"))
+		for _, l := range final {
+			body = append(body, wrapText(l, width)...)
+		}
+	}
+
 	if len(body) == 0 {
-		// Say which is true rather than leaving a blank pane: a task that
-		// has not started yet and a running one look the same from here
-		// otherwise, and for a running worker the answer is not "no log"
-		// but "the log only arrives at the end".
+		// Say which is true rather than leaving a blank pane.
 		var reason string
 		switch {
 		case t.Dispatches == 0:
-			reason = "no session log yet — this task has not been dispatched"
+			reason = "not dispatched yet — nothing to show"
 		case t.State == broker.TaskDispatched:
-			reason = "this worker is still running. `claude --print` writes its " +
-				"output only when it finishes, so this pane stays empty until " +
-				"then — press a to open the live session instead."
+			reason = "the worker has started but has not written its first event yet"
 		default:
-			reason = "no session log at " + m.sessionLogPath(t.ID)
+			reason = "no transcript found. This run predates session pinning, so " +
+				"the worker's session cannot be located; only its final output " +
+				"would be available, at " + m.sessionLogPath(t.ID)
 		}
-		body = wrapText(reason, m.width-2)
-	} else {
-		meta = append(meta, fmt.Sprintf("%d lines", len(body)))
-		// The log is written by a --print process, so lines can be far
-		// wider than the pane; wrap rather than truncate, since the tail
-		// of a long line is often the part that matters.
-		var wrapped []string
-		for _, l := range body {
-			wrapped = append(wrapped, wrapText(l, m.width-2)...)
-		}
-		body = wrapped
+		body = wrapText(reason, width)
 	}
 
 	avail := m.height - 5
 	if avail < 3 {
 		avail = 3
 	}
-	// Following pins the view to the end as the worker writes.
+	// Following pins the view to the end as the worker works.
 	if m.sessionTail && len(body) > avail {
 		m.detailScroll = len(body) - avail
 	}
@@ -1204,11 +1217,20 @@ func (m tuiModel) viewSessionDetail() string {
 	if !m.sessionTail {
 		follow = ""
 	}
-	footer := styDim.Render("j/k scroll · n/p task · f follow · esc back · q close")
+	footer := styDim.Render("j/k scroll · n/p task · f follow · a attach · esc back · q close")
 
 	return head + pos + styDim.Render(follow) + "\n" +
 		styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
 		strings.Join(body[scroll:end], "\n") + "\n" + footer
+}
+
+// workerActivity reads the selected worker's session transcript.
+func (m tuiModel) workerActivity(taskID string) []transcriptEntry {
+	sid := m.workerSessionID(taskID)
+	if sid == "" {
+		return nil
+	}
+	return readTranscript(transcriptPath(m.live.CWD, sid))
 }
 
 // viewTaskDetail shows the selected task's state, its place in the graph,
@@ -1256,12 +1278,14 @@ func (m tuiModel) viewTaskDetail() string {
 
 	body := wrapText(t.Assignment, m.width-2)
 
-	// Append the tail of the worker's session output. This is a preview —
-	// `s` opens the full log with scrollback.
-	if workerTail := m.workerOutputTail(t.ID); workerTail != "" {
+	// Append the last few things the worker did. This is a preview — `s`
+	// opens the full activity feed. The tail comes from the transcript, so
+	// it says something while the worker is still running; the captured
+	// log only exists after it exits.
+	if tail := m.workerActivityTail(t.ID, m.width-2); len(tail) > 0 {
 		body = append(body, "",
-			styDim.Render("── worker output (tail — press s for the full session) ──"),
-			workerTail)
+			styDim.Render("── recent activity (press s for the full session) ──"))
+		body = append(body, tail...)
 	}
 
 	footer := styDim.Render("j/k scroll · n/p task · s session · esc back · q close")
@@ -1358,19 +1382,25 @@ func (m tuiModel) workerOutputLines(taskID string) []string {
 	return strings.Split(text, "\n")
 }
 
-// workerOutputTail reads the last ~30 lines of the worker's session log,
-// for the summary shown inside the task detail. The full log lives in the
-// session view.
-func (m tuiModel) workerOutputTail(taskID string) string {
+// workerActivityTail renders the last few things a worker did, for the
+// preview inside the task detail. It falls back to the final output for
+// runs old enough to have no transcript.
+func (m tuiModel) workerActivityTail(taskID string, width int) []string {
+	const tail = 12
+	if entries := m.workerActivity(taskID); len(entries) > 0 {
+		if len(entries) > tail {
+			entries = entries[len(entries)-tail:]
+		}
+		return renderTranscript(entries, width)
+	}
 	lines := m.workerOutputLines(taskID)
 	if len(lines) == 0 {
-		return ""
+		return nil
 	}
-	const tail = 30
 	if len(lines) > tail {
 		lines = lines[len(lines)-tail:]
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 // scrollWindow clamps a scroll offset to a body length and returns the

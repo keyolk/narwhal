@@ -71,19 +71,19 @@ func TestAttachKeyReportsAMissingSession(t *testing.T) {
 	}
 }
 
-func TestRunningWorkerExplainsTheEmptyLog(t *testing.T) {
-	// The captured log of a running --print worker is empty for the whole
-	// run. Saying "no session log" there is wrong and sends the user
-	// looking for a missing file.
+func TestRunningWorkerWithNoEventsSaysSo(t *testing.T) {
+	// A worker that has started but not yet written its first transcript
+	// entry must not read as "nothing here" — the pane is empty for a
+	// reason and the reason is temporary.
 	m := attachModel(t)
 	m.width, m.height = 100, 30
 	m.detail = detailSession
 
 	out := m.viewSessionDetail()
-	if strings.Contains(out, "no session log at") {
-		t.Errorf("a running worker was reported as a missing log:\n%s", out)
+	if strings.Contains(out, "no transcript found") {
+		t.Errorf("a running worker was reported as having no transcript:\n%s", out)
 	}
-	if !strings.Contains(out, "still running") {
+	if !strings.Contains(out, "has not written its first event") {
 		t.Errorf("the empty pane does not explain itself:\n%s", out)
 	}
 }
@@ -95,7 +95,7 @@ func TestUndispatchedTaskStillSaysSo(t *testing.T) {
 	m.detail = detailSession
 
 	out := m.viewSessionDetail()
-	if !strings.Contains(out, "not been dispatched") {
+	if !strings.Contains(out, "not dispatched yet") {
 		t.Errorf("a pending task should say it has not started:\n%s", out)
 	}
 }

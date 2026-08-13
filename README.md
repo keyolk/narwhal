@@ -267,9 +267,17 @@ dispatched immediately alongside them. Its job is to be listening while
 they work — a watcher on the radio, folding findings in as they land — and
 that only works if it is alive at the same time as its peers.
 
-The dependency is enforced at the other end: the broker refuses its
-`task-done` until every dep has finished, answering with `pending_deps` and
-posting an urgent message naming who is still running.
+The dependency is enforced at the other end: `task-done` blocks until every
+dep has finished, announcing the wait on the radio so a held worker is
+distinguishable from a hung one.
+
+Blocking rather than refusing is the part that took two tries. The first
+version answered `409` and told the worker to try again later. The worker
+read it, replied "I will keep the watcher up and wait" — and its process
+exited, because `claude --print` ends when the model's turn ends. Intending
+to wait is not waiting. The coordinator saw a dispatch with no `task-done`,
+retried, and the circuit breaker failed the task on the third attempt.
+Holding the HTTP request open is what actually keeps the worker alive.
 
 This replaced an instruction-only version, where the synthesis task had no
 deps at all and its assignment simply told it to wait. It did not. Across

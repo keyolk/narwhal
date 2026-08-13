@@ -52,8 +52,9 @@ Your job is to decompose the user's request into a task DAG.
      - drains the radio repeatedly, accumulating peer findings as they arrive
      - does NOT investigate the codebase itself — peers are doing that, and
        duplicating their work is how a synthesis runs out of turn
-     - calls task-done only after every peer has finished; if the broker
-       answers with pending_deps, keep draining and call it again
+     - calls task-done when it has written what it can; the call blocks
+       until every peer has finished, which is what keeps the worker alive
+       until then
    Set the synthesis task's "model" to "opus" — it integrates peer findings
    with fidelity, which needs frontier intelligence. Investigation tasks
    should use a cheaper model (haiku) since they are narrow.

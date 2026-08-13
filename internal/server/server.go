@@ -383,7 +383,8 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			return
 		}
 		var req struct {
-			Outcome string `json:"outcome"`
+			Outcome   string `json:"outcome"`
+			TimeoutMs int    `json:"timeout_ms"`
 		}
 		_ = decodeBody(r, &req)
 
@@ -395,23 +396,35 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		// synthesis worker stopped four messages before its peer posted
 		// its final summary, and nothing noticed.
 		//
-		// The refusal names who is outstanding so the worker can go back
-		// to waiting instead of guessing what went wrong.
+		// The call BLOCKS rather than refusing outright. A refusal was the
+		// first design and it failed in a way worth recording: the worker
+		// read it, said "I will keep the watcher up and wait", and then
+		// its turn ended. `claude --print` exits when the model stops
+		// producing output, so intending to wait is not waiting — the
+		// process died, the coordinator recorded a dispatch with no
+		// task-done, and the circuit breaker failed the task on the third
+		// try. Holding the HTTP request open keeps the worker's turn alive,
+		// which is the only thing that actually makes it wait.
 		if pending := run.PendingDeps(taskID); len(pending) > 0 {
 			run.PostMessage(broker.WorklogThread, "coordinator",
-				[]string{task.ID}, broker.PriorityUrgent,
-				fmt.Sprintf("NOT_DONE|%s|task-done refused: %s still running. "+
-					"Keep the watcher up and drain until every one has finished, "+
-					"then call task-done again.",
+				[]string{task.ID}, broker.PriorityNormal,
+				fmt.Sprintf("WAITING|%s|task-done is holding until %s finish.",
 					task.ID, strings.Join(pending, ", ")))
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":        "dependencies still running",
-				"task_id":      task.ID,
-				"pending_deps": pending,
-				"hint": "Your task depends on peers that have not finished. Keep " +
-					"draining the radio and call task-done again once they have.",
-			})
-			return
+
+			if remaining := s.awaitDeps(r, run, taskID, waitTimeout(req.TimeoutMs)); len(remaining) > 0 {
+				// Timed out with peers still running. Answer rather than
+				// hanging forever: a stuck peer must not take the
+				// synthesis worker down with it, and the worker can call
+				// again.
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":        "dependencies still running",
+					"task_id":      task.ID,
+					"pending_deps": remaining,
+					"hint": "Peers are still working. Call task-done again — it " +
+						"blocks until they finish.",
+				})
+				return
+			}
 		}
 
 		task.CompleteDispatch(req.Outcome, run)
@@ -421,6 +434,43 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		})
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+// waitTimeout bounds how long task-done holds the request open. The
+// default is generous because the thing being waited on is another agent
+// investigating a codebase, which takes minutes, not seconds.
+func waitTimeout(ms int) time.Duration {
+	if ms <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+// awaitDeps blocks until every dependency of taskID has finished, the
+// timeout elapses, or the client goes away. Returns whatever is still
+// outstanding — empty means the wait succeeded.
+//
+// Polling rather than a wake channel: a task reaching a terminal state is
+// not a radio event, and the two existing signals (message posted, watch
+// registered) do not fire for it. A second granularity is far finer than
+// the minutes these waits actually last.
+func (s *Server) awaitDeps(r *http.Request, run *broker.Run, taskID string, timeout time.Duration) []string {
+	deadline := time.Now().Add(timeout)
+	for {
+		pending := run.PendingDeps(taskID)
+		if len(pending) == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return pending
+		}
+		select {
+		case <-r.Context().Done():
+			// The worker hung up; nothing to answer.
+			return pending
+		case <-time.After(time.Second):
+		}
 	}
 }
 

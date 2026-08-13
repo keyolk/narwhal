@@ -323,13 +323,30 @@ three times it guessed early.
 - The coordinator dispatches a pending synthesis task without waiting for
   its deps, so it is alive and listening while its peers work (E8's real
   finding, which stands).
-- The broker refuses its `task-done` while any dep is unfinished, replying
-  `409` with `pending_deps` and posting an urgent radio message naming who
-  is outstanding.
+- `task-done` blocks until every dep has finished, announcing the wait on
+  the radio so a held worker is not mistaken for a hung one.
 
-The guarantee moves from something the worker must remember to do into
-something the runtime enforces. A failed dep counts as finished — waiting
-on a peer that will never post would strand the run.
+A failed dep counts as finished — waiting on a peer that will never post
+would strand the run.
+
+**The first fix did not work, for an instructive reason.** `task-done`
+initially *refused* — `409` with `pending_deps`, plus an urgent radio
+message telling the worker to keep draining and call again. An end-to-end
+run shows the worker receiving it and answering correctly:
+
+> `fact-a`가 끝날 때까지 워처를 유지하고 대기합니다. 워처가 메시지를 받으면
+> 재시작한 뒤 `task-done`을 다시 호출하겠습니다.
+
+Then its process exited. `claude --print` ends when the model's turn ends,
+so a worker that announces it will wait has, by announcing it, finished
+speaking and died. The coordinator recorded a dispatch with no `task-done`,
+retried, and the circuit breaker failed the task on the third attempt —
+taking the peer down with it when the run went terminal.
+
+The generalization: **you cannot make a `--print` worker wait by telling it
+to.** Anything a worker must do *later* has to be attached to a call it is
+making *now*. Blocking inside `task-done` holds the turn open, which is the
+only thing that holds the process open.
 
 **Method note.** The regression was invisible to the benchmark. E8 measured
 rubric coverage, and a synthesis written from 3 of 4 peers can still score

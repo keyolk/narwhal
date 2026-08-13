@@ -138,11 +138,15 @@ curl -s %s/state
 # usage: task-done <taskId> <outcome>
 # Mark a task as completed with the given outcome text.
 #
-# A refusal (409) is a real outcome, not a transport error: it means peers
-# this task depends on are still running. curl exits 0 on an HTTP error, so
-# the status is checked explicitly — otherwise the worker reads the refusal
-# body as success and stops, which is exactly the failure the gate exists
-# to prevent.
+# If the task has dependencies that are still running, this call BLOCKS
+# until they finish — that is the mechanism that keeps a synthesis task
+# from writing its answer early. Blocking here rather than returning and
+# asking the worker to retry is deliberate: a --print worker's process
+# exits when its turn ends, so a worker that is told to "wait and try
+# again" simply dies. Holding this request open holds the turn open.
+#
+# No --max-time: the wait is bounded by the server, and a client-side
+# timeout would defeat the whole point.
 set -euo pipefail
 TASK="$1"; OUTCOME="$2"
 BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")
@@ -151,8 +155,8 @@ OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
 CODE="${OUT##*$'\n'}"
 echo "${OUT%%$'\n'*}"
 if [ "$CODE" = "409" ]; then
-  echo "task-done REFUSED: peers listed in pending_deps are still running." >&2
-  echo "Keep your watcher up, keep draining, and call task-done again." >&2
+  echo "task-done timed out waiting for peers listed in pending_deps." >&2
+  echo "Call task-done again — it blocks until they finish." >&2
   exit 3
 fi
 if [ "$CODE" != "200" ]; then
@@ -328,12 +332,11 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "  bash %s/task-done %s \"summary of your findings\"\n\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "You MUST call task-done, otherwise the coordinator records a failed\n")
 	fmt.Fprintf(&b, "dispatch and retries your task.\n\n")
-	fmt.Fprintf(&b, "If your task depends on peers, task-done is REFUSED until they finish.\n")
-	fmt.Fprintf(&b, "The reply names who is still running:\n\n")
-	fmt.Fprintf(&b, "  {\"error\":\"dependencies still running\",\"pending_deps\":[\"task-2\"]}\n\n")
-	fmt.Fprintf(&b, "That is not an error you worked around — it means your answer would\n")
-	fmt.Fprintf(&b, "have been written from a partial picture. Keep the watcher up, keep\n")
-	fmt.Fprintf(&b, "draining, fold in what arrives, and call task-done again.\n\n")
+	fmt.Fprintf(&b, "If your task depends on peers, task-done BLOCKS until they finish.\n")
+	fmt.Fprintf(&b, "That is the intended behaviour, not a hang — call it when you have\n")
+	fmt.Fprintf(&b, "written what you can and let it hold. Do NOT decide to \"wait and call\n")
+	fmt.Fprintf(&b, "it later\": your process ends when your turn does, so a plan to wait\n")
+	fmt.Fprintf(&b, "is not waiting. Blocking inside task-done is what keeps you alive.\n\n")
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")

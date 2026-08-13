@@ -24,33 +24,40 @@ import (
 // daemonRunLister asks the daemon which runs it is hosting. An error means
 // "no daemon runs" rather than a failure: monitoring a batch run must still
 // work when the daemon was never started.
-func daemonRunLister() (string, []string, error) {
+func daemonRunLister() ([]store.LiveRun, error) {
 	info, err := nd.Status()
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(info.URL + "/api/v1/control/status")
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", nil, fmt.Errorf("daemon status %d", resp.StatusCode)
+		return nil, fmt.Errorf("daemon status %d", resp.StatusCode)
 	}
 	var payload struct {
 		Runs []struct {
-			RunID string `json:"run_id"`
+			RunID  string `json:"run_id"`
+			Prompt string `json:"prompt"`
+			CWD    string `json:"cwd"`
 		} `json:"runs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	ids := make([]string, 0, len(payload.Runs))
+	runs := make([]store.LiveRun, 0, len(payload.Runs))
 	for _, r := range payload.Runs {
-		ids = append(ids, r.RunID)
+		runs = append(runs, store.LiveRun{
+			RunID:     r.RunID,
+			BrokerURL: info.URL,
+			Prompt:    r.Prompt,
+			CWD:       r.CWD,
+		})
 	}
-	return info.URL, ids, nil
+	return runs, nil
 }
 
 func monitorCmd(args []string) {

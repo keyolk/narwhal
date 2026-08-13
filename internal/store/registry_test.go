@@ -115,8 +115,11 @@ func TestDiscoverIncludesDaemonRuns(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
 
-	lister := func() (string, []string, error) {
-		return "http://127.0.0.1:9999", []string{"daemon-run-1", "daemon-run-2"}, nil
+	lister := func() ([]LiveRun, error) {
+		return []LiveRun{
+			{RunID: "daemon-run-1", BrokerURL: "http://127.0.0.1:9999"},
+			{RunID: "daemon-run-2", BrokerURL: "http://127.0.0.1:9999"},
+		}, nil
 	}
 
 	entries := Discover(lister)
@@ -135,6 +138,34 @@ func TestDiscoverIncludesDaemonRuns(t *testing.T) {
 	}
 }
 
+func TestDiscoverKeepsDaemonRunPrompts(t *testing.T) {
+	// Regression: the picker showed six runs all labelled "(no prompt)"
+	// because the lister only carried run ids. The prompt and cwd are the
+	// only things that tell one run from another.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	lister := func() ([]LiveRun, error) {
+		return []LiveRun{{
+			RunID:     "daemon-run",
+			BrokerURL: "http://127.0.0.1:9999",
+			Prompt:    "audit the auth module",
+			CWD:       "/Users/x/src/repo",
+		}}, nil
+	}
+
+	entries := Discover(lister)
+	if len(entries) != 1 {
+		t.Fatalf("Discover = %d entries, want 1", len(entries))
+	}
+	if entries[0].Prompt != "audit the auth module" {
+		t.Errorf("prompt = %q, want it preserved", entries[0].Prompt)
+	}
+	if entries[0].CWD != "/Users/x/src/repo" {
+		t.Errorf("cwd = %q, want it preserved", entries[0].CWD)
+	}
+}
+
 func TestDiscoverMergesBatchAndDaemonRuns(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
@@ -142,8 +173,8 @@ func TestDiscoverMergesBatchAndDaemonRuns(t *testing.T) {
 	if err := RegisterLive(LiveRun{RunID: "batch-run", PID: os.Getpid(), BrokerURL: "http://127.0.0.1:1111"}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	lister := func() (string, []string, error) {
-		return "http://127.0.0.1:2222", []string{"daemon-run"}, nil
+	lister := func() ([]LiveRun, error) {
+		return []LiveRun{{RunID: "daemon-run", BrokerURL: "http://127.0.0.1:2222"}}, nil
 	}
 
 	entries := Discover(lister)
@@ -170,8 +201,8 @@ func TestDiscoverDoesNotDuplicate(t *testing.T) {
 	if err := RegisterLive(LiveRun{RunID: "shared", PID: os.Getpid(), BrokerURL: "http://127.0.0.1:1111"}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	lister := func() (string, []string, error) {
-		return "http://127.0.0.1:2222", []string{"shared"}, nil
+	lister := func() ([]LiveRun, error) {
+		return []LiveRun{{RunID: "shared", BrokerURL: "http://127.0.0.1:2222"}}, nil
 	}
 
 	entries := Discover(lister)
@@ -193,8 +224,8 @@ func TestDiscoverToleratesMissingDaemon(t *testing.T) {
 	if err := RegisterLive(LiveRun{RunID: "batch-only", PID: os.Getpid(), BrokerURL: "u"}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	lister := func() (string, []string, error) {
-		return "", nil, errNoDaemon
+	lister := func() ([]LiveRun, error) {
+		return nil, errNoDaemon
 	}
 
 	entries := Discover(lister)

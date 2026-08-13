@@ -139,7 +139,11 @@ func ListLive() []LiveRun {
 // DaemonRunLister reports the runs a daemon is currently hosting. The
 // concrete implementation lives in the caller to avoid an import cycle
 // (daemon depends on store, not the other way around).
-type DaemonRunLister func() (url string, runIDs []string, err error)
+//
+// It returns whole LiveRun values rather than bare ids: a run is identified
+// to the operator by its prompt and working directory, and a picker that
+// only has ids cannot tell six runs apart.
+type DaemonRunLister func() (runs []LiveRun, err error)
 
 // Discover returns every live run: batch runs from the registry file plus
 // runs hosted by the daemon.
@@ -154,7 +158,7 @@ func Discover(lister DaemonRunLister) []LiveRun {
 	if lister == nil {
 		return out
 	}
-	url, runIDs, err := lister()
+	daemonRuns, err := lister()
 	if err != nil {
 		return out
 	}
@@ -162,16 +166,13 @@ func Discover(lister DaemonRunLister) []LiveRun {
 	for _, e := range out {
 		seen[e.RunID] = true
 	}
-	for _, id := range runIDs {
-		if seen[id] {
+	for _, r := range daemonRuns {
+		if seen[r.RunID] {
 			continue
 		}
-		out = append(out, LiveRun{
-			RunID:     id,
-			BrokerURL: url,
-			// PID is the daemon's, not a per-run process; left zero so
-			// callers do not mistake it for a run-owned process.
-		})
+		// PID stays zero: it would be the daemon's, not a run-owned
+		// process, and callers must not mistake it for one.
+		out = append(out, r)
 	}
 	return out
 }

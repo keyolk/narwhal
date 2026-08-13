@@ -497,24 +497,44 @@ func TestPickerOpensAndSelects(t *testing.T) {
 	}
 }
 
-func TestPickerNotOfferedForASingleRun(t *testing.T) {
-	// With one run there is nothing to pick, and stealing 'r' would be
-	// surprising.
+func TestEscBacksOutToTheRunList(t *testing.T) {
+	// esc pairs with enter: enter digs into a run, esc backs out. It works
+	// with a single run too — a key that silently does nothing is worse
+	// than backing out to a one-line list.
 	m := testModel(1, 1)
-	m = press(m, "r")
-	if m.picker {
-		t.Fatal("picker should not open when only one run is live")
+	m = press(m, "esc")
+	if !m.picker {
+		t.Fatal("esc should back out to the run list")
 	}
 }
 
-func TestPickerViewListsRuns(t *testing.T) {
+func TestEscFromTheRunListQuits(t *testing.T) {
+	// From the top level there is nowhere further back to go.
 	m := multiRunModel(2)
 	m.picker = true
+	m = press(m, "esc")
+	if !m.quit {
+		t.Fatal("esc at the run list should quit")
+	}
+}
+
+func TestPickerViewIdentifiesRunsByPromptNotID(t *testing.T) {
+	// Regression: every row read "(no prompt)" and the run ids are
+	// timestamps, so six live runs were indistinguishable. What tells runs
+	// apart is when they started, where they run, and what they were asked.
+	m := multiRunModel(2)
+	m.runs[0].CWD = "/Users/x/src/myrepo"
+	m.runs[0].Prompt = "audit the auth module"
+	m.picker = true
+
 	out := m.View()
-	for _, want := range []string{"a-run", "b-run", "prompt a", "2 live runs"} {
+	for _, want := range []string{"audit the auth module", "prompt b", "2 live runs"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("picker view missing %q:\n%s", want, out)
 		}
+	}
+	if !strings.Contains(out, "myrepo") {
+		t.Fatalf("picker view does not show the working directory:\n%s", out)
 	}
 }
 

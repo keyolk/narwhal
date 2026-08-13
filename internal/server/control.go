@@ -225,6 +225,8 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 			}
 			runs = append(runs, map[string]any{
 				"run_id":         id,
+				"prompt":         snap.Prompt,
+				"cwd":            run.CWD,
 				"state":          string(snap.State),
 				"tasks":          len(snap.Tasks),
 				"messages":       len(snap.Messages),

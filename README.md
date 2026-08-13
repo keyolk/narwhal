@@ -106,7 +106,7 @@ Graph                                    Radio (2)
             └─────────────┘
 
 done 1  running 1  ready 0  failed 0  [following]
-tab pane · j/k move · enter detail · s session · b boxes · f follow · q quit
+tab pane · j/k move · enter detail · s session · esc runs · b boxes · q quit
 ```
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
@@ -138,19 +138,21 @@ live. Opening the monitor with several running shows a picker:
 ```
 Narwhal  3 live runs
 
-▸ s1786471179534-1       daemon
-    account routing 경로의 일관성 검증
-  s1786472797321-2       daemon
+▸ 08-13 13:58  /tmp/nw-picker                daemon
     auth 모듈 보안 감사
-  s1786473001-3          daemon
+  08-13 13:58  .../keyolk/narwhal            daemon
     monitor TUI 리팩터링 계획
+  08-12 23:03  —                             daemon
+    (no prompt — plan-1786543427573)
 ```
 
-Runs are named by timestamp, so the prompt is what actually distinguishes
-them. Inside a run the header shows its position (`[2/3]`), `[` and `]` move
-between runs, and `r` returns to the picker. The list refreshes while the
-monitor is open — a run started afterwards appears, a finished one drops
-out — and the selection follows the run being watched rather than its index.
+A run id is just a timestamp, so the list is keyed on what actually tells
+runs apart: when it started, an abbreviated working directory, and the
+prompt. `enter` digs into a run and `esc` backs out to the list — `[` and
+`]` also step between runs from inside one, and the header shows the
+position (`[2/3]`). The list refreshes while the monitor is open — a run
+started afterwards appears, a finished one drops out — and the selection
+follows the run being watched rather than its index.
 `narwhal monitor --run <id>` opens one directly.
 
 Graph glyphs are plain box-drawing, so they render in any font. Task and
@@ -174,10 +176,9 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `s` | Open the selected task's Claude session (full output, follows live) |
 | `b` | Toggle between box and lane graph views |
 | `[` / `]` | Previous / next live run |
-| `r` | Open the run picker |
+| `esc` | Back out: detail → run, run → run list, list → quit |
 | `n` / `p` | Next / previous item inside the detail view |
 | `f` | Re-arm tail following after manual navigation |
-| `esc` | Close the detail view |
 | `q` | Quit |
 
 The radio list follows the newest message until you navigate manually —

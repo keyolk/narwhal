@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -264,12 +265,10 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.picker = false
 		return m, cmd
 	case "esc":
-		// Only leave the picker if there is a run to go back to.
-		if len(m.runs) > 0 {
-			cmd := m.selectRun(m.runCur)
-			m.picker = false
-			return m, cmd
-		}
+		// esc backs out. From the top level there is nowhere further to go,
+		// so it quits rather than sitting inert.
+		m.quit = true
+		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -335,12 +334,12 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Boxes read as a diagram; lanes fit more tasks on screen. Which
 		// one is better depends on the graph, so it is a toggle.
 		m.boxMode = !m.boxMode
-	case "r":
-		// Back to the run list. Cheap to reach because an interactive
-		// session accumulates runs and switching is a common move.
-		if len(m.runs) > 1 {
-			m.picker = true
-		}
+	case "r", "esc", "h", "left":
+		// Back to the run list. esc pairs with enter: enter digs into a run,
+		// esc backs out of it. Allowed even with a single run — backing out
+		// to a one-line list is less surprising than a key that silently
+		// does nothing.
+		m.picker = true
 	case "]", "shift+right":
 		if m.runCur+1 < len(m.runs) {
 			// selectRun mutates m, so run it before m is copied into the
@@ -555,6 +554,40 @@ var (
 //
 // It shows more than ids: an interactive session names runs by timestamp,
 // so the prompt is the only thing that distinguishes them at a glance.
+// runStartTime is when a run began. Batch runs record StartedAt; daemon
+// runs do not, but every run id ends in the millisecond timestamp it was
+// minted from ("s1786472797321-1", "plan-1786543427573"), so the id is a
+// usable fallback rather than showing the epoch.
+func runStartTime(r store.LiveRun) time.Time {
+	if r.StartedAt > 0 {
+		return time.Unix(r.StartedAt, 0)
+	}
+	digits := strings.TrimLeft(r.RunID, "abcdefghijklmnopqrstuvwxyz-")
+	if i := strings.IndexByte(digits, '-'); i > 0 {
+		digits = digits[:i]
+	}
+	if ms, err := strconv.ParseInt(digits, 10, 64); err == nil && ms > 1e12 {
+		return time.UnixMilli(ms)
+	}
+	return time.Time{}
+}
+
+// abbreviatePath shortens a working directory to something that fits a
+// column: home becomes ~, and a deep path keeps its last two segments.
+func abbreviatePath(p string) string {
+	if p == "" {
+		return "—"
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		p = "~" + strings.TrimPrefix(p, home)
+	}
+	parts := strings.Split(p, string(filepath.Separator))
+	if len(parts) <= 3 {
+		return p
+	}
+	return ".../" + strings.Join(parts[len(parts)-2:], "/")
+}
+
 func (m tuiModel) viewPicker() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n\n",
@@ -574,26 +607,33 @@ func (m tuiModel) viewPicker() string {
 
 	for i := start; i < len(m.runs) && i < start+visible; i++ {
 		r := m.runs[i]
-		origin := styDim.Render("daemon")
+
+		// The run id is a timestamp — useless for telling runs apart. What
+		// identifies a run to the operator is when it started, where it is
+		// working, and what it was asked to do.
+		when := runStartTime(r).Format("01-02 15:04")
+		where := abbreviatePath(r.CWD)
+		origin := "daemon"
 		if r.PID > 0 {
-			origin = styDim.Render(fmt.Sprintf("pid %d", r.PID))
-		}
-		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
-		if prompt == "" {
-			prompt = styDim.Render("(no prompt)")
+			origin = fmt.Sprintf("pid %d", r.PID)
 		}
 
-		head := fmt.Sprintf("%-22s %s", r.RunID, origin)
+		head := fmt.Sprintf("%-11s  %-28s  %s", when, where, styDim.Render(origin))
 		line := "  " + head
 		if i == m.runCur {
-			line = stySel.Render(padRight("▸ "+head, m.width-1))
+			line = stySel.Render(padRight("▸ "+when+"  "+where+"  "+origin, m.width-1))
 		}
 		b.WriteString(truncate(line, m.width) + "\n")
+
+		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
+		if prompt == "" {
+			prompt = "(no prompt — " + r.RunID + ")"
+		}
 		b.WriteString(styDim.Render(truncate("    "+prompt, m.width)) + "\n")
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styDim.Render("j/k move · enter open · q quit"))
+	b.WriteString(styDim.Render("j/k move · enter open · esc quit"))
 	return b.String()
 }
 
@@ -649,9 +689,9 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := "tab pane · j/k move · enter detail · s session · b boxes · f follow · q quit"
+	keys := "tab pane · j/k move · enter detail · s session · esc runs · b boxes · q quit"
 	if len(m.runs) > 1 {
-		keys = "tab pane · j/k move · enter detail · s session · [ ] run · r runs · q quit"
+		keys = "tab pane · j/k move · enter detail · s session · esc runs · [ ] run · q quit"
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }

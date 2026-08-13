@@ -15,6 +15,8 @@
 package launcher
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,6 +47,10 @@ type Launcher struct {
 
 	mu      sync.Mutex
 	workers map[string]*exec.Cmd
+	// sessions maps agent id → the Claude session UUID its worker runs
+	// under, so a caller in this process can resume one without reading
+	// the agent directory back.
+	sessions map[string]string
 }
 
 // New creates a Launcher for the given run.
@@ -328,6 +334,46 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	return b.String()
 }
 
+// newSessionUUID mints the UUID a worker's Claude session will be recorded
+// under. Claude Code accepts --session-id, so choosing it here rather than
+// letting Claude pick means the monitor can hand the user an exact
+// `claude --resume <id>` instead of guessing which transcript in
+// ~/.claude/projects belongs to which worker.
+//
+// Format is UUIDv4 as Claude requires; the version and variant bits are set
+// explicitly because a plain random hex string is rejected.
+func newSessionUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+}
+
+// recordSession writes the worker's Claude session id next to its other
+// artifacts. The monitor is a separate process — it polls the broker over
+// HTTP and never shares memory with the launcher — so the id has to reach
+// it through the filesystem or not at all.
+func (l *Launcher) recordSession(agentID, sessionID string) {
+	path := filepath.Join(l.sessionDir, "agents", agentID, "claude-session-id")
+	if err := os.WriteFile(path, []byte(sessionID+"\n"), 0o600); err != nil {
+		// Not worth failing a launch over: the worker runs fine, the
+		// monitor just cannot offer to resume it.
+		fmt.Fprintf(os.Stderr, "[launcher] warning: record session id for %s: %v\n", agentID, err)
+	}
+}
+
+// SessionID returns the Claude session UUID a worker was launched with,
+// or "" if it has not been launched or the id could not be minted.
+func (l *Launcher) SessionID(agentID string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessions[agentID]
+}
+
 // Launch starts a worker as a `ccproxy claude --print` process.
 // It returns immediately; the process runs autonomously and writes its
 // final output to the task's dispatch record via the broker API.
@@ -352,6 +398,26 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	args := []string{"claude", "--print",
 		"--permission-mode", "bypassPermissions",
 		"--append-system-prompt", string(instructions),
+	}
+	// Pin the session id so the worker's transcript can be found later.
+	// A --print worker writes nothing to stdout until it finishes, so the
+	// captured log is empty for the whole run and there is nothing to
+	// attach to; the transcript under ~/.claude/projects is the live
+	// record. Claude picks a random UUID unless told otherwise, which
+	// would leave the monitor guessing which of several transcripts in a
+	// shared cwd belongs to which worker.
+	//
+	// A failure here is not fatal: the worker still runs, it just cannot
+	// be resumed by id.
+	if sid, err := newSessionUUID(); err == nil {
+		args = append(args, "--session-id", sid)
+		l.mu.Lock()
+		if l.sessions == nil {
+			l.sessions = map[string]string{}
+		}
+		l.sessions[cfg.AgentID] = sid
+		l.mu.Unlock()
+		l.recordSession(cfg.AgentID, sid)
 	}
 	// Per-worker model override, then the launcher default, then ccproxy's
 	// own account rotation. The planner picks the model; workers default to

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -256,13 +257,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = nil
+		// The task cursor is an index into a list sorted by id, so a task
+		// added mid-run — split-request, or the planner still creating
+		// tasks — can sort above the selection and shift it. Remember what
+		// was selected and put the cursor back on it, the same way the run
+		// picker anchors on a run id rather than a row number.
+		selected, hadSelection := m.selectedTask()
 		m.snap = msg.snap
 		m.agents = msg.agents
+		if hadSelection {
+			m.restoreTaskCursor(selected.ID)
+		}
 		if m.followTail && len(m.snap.Messages) > 0 {
 			m.radioCur = len(m.snap.Messages) - 1
 		}
 		m.clampCursors()
 		return m, nil
+
+	case attachDoneMsg:
+		// The attached session took over the terminal; Bubble Tea has just
+		// restored the TUI. Poll immediately rather than waiting out the
+		// tick, since whatever happened in there may have moved the run on.
+		if msg.err != nil {
+			m.err = fmt.Errorf("attach: %w", msg.err)
+		}
+		return m, m.poll()
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -355,6 +374,16 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScroll = 0
 			m.sessionTail = true
 		}
+	case "a":
+		// Attach to the worker's live Claude session. s shows what the
+		// worker has written; a puts you inside the session itself, which
+		// for a running worker is the only place anything is visible.
+		if t, ok := m.selectedTask(); ok {
+			if cmd := m.attachToSession(t.ID); cmd != nil {
+				return m, cmd
+			}
+			m.err = fmt.Errorf("no recorded session for %s — the run predates session pinning, or the task has not started", t.ID)
+		}
 	case "f":
 		// Re-arm tail following after manual navigation.
 		m.followTail = true
@@ -446,6 +475,16 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case detailSession:
 			m.detail = detailTask
 			m.detailScroll = 0
+		}
+	case "a":
+		// Attach from the detail view too: this is where you find out the
+		// captured log is empty, and where wanting the live session next
+		// is most likely.
+		if t, ok := m.selectedTask(); ok {
+			if cmd := m.attachToSession(t.ID); cmd != nil {
+				return m, cmd
+			}
+			m.err = fmt.Errorf("no recorded session for %s — the run predates session pinning, or the task has not started", t.ID)
 		}
 	case "n":
 		// Walk to the next item without leaving the detail view.
@@ -573,6 +612,26 @@ func (m tuiModel) boxNodeOrder() []int {
 		}
 	}
 	return order
+}
+
+// restoreTaskCursor puts the cursor back on the task with the given id
+// after a poll. Tasks arrive mid-run — a worker's split-request, or the
+// planner still creating them — and the list is sorted by id, so a new
+// task can land above the selection and shift every index below it.
+// Anchoring on the id keeps the cursor on what the user was reading.
+//
+// A task that has disappeared leaves the cursor where it is; the index is
+// clamped afterwards, which is the least surprising place to land.
+func (m *tuiModel) restoreTaskCursor(id string) {
+	if id == "" {
+		return
+	}
+	for i, r := range m.graphRows() {
+		if r.id == id {
+			m.taskCur = i
+			return
+		}
+	}
 }
 
 func (m *tuiModel) clampCursors() {
@@ -818,9 +877,9 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := "tab pane · hjkl move · enter detail · s session · esc runs · b boxes · q quit"
+	keys := "tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit"
 	if len(m.runs) > 1 {
-		keys = "tab pane · hjkl move · enter detail · s session · esc runs · [ ] run · q quit"
+		keys = "tab pane · hjkl move · enter detail · s session · a attach · [ ] run · q quit"
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }
@@ -1104,10 +1163,18 @@ func (m tuiModel) viewSessionDetail() string {
 	body := m.workerOutputLines(t.ID)
 	if len(body) == 0 {
 		// Say which is true rather than leaving a blank pane: a task that
-		// has not started yet and a run whose logs live elsewhere look the
-		// same from here otherwise.
-		reason := "no session log yet — this task has not been dispatched"
-		if t.Dispatches > 0 {
+		// has not started yet and a running one look the same from here
+		// otherwise, and for a running worker the answer is not "no log"
+		// but "the log only arrives at the end".
+		var reason string
+		switch {
+		case t.Dispatches == 0:
+			reason = "no session log yet — this task has not been dispatched"
+		case t.State == broker.TaskDispatched:
+			reason = "this worker is still running. `claude --print` writes its " +
+				"output only when it finishes, so this pane stays empty until " +
+				"then — press a to open the live session instead."
+		default:
 			reason = "no session log at " + m.sessionLogPath(t.ID)
 		}
 		body = wrapText(reason, m.width-2)
@@ -1218,6 +1285,58 @@ func (m tuiModel) sessionLogPath(taskID string) string {
 	}
 	return filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
 		"agents", "worker-"+taskID, "claude-output.txt")
+}
+
+// sessionIDPath returns where the launcher records a worker's Claude
+// session UUID.
+func (m tuiModel) sessionIDPath(taskID string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
+		"agents", "worker-"+taskID, "claude-session-id")
+}
+
+// workerSessionID reads the Claude session UUID a worker runs under, or ""
+// when it is not recorded — a run started before the launcher began pinning
+// session ids, or a task that has not been dispatched.
+func (m tuiModel) workerSessionID(taskID string) string {
+	path := m.sessionIDPath(taskID)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// attachDoneMsg reports back when an attached session exits.
+type attachDoneMsg struct{ err error }
+
+// attachToSession suspends the monitor and opens the worker's Claude
+// session, restoring the TUI when it exits.
+//
+// Opening the real session is the only way to watch a running worker:
+// `claude --print` buffers its output until it finishes, so the captured
+// log is empty for the whole run, while the session transcript is written
+// continuously. --fork-session leaves the worker's own conversation
+// untouched — attaching is for watching, and sharing the session id would
+// have the monitor and the worker appending to one transcript.
+func (m tuiModel) attachToSession(taskID string) tea.Cmd {
+	sid := m.workerSessionID(taskID)
+	if sid == "" {
+		return nil
+	}
+	c := exec.Command("claude", "--resume", sid, "--fork-session")
+	// The transcript is filed under the directory the worker ran in, so
+	// resuming from anywhere else does not find it.
+	c.Dir = m.live.CWD
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return attachDoneMsg{err: err}
+	})
 }
 
 // workerOutputLines reads a worker's whole session log, newest last.

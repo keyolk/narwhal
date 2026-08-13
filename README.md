@@ -87,9 +87,17 @@ long — that is the point of them — so the list truncates and the detail view
 is where you actually read one.
 
 `s` opens the selected task's Claude session: the worker's full output with
-scrollback, pinned to the newest line until you scroll up. This is how you
-watch a worker work rather than inferring it from what it has posted —
-`n`/`p` walk between workers without leaving the view.
+scrollback, pinned to the newest line until you scroll up. `n`/`p` walk
+between workers without leaving the view.
+
+`a` attaches to the worker's live Claude session. This is the one that
+matters while a worker is still running: a `claude --print` worker buffers
+its output until it exits, so the captured log is empty for the whole run
+and `s` has nothing to show. The launcher pins each worker's session id with
+`--session-id`, so attaching resumes exactly that worker's conversation
+rather than guessing which transcript belongs to whom. It opens forked
+(`--fork-session`) — watching a worker must not append to the transcript the
+worker is still writing.
 
 ```
 Narwhal  s1786471179534-1  ▶ active
@@ -106,7 +114,7 @@ Graph                                    Radio (2)
             └─────────────┘
 
 done 1  running 1  ready 0  failed 0  [following]
-tab pane · hjkl move · enter detail · s session · esc runs · b boxes · q quit
+tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
 ```
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
@@ -179,7 +187,8 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
-| `s` | Open the selected task's Claude session (full output, follows live) |
+| `s` | Open the selected task's Claude session output (full, follows live) |
+| `a` | Attach to the worker's live Claude session (forked) |
 | `b` | Toggle between box and lane graph views |
 | `[` / `]` | Previous / next live run |
 | `esc` | Back out: detail → run, run → run list, list → quit |
@@ -216,6 +225,7 @@ narwhal
 ├── launcher
 │   ├── each worker: ccproxy claude --print --permission-mode bypassPermissions
 │   ├── per-agent identity token (endpoint = identity)
+│   ├── pinned --session-id, so the monitor can attach to a live worker
 │   └── wrapper scripts (send/drain/watch/state/task-done/split)
 │
 ├── store

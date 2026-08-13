@@ -19,7 +19,6 @@ package coordinator
 import (
 	"fmt"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -280,7 +279,7 @@ func (c *Coordinator) reapFinishedWorkers() {
 		// A worker that exits still holding file claims would lock those
 		// paths for the rest of the run, so release them here rather than
 		// trusting every exit path to have called FILE_RELEASE.
-		c.releaseTaskFiles(et.taskID)
+		c.run.ReleaseTaskFiles(et.taskID)
 		state := task.CurrentState()
 		if state == broker.TaskCompleted || state == broker.TaskFailed {
 			c.mu.Lock()
@@ -311,159 +310,18 @@ func (c *Coordinator) reapFinishedWorkers() {
 	}
 }
 
-// releaseTaskFiles gives up every path a task still holds. Called when a
-// worker exits, so a forgotten FILE_RELEASE cannot strand a path for the
-// rest of the run.
-func (c *Coordinator) releaseTaskFiles(taskID string) {
-	var held []string
-	for path, owner := range c.run.FileClaims() {
-		if owner == taskID {
-			held = append(held, path)
-		}
-	}
-	if len(held) == 0 {
-		return
-	}
-	c.run.ReleaseFiles(taskID, held)
-	log.Printf("[coordinator] released %d file(s) held by exited %s", len(held), taskID)
-}
-
-// intakeSplitRequests scans the planning thread for split-request messages
-// the coordinator has not yet processed and creates the requested tasks.
+// intakeSplitRequests and intakeGraphRequests delegate to the Run.
 //
-// This is the only path by which the graph grows mid-run. Existing tasks
-// are never edited; new ones are appended with their deps. The coordinator
-// tracks the last processed message cursor so it does not re-create a task
-// on every tick.
+// The logic used to live here, which meant it applied to batch runs only:
+// a worker on an interactive run could split a task or claim a file and the
+// message would sit on the radio unread. Both dispatchers now call the same
+// implementation on the shared object.
 func (c *Coordinator) intakeSplitRequests() {
-	msgs := c.run.MessagesSince(c.splitCursor)
-	for _, m := range msgs {
-		if m.ThreadID != "planning" {
-			continue
-		}
-		taskID, name, assignment, deps, ok := broker.ParseSplitRequest(m.Content)
-		if !ok {
-			continue
-		}
-		if c.run.GetTask(taskID) != nil {
-			// Already created (e.g. two workers requested the same split).
-			continue
-		}
-		c.run.AddTask(taskID, name, assignment, deps)
-		log.Printf("[coordinator] split-request accepted: %s (%s) deps=%v from %s",
-			taskID, name, deps, m.Sender)
-	}
-	if len(msgs) > 0 {
-		c.splitCursor = msgs[len(msgs)-1].Seq
-	}
+	c.splitCursor = c.run.IntakeSplitRequests(c.splitCursor)
 }
 
-// intakeGraphRequests scans every thread for the messages that mutate the
-// run: dep-edge changes, file claims, and model escalations. Unlike
-// split-request, these can come on any thread — a worker discovers a
-// relationship, is about to write a file, or finds its area too hard, and
-// posts to worklog rather than planning.
 func (c *Coordinator) intakeGraphRequests() {
-	msgs := c.run.MessagesSince(c.depCursor)
-	for _, m := range msgs {
-		if action, taskID, deps, ok := broker.ParseDepEdgeRequest(m.Content); ok {
-			c.applyDepEdge(action, taskID, deps, m.Sender)
-			continue
-		}
-		if action, taskID, paths, ok := broker.ParseFileClaimRequest(m.Content); ok {
-			c.applyFileClaim(action, taskID, paths, m.Sender)
-			continue
-		}
-		if taskID, model, reason, ok := broker.ParseModelEscalateRequest(m.Content); ok {
-			c.applyModelEscalation(taskID, model, reason, m.Sender)
-		}
-	}
-	if len(msgs) > 0 {
-		c.depCursor = msgs[len(msgs)-1].Seq
-	}
-}
-
-// applyModelEscalation retries a task on a stronger model. The worker asks
-// for this when its area turns out to need more than the tier it was given;
-// without it, a cheap worker's thin answer is the run's final answer.
-//
-// The escalation reuses the dispatch-failure path so the circuit breaker
-// still bounds retries: a task cannot escalate its way past
-// MaxDispatchFailures attempts.
-func (c *Coordinator) applyModelEscalation(taskID, model, reason, sender string) {
-	task := c.run.GetTask(taskID)
-	if task == nil {
-		log.Printf("[coordinator] escalation for unknown task %s, ignoring", taskID)
-		return
-	}
-
-	current := task.CurrentModel()
-	target := model
-	if target == "" {
-		next, ok := broker.NextModelTier(current)
-		if !ok {
-			log.Printf("[coordinator] %s already at the strongest tier (%s); not escalating",
-				taskID, current)
-			return
-		}
-		target = next
-	}
-	if target == current {
-		log.Printf("[coordinator] %s already on %s; not escalating", taskID, target)
-		return
-	}
-
-	task.SetModel(target)
-	log.Printf("[coordinator] escalating %s: %s → %s (%s, from %s)",
-		taskID, current, target, reason, sender)
-
-	// Only force a retry if the task is still in flight. A completed task
-	// that asks to escalate has already produced its answer; re-running it
-	// would discard work the synthesis task may already have drained.
-	if task.CurrentState() == broker.TaskDispatched {
-		task.FailDispatch("escalated to "+target+": "+reason, c.run)
-	}
-}
-
-func (c *Coordinator) applyDepEdge(action, taskID string, deps []string, sender string) {
-	task := c.run.GetTask(taskID)
-	if task == nil {
-		log.Printf("[coordinator] dep-edge for unknown task %s, ignoring", taskID)
-		return
-	}
-	switch action {
-	case broker.DepAddPrefix:
-		task.AddDep(deps, c.run)
-		log.Printf("[coordinator] dep-edge added: %s ← %v from %s", taskID, deps, sender)
-	case broker.DepRemovePrefix:
-		task.RemoveDep(deps)
-		log.Printf("[coordinator] dep-edge removed: %s ⊘ %v from %s", taskID, deps, sender)
-	}
-}
-
-// applyFileClaim records or releases file ownership. A conflicting claim is
-// answered on the radio rather than silently dropped: the requesting worker
-// has to know who holds the file, or it will go ahead and overwrite.
-func (c *Coordinator) applyFileClaim(action, taskID string, paths []string, sender string) {
-	switch action {
-	case broker.FileClaimPrefix:
-		conflicts := c.run.ClaimFiles(taskID, paths)
-		if len(conflicts) == 0 {
-			log.Printf("[coordinator] files claimed by %s: %v", taskID, paths)
-			return
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "FILE_CONFLICT: these paths are already held by another task.\n")
-		for p, owner := range conflicts {
-			fmt.Fprintf(&b, "  %s → held by %s\n", p, owner)
-		}
-		fmt.Fprintf(&b, "Coordinate on the radio before writing; do not overwrite.")
-		c.run.PostMessage("worklog", "coordinator", []string{sender}, broker.PriorityUrgent, b.String())
-		log.Printf("[coordinator] file conflict for %s: %v", taskID, conflicts)
-	case broker.FileReleasePrefix:
-		c.run.ReleaseFiles(taskID, paths)
-		log.Printf("[coordinator] files released by %s: %v", taskID, paths)
-	}
+	c.depCursor = c.run.IntakeGraphRequests(c.depCursor)
 }
 
 // hasReadyOrRunning reports whether the graph can still make progress.

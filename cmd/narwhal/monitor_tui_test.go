@@ -303,13 +303,22 @@ func TestDetailViewShowsFullContent(t *testing.T) {
 	}
 }
 
-func TestSplitRequestIsTaggedInList(t *testing.T) {
+func TestSplitRequestIsLegibleInList(t *testing.T) {
+	// A split request used to be tagged "[split]" with the wire format
+	// after it. It now reads as a sentence, but the requirement is the
+	// same: the row must say a task was created, and the id must be in it.
 	m := testModel(1, 1)
 	m.width, m.height = 100, 24
 	m.snap.Messages[0].Content = broker.FormatSplitRequest("t9", "extra", "do extra", nil)
 	row := m.radioRow(m.snap.Messages[0], 100, false)
-	if !strings.Contains(row, "split") {
-		t.Fatalf("split request not tagged: %s", row)
+	if !strings.Contains(row, "new task") {
+		t.Fatalf("split request is not identifiable: %s", row)
+	}
+	if !strings.Contains(row, "t9") {
+		t.Fatalf("split request does not name the new task: %s", row)
+	}
+	if strings.Contains(row, "SPLIT_REQUEST") {
+		t.Fatalf("the wire format leaked into the row: %s", row)
 	}
 }
 

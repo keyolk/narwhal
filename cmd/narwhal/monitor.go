@@ -40,9 +40,10 @@ func daemonRunLister() ([]store.LiveRun, error) {
 	}
 	var payload struct {
 		Runs []struct {
-			RunID  string `json:"run_id"`
-			Prompt string `json:"prompt"`
-			CWD    string `json:"cwd"`
+			RunID     string `json:"run_id"`
+			Prompt    string `json:"prompt"`
+			CWD       string `json:"cwd"`
+			StartedAt int64  `json:"started_at"`
 		} `json:"runs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -55,6 +56,7 @@ func daemonRunLister() ([]store.LiveRun, error) {
 			BrokerURL: info.URL,
 			Prompt:    r.Prompt,
 			CWD:       r.CWD,
+			StartedAt: r.StartedAt,
 		})
 	}
 	return runs, nil

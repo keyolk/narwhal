@@ -227,6 +227,7 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 				"run_id":         id,
 				"prompt":         snap.Prompt,
 				"cwd":            run.CWD,
+				"started_at":     run.CreatedAt.Unix(),
 				"state":          string(snap.State),
 				"tasks":          len(snap.Tasks),
 				"messages":       len(snap.Messages),

@@ -174,6 +174,16 @@ func Discover(lister DaemonRunLister) []LiveRun {
 		// process, and callers must not mistake it for one.
 		out = append(out, r)
 	}
+	// Newest first, and stable: the monitor re-discovers every second, so
+	// an order that shifts between polls makes the picker flicker and moves
+	// rows out from under the cursor.
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i].StartedAt, out[j].StartedAt
+		if a != b {
+			return a > b
+		}
+		return out[i].RunID > out[j].RunID
+	})
 	return out
 }
 

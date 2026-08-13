@@ -122,6 +122,9 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 	if cur >= 0 && cur < len(runs) {
 		m.live = runs[cur]
 	}
+	// Order the initial list the same way a poll would, so the first frame
+	// matches every frame after it.
+	m.mergeRuns(runs)
 	return m
 }
 
@@ -170,9 +173,22 @@ func (m tuiModel) poll() tea.Cmd {
 // selection out from under them.
 func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	watching := m.live.RunID
-	m.runs = runs
 
-	for i, r := range runs {
+	// Order the list here rather than trusting the source. The daemon holds
+	// its runs in a map, and Go randomizes map iteration, so an unsorted
+	// list reshuffles on every poll — the picker flickers and rows move out
+	// from under the cursor.
+	sorted := append([]store.LiveRun(nil), runs...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i].StartedAt, sorted[j].StartedAt
+		if a != b {
+			return a > b
+		}
+		return sorted[i].RunID > sorted[j].RunID
+	})
+	m.runs = sorted
+
+	for i, r := range m.runs {
 		if r.RunID == watching {
 			m.runCur = i
 			return
@@ -181,8 +197,8 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	// The watched run ended. Stay put rather than jumping elsewhere: its
 	// final state is still worth reading, and the broker keeps answering
 	// until the daemon drops it.
-	if m.runCur >= len(runs) {
-		m.runCur = len(runs) - 1
+	if m.runCur >= len(m.runs) {
+		m.runCur = len(m.runs) - 1
 	}
 	if m.runCur < 0 {
 		m.runCur = 0
@@ -215,6 +231,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		// In the picker only the run list is on screen, so polling the
+		// watched run's snapshot every second is work nobody sees.
+		if m.picker {
+			return m, tea.Batch(m.refreshRuns(), tick(m.interval))
+		}
 		return m, tea.Batch(m.poll(), m.refreshRuns(), tick(m.interval))
 
 	case runsMsg:

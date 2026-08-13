@@ -397,6 +397,10 @@ func multiRunModel(n int) tuiModel {
 			RunID:     string(rune('a'+i)) + "-run",
 			BrokerURL: "http://x",
 			Prompt:    "prompt " + string(rune('a'+i)),
+			// Descending, so the newest-first ordering the picker applies
+			// leaves them in a-run, b-run, c-run order and the tests can
+			// talk about positions.
+			StartedAt: int64(1000 - i),
 		}
 	}
 	m := newTUIModel(runs, 0, time.Second, false)
@@ -558,9 +562,9 @@ func TestMergeRunsKeepsWatchedRun(t *testing.T) {
 	m.runCur = 2
 	m.live = m.runs[2]
 
-	// A new run appears at the front, shifting every index.
+	// A newer run appears at the front, shifting every index.
 	refreshed := append([]store.LiveRun{
-		{RunID: "z-run", BrokerURL: "http://x"},
+		{RunID: "z-run", BrokerURL: "http://x", StartedAt: 2000},
 	}, m.runs...)
 	m.mergeRuns(refreshed)
 

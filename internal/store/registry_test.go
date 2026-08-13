@@ -277,3 +277,29 @@ func TestSummarizeRunsLabelsDaemonRuns(t *testing.T) {
 }
 
 var errNoDaemon = fmt.Errorf("daemon not running")
+
+func TestDiscoverReturnsNewestFirst(t *testing.T) {
+	// The monitor re-discovers every second; an order that shifts between
+	// polls makes the run picker flicker.
+	tmp := t.TempDir()
+	t.Setenv("HOME", tmp)
+
+	lister := func() ([]LiveRun, error) {
+		return []LiveRun{
+			{RunID: "mid", BrokerURL: "u", StartedAt: 200},
+			{RunID: "oldest", BrokerURL: "u", StartedAt: 100},
+			{RunID: "newest", BrokerURL: "u", StartedAt: 300},
+		}, nil
+	}
+
+	got := Discover(lister)
+	want := []string{"newest", "mid", "oldest"}
+	if len(got) != len(want) {
+		t.Fatalf("Discover = %d entries, want %d", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].RunID != id {
+			t.Fatalf("entry %d = %q, want %q", i, got[i].RunID, id)
+		}
+	}
+}

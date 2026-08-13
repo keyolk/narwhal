@@ -9,6 +9,7 @@ package daemon
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -81,6 +82,9 @@ func (s *Session) ActiveRuns() []string {
 	for id := range s.launchers {
 		out = append(out, id)
 	}
+	// Sorted, because Go randomizes map iteration: an unsorted list makes
+	// the monitor's run picker reshuffle on every poll.
+	sort.Strings(out)
 	return out
 }
 

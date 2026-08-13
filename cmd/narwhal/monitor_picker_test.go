@@ -52,3 +52,40 @@ func TestRunStartTimeIsZeroForAnUnparseableID(t *testing.T) {
 		t.Fatalf("runStartTime = %v, want zero for an id with no timestamp", got)
 	}
 }
+
+func TestPickerIsStableWhenPollsArriveShuffled(t *testing.T) {
+	// The daemon keeps runs in a map and Go randomizes map iteration, so
+	// consecutive polls can deliver the same runs in a different order.
+	// Rendering that order directly makes the picker flicker once a second
+	// and moves rows out from under the cursor.
+	runs := []store.LiveRun{
+		{RunID: "s3-1", BrokerURL: "u", Prompt: "c", CWD: "/x", StartedAt: 300},
+		{RunID: "s1-1", BrokerURL: "u", Prompt: "a", CWD: "/x", StartedAt: 100},
+		{RunID: "s2-1", BrokerURL: "u", Prompt: "b", CWD: "/x", StartedAt: 200},
+	}
+	m := newTUIModel(runs, 0, time.Second, true)
+	m.width, m.height = 100, 24
+
+	first := m.View()
+	for _, order := range [][]int{{2, 0, 1}, {1, 2, 0}, {0, 1, 2}} {
+		shuffled := make([]store.LiveRun, 0, len(runs))
+		for _, i := range order {
+			shuffled = append(shuffled, runs[i])
+		}
+		m.mergeRuns(shuffled)
+		if got := m.View(); got != first {
+			t.Fatalf("picker changed between polls:\nfirst:\n%s\ngot:\n%s", first, got)
+		}
+	}
+}
+
+func TestPickerListsNewestRunFirst(t *testing.T) {
+	runs := []store.LiveRun{
+		{RunID: "old", BrokerURL: "u", Prompt: "older", StartedAt: 100},
+		{RunID: "new", BrokerURL: "u", Prompt: "newer", StartedAt: 900},
+	}
+	m := newTUIModel(runs, 0, time.Second, true)
+	if m.runs[0].RunID != "new" {
+		t.Fatalf("first row = %q, want the newest run", m.runs[0].RunID)
+	}
+}

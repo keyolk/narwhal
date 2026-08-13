@@ -33,6 +33,15 @@ type iconSet struct {
 	runDone     string
 	runFailed   string
 	runCanceled string
+
+	// Field labels in the inspector. An icon in the label column reads
+	// faster than a repeated word when the same rows recur for every node.
+	fieldModel    string
+	fieldDeps     string
+	fieldBlocks   string
+	fieldDispatch string
+	fieldActivity string
+	fieldFiles    string
 }
 
 // nerdIcons uses Nerd Font private-use codepoints.
@@ -52,6 +61,14 @@ var nerdIcons = iconSet{
 	runDone:     "",
 	runFailed:   "",
 	runCanceled: "",
+
+	fieldModel:    "\U000f0c81", // nf-md-brain
+	fieldDeps:     "\uf148",     // nf-fa-level_up
+	fieldBlocks:   "\uf149",     // nf-fa-level_down
+	fieldDispatch: "\uf01e",     // nf-fa-repeat
+	fieldActivity: "\uf120",     // nf-fa-terminal
+	fieldFiles:    "\uf016",     // nf-fa-file
+
 }
 
 // unicodeIcons is the portable fallback: BMP symbols every modern terminal
@@ -72,6 +89,13 @@ var unicodeIcons = iconSet{
 	runDone:     "✓",
 	runFailed:   "✗",
 	runCanceled: "⊘",
+
+	fieldModel:    "\u25c6",
+	fieldDeps:     "\u2191",
+	fieldBlocks:   "\u2193",
+	fieldDispatch: "\u21bb",
+	fieldActivity: "\u00bb",
+	fieldFiles:    "\u25a4",
 }
 
 // icons is the active set, resolved once at startup.
@@ -109,9 +133,37 @@ func hasNerdFont() bool {
 			return true
 		}
 	}
-	switch strings.ToLower(os.Getenv("TERM_PROGRAM")) {
+	return isNerdFontTerminal(os.Getenv("TERM_PROGRAM"), os.Getenv("TERM"))
+}
+
+// isNerdFontTerminal reports whether the terminal is one known to ship a
+// patched font.
+//
+// TERM_PROGRAM alone is not enough: inside tmux it reads "tmux", which
+// hides whatever is actually drawing the pixels. That is not an edge case —
+// it is how this gets used most of the time, and it meant a user running
+// Ghostty with Hack Nerd Font Mono still got the fallback glyphs.
+//
+// Two signals survive tmux. TERM is set per-terminal on the outer side and
+// carries the name through ("xterm-ghostty"), and terminals that launch
+// with a shell integration leave their own variables in the environment,
+// which children inherit. Either is enough.
+func isNerdFontTerminal(termProgram, term string) bool {
+	switch strings.ToLower(termProgram) {
 	case "ghostty", "wezterm":
 		return true
+	}
+	t := strings.ToLower(term)
+	if strings.Contains(t, "ghostty") || strings.Contains(t, "wezterm") {
+		return true
+	}
+	// Ghostty and WezTerm both export marker variables from their shell
+	// integration. Presence says the session started under that terminal
+	// even when TERM and TERM_PROGRAM have been rewritten by a multiplexer.
+	for _, key := range []string{"GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR", "WEZTERM_EXECUTABLE"} {
+		if os.Getenv(key) != "" {
+			return true
+		}
 	}
 	return false
 }

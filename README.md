@@ -81,10 +81,11 @@ narwhal show               # list recent runs
 narwhal show <run-id>      # full snapshot
 ```
 
-The monitor is an interactive TUI: a task list on the left, radio traffic on
-the right, and a detail pane for reading a full message. Radio messages are
-long — that is the point of them — so the list truncates and the detail view
-is where you actually read one.
+The monitor is an interactive TUI: the task graph on the left, a node
+inspector and the radio channel stacked on the right, and detail views for
+reading a full message or watching a worker. Radio messages are long — that
+is the point of them — so the list truncates and the detail view is where
+you actually read one.
 
 `s` opens the selected task's session: a live activity feed of what the
 worker is doing — its reasoning, each tool call, and a clipped result —
@@ -120,19 +121,44 @@ watching a worker must not append to the transcript it is still writing.
 Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
-Graph                                    Radio (2)
-        ┌──────────┐  ┌────────┐           1 · auth →api cross-path asymmetries...
-        │ ▶ api ×2 │  │ ✓ auth │           2 ! api URGENT: provider lock releases...
-        └─────┬────┘  └────┬───┘
-              └────┬───────┘
-                   │
-            ┌──────┴──────┐
-            │ · synthesis │
-            └─────────────┘
+Graph ───────────────────────────────── Node ──────────────────────────────────
+        ┌──────────┐  ┌────────┐        ▶ api (api-audit)  dispatched
+        │ ▶ api ×2 │  │ ✓ auth │         ◆ model haiku
+        └─────┬────┘  └────┬───┘         ↓ blocks synthesis
+              └────┬───────┘             ↻ tries 2 of 3
+                   │                     ▤ holds api/router.go
+            ┌──────┴──────┐              » recent
+            │ · synthesis │                14:34:28 → Bash  send worklog "..."
+            └─────────────┘                14:34:31 · worklog 게시 완료.
 
-done 1  running 1  ready 0  failed 0  [following]
+                                        Radio (4) ─────────────────────────────
+                                        03:12:00 · auth cross-path asymmetries…
+                                        03:13:34 ! api URGENT: provider lock re…
+                                        03:15:30 · coordinator →synthesis ⋮ tas…
+                                        03:16:00 · api ⋮ claims api/router.go
+
+done 1  running 2  ready 0  failed 0  [following]
 tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
 ```
+
+The right side follows the graph cursor. Moving between nodes used to change
+nothing else on screen, so reading one meant opening a detail view and
+backing out of it — heavy for a question like *what is this waiting on*. The
+inspector answers those while you navigate: model, unfinished dependencies
+(not every edge — the graph already draws those), what the task blocks,
+retries, files it holds, and the tail of what its worker has been doing.
+
+Below it the radio stays the **whole** channel rather than being filtered to
+the selected node. A channel is what everyone is talking on, and plenty of
+traffic belongs to no node at all. Rows carry a timestamp, because a sequence
+number says the order but only the clock says whether two findings landed
+together or an hour apart.
+
+Coordination traffic is rendered as sentences. Workers speak a pipe-delimited
+wire format — `FILE_CLAIM|api|internal/api/router.go` — which is right for a
+shell script to emit and wrong to put on screen, where it reads as noise
+until you split it on pipes yourself. It shows as `⋮ claims api/router.go`,
+dimmed so it recedes behind a worker's actual finding.
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
 `dgraph`. Boxes are sized to their label and centered, so there are margins
@@ -185,8 +211,8 @@ started afterwards appears, a finished one drops out — and the selection
 follows the run being watched rather than its index.
 `narwhal monitor --run <id>` opens one directly.
 
-Graph glyphs are plain box-drawing, so they render in any font. Task and
-priority icons use Nerd Font when the terminal has one:
+Graph glyphs are plain box-drawing, so they render in any font. Task,
+priority and inspector field icons use Nerd Font when the terminal has one:
 
 ```bash
 NARWHAL_ICONS=nerd     # force Nerd Font icons
@@ -194,7 +220,11 @@ NARWHAL_ICONS=unicode  # force the portable set
 ```
 
 Detection is conservative — an unrecognized terminal gets portable glyphs,
-since guessing wrong toward Nerd Font fills the pane with tofu boxes.
+since guessing wrong toward Nerd Font fills the pane with tofu boxes. It
+does look through tmux, though: `TERM_PROGRAM` reads "tmux" inside a
+session, which hid the terminal actually drawing the pixels and left users
+on fallback glyphs for as long as they stayed in tmux. `TERM` and the
+terminal's own shell-integration variables survive, and either is enough.
 
 | Key | Action |
 |---|---|

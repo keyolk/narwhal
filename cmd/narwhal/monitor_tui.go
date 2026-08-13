@@ -686,11 +686,47 @@ func (m tuiModel) View() string {
 		rightWidth = 20
 	}
 
+	// The right side is split: the top follows the graph cursor, the bottom
+	// is the radio. Moving the cursor in the graph used to change nothing on
+	// the right, so reading a node meant opening a detail view and backing
+	// out of it — for what is usually a one-glance question. The radio stays
+	// the whole channel rather than being filtered to the selected node:
+	// a channel is the thing everyone is talking on, and messages nobody
+	// @-mentions (PLAN_DONE, broadcasts) belong to no node at all.
+	inspectHeight := m.inspectorHeight(bodyHeight)
+	radioHeight := bodyHeight - inspectHeight
+	if radioHeight < 3 {
+		radioHeight, inspectHeight = bodyHeight, 0
+	}
+
 	left := m.viewTasks(leftWidth, bodyHeight)
-	right := m.viewRadio(rightWidth, bodyHeight)
+	var right string
+	if inspectHeight > 0 {
+		right = lipgloss.JoinVertical(lipgloss.Left,
+			m.viewInspector(rightWidth, inspectHeight),
+			m.viewRadio(rightWidth, radioHeight))
+	} else {
+		right = m.viewRadio(rightWidth, radioHeight)
+	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
 	return header + "\n" + body + "\n" + footer
+}
+
+// inspectorHeight splits the right pane between the node inspector and the
+// radio. The inspector is a fixed summary — a handful of fields plus a few
+// activity lines — so it takes what it needs and the radio, which grows
+// without bound, takes the rest. On a short terminal it is dropped entirely
+// rather than squeezing the radio to nothing.
+func (m tuiModel) inspectorHeight(bodyHeight int) int {
+	if len(m.snap.Tasks) == 0 || bodyHeight < 14 {
+		return 0
+	}
+	const want = 9
+	if bodyHeight-want < 5 {
+		return 0
+	}
+	return want
 }
 
 // graphPaneWidth is the width the graph pane is rendered at. Navigation
@@ -884,12 +920,7 @@ func (m tuiModel) viewFooter() string {
 }
 
 func (m tuiModel) viewTasks(width, height int) string {
-	title := "Graph"
-	if m.focus == focusTasks {
-		title = styPanel.Render(title)
-	} else {
-		title = styDim.Render(title)
-	}
+	title := paneTitle("Graph", m.focus == focusTasks, width)
 
 	if m.boxMode {
 		return m.viewTasksBoxed(title, width, height)
@@ -1045,13 +1076,32 @@ func (m tuiModel) graphRows() []graphRow {
 	return layoutGraph(m.sortedTasks()).render()
 }
 
-func (m tuiModel) viewRadio(width, height int) string {
-	title := fmt.Sprintf("Radio (%d)", len(m.snap.Messages))
-	if m.focus == focusRadio {
-		title = styPanel.Render(title)
-	} else {
-		title = styDim.Render(title)
+// paneTitle renders a pane header as a labelled rule.
+//
+// With three panes on screen the eye needs to see where one ends and the
+// next begins, and which one has the keys. A bare word could not do that:
+// the graph, the inspector and the radio all started with an unadorned
+// title and the boundary between the stacked right-hand panes was
+// invisible. The rule draws the boundary; bold-underline versus dim says
+// which pane is focused.
+//
+// The rule is one column short of the pane so a full-width line cannot
+// push into its neighbour when the panes are joined horizontally.
+func paneTitle(label string, focused bool, width int) string {
+	styled := styDim.Render(label)
+	if focused {
+		styled = styPanel.Render(label)
 	}
+	rule := width - displayWidth(label) - 2
+	if rule < 1 {
+		return styled
+	}
+	return styled + " " + styDim.Render(strings.Repeat("─", rule))
+}
+
+func (m tuiModel) viewRadio(width, height int) string {
+	title := paneTitle(fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
+		m.focus == focusRadio, width)
 
 	rows := make([]string, 0, height)
 	rows = append(rows, title)
@@ -1077,18 +1127,29 @@ func (m tuiModel) viewRadio(width, height int) string {
 func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string {
 	prioCh, prioStyle := priorityGlyph(msg.Priority)
 	sender := shortName(msg.Sender)
-	prefix := fmt.Sprintf("%3d %s %s ", msg.Seq, prioCh, sender)
+	// The time is what turns a list into a channel: it says whether two
+	// findings landed together or an hour apart, which the sequence number
+	// alone cannot.
+	stamp := msg.CreatedAt.Format("15:04:05")
+	prefix := fmt.Sprintf("%s %s %s ", stamp, prioCh, sender)
 
-	// The mention/split markers are short and fixed; keeping them unstyled
-	// in the row body avoids re-styling a fragment truncation cut in half.
+	// The mention marker is short and fixed; keeping it unstyled in the row
+	// body avoids re-styling a fragment truncation cut in half.
 	var body strings.Builder
 	if len(msg.Mentions) > 0 {
 		body.WriteString("→" + strings.Join(msg.Mentions, ",") + " ")
 	}
-	if _, _, _, _, ok := broker.ParseSplitRequest(msg.Content); ok {
-		body.WriteString("[split] ")
+	// Protocol messages are a wire format, not prose. Rendered raw they
+	// read as noise — FILE_CLAIM|api|internal/api/router.go tells you a
+	// worker claimed a file only after you split it on pipes yourself.
+	summary, isProtocol := radioSummary(msg.Content)
+	if isProtocol {
+		// These summaries lead with the task they concern, which is
+		// usually the sender: "api  ⋮ api claims router.go" says it twice.
+		summary = strings.TrimPrefix(summary, sender+" ")
+		body.WriteString("⋮ ")
 	}
-	body.WriteString(strings.ReplaceAll(msg.Content, "\n", " "))
+	body.WriteString(summary)
 
 	rest := truncate(body.String(), width-displayWidth(prefix))
 
@@ -1096,8 +1157,13 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 		// A reversed row reads better without competing colors inside it.
 		return stySel.Render(padRight(prefix+rest, width))
 	}
-	return fmt.Sprintf("%3d %s %s %s",
-		msg.Seq, prioStyle.Render(prioCh), styBlue.Render(sender), rest)
+	if isProtocol {
+		// Coordination traffic is context for the prose around it, so it
+		// recedes rather than competing with a worker's actual finding.
+		rest = styDim.Render(rest)
+	}
+	return fmt.Sprintf("%s %s %s %s",
+		styDim.Render(stamp), prioStyle.Render(prioCh), styBlue.Render(sender), rest)
 }
 
 func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {

@@ -293,7 +293,7 @@ func (c *Coordinator) reapFinishedWorkers() {
 		// radio — a worker that did its job but forgot the task-done call
 		// should not be retried and waste another 10 minutes. The synthesis
 		// task can still drain whatever the worker posted.
-		if c.workerPostedToRadio(et.agentID) {
+		if c.run.AgentPostedToRadio(et.agentID) {
 			log.Printf("[coordinator] %s exited without task-done but posted to radio; marking complete", et.taskID)
 			task.CompleteDispatch("completed via radio activity", c.run)
 			c.mu.Lock()
@@ -326,20 +326,6 @@ func (c *Coordinator) releaseTaskFiles(taskID string) {
 	}
 	c.run.ReleaseFiles(taskID, held)
 	log.Printf("[coordinator] released %d file(s) held by exited %s", len(held), taskID)
-}
-
-// workerPostedToRadio returns true if the agent sent any message to the run's
-// radio channel. A worker that posted findings but forgot to call task-done
-// still produced usable output — the synthesis task can drain it — so the
-// coordinator marks the task complete rather than retrying and wasting
-// another full worker run.
-func (c *Coordinator) workerPostedToRadio(agentID string) bool {
-	for _, m := range c.run.MessagesSince(0) {
-		if m.Sender == agentID {
-			return true
-		}
-	}
-	return false
 }
 
 // intakeSplitRequests scans the planning thread for split-request messages

@@ -126,6 +126,16 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 		case broker.TaskCompleted, broker.TaskFailed:
 			// Worker declared its own outcome; nothing to record.
 		default:
+			// A worker that posted findings did its job even if it never
+			// called task-done — retrying it would redo work already on
+			// the radio, and on the third retry the breaker would fail a
+			// task whose output exists.
+			if run.AgentPostedToRadio("worker-" + task.ID) {
+				log.Printf("[dispatch] %s/%s exited without task-done but posted to radio; marking complete",
+					runID, task.ID)
+				task.CompleteDispatch("completed via radio activity", run)
+				continue
+			}
 			log.Printf("[dispatch] %s/%s exited without task-done; recording failure",
 				runID, task.ID)
 			task.FailDispatch("worker exited without calling task-done", run)

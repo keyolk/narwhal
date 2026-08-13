@@ -597,6 +597,27 @@ func isSynthesisName(name, assignment string) bool {
 	return strings.Contains(strings.ToLower(assignment), "synthesis task")
 }
 
+// AgentPostedToRadio reports whether an agent sent any message to the
+// run's radio channel.
+//
+// A worker that posted findings but exited without calling task-done still
+// produced usable output — peers and the synthesis task can drain it — so
+// the dispatcher marks the task complete rather than retrying and spending
+// another full worker run on work already done.
+//
+// This lives on the Run because both dispatchers need it. The check
+// existed on the batch coordinator only, and the interactive path failed
+// tasks whose workers had posted their findings — the same
+// one-dispatcher-knows-the-rule split that DispatchableTasks had.
+func (r *Run) AgentPostedToRadio(agentID string) bool {
+	for _, m := range r.MessagesSince(0) {
+		if m.Sender == agentID {
+			return true
+		}
+	}
+	return false
+}
+
 // GetTask returns a task by id within the run.
 func (r *Run) GetTask(id string) *Task {
 	r.mu.RLock()

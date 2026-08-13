@@ -349,6 +349,7 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ DAG dependency-driven readiness
 - ✓ Parallel dispatch with concurrency cap
 - ✓ Circuit breaker (3 failures → task failed)
+- ✓ Radio activity counts as completion (a worker that posted but forgot task-done is not retried)
 - ✓ Diamond dependency (A→B, A→C, B+C→D)
 - ✓ Partial failure → dependents unreached
 - ✓ Dynamic task addition (split-request, immutable existing tasks)

@@ -1,6 +1,7 @@
 # Binaries
 /narwhal
 /narwhal-*
+/narwhal.tmp
 /dist/
 
 # State
@@ -13,5 +14,6 @@
 
 # Go
 /vendor/
+/coverage.out
 bench/repos/
 bench/results/

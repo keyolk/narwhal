@@ -27,7 +27,7 @@ session. Your session stays in the conversation; workers run headless
 underneath and report back.
 
 ```bash
-go build -o ~/.local/bin/narwhal ./cmd/narwhal
+make install   # builds and puts narwhal on PATH (~/.local/bin)
 claude mcp add --scope user narwhal narwhal mcp
 ```
 
@@ -349,6 +349,21 @@ Smart — haiku investigate + opus synthesis — at 94.9% rubric coverage,
 above Narwhal's 92.3% and B0's 89.7%, at wall-clock below B0 (52 min vs
 58 min). See [`docs/benchmark.md`](docs/benchmark.md) and
 [`docs/experiments.md`](docs/experiments.md) §E7–E8.
+
+## Development
+
+```bash
+make            # list targets
+make install    # build with a version stamp, replace the binary on PATH
+make check      # go vet + tests under the race detector
+make cover      # coverage summary
+make daemon-restart   # reinstall, then restart the daemon detached
+```
+
+`make install` removes the old binary before copying the new one. macOS
+will not overwrite a running Mach-O in place, and the failure mode is not
+an error message — the binary is left in a state where every invocation
+dies with SIGKILL.
 
 ## License
 

@@ -21,6 +21,14 @@ import (
 	"github.com/keyolk/narwhal/internal/store"
 )
 
+// version is stamped at build time by the Makefile:
+//
+//	-ldflags "-X main.version=$(git describe --tags --always --dirty)"
+//
+// A plain `go build` leaves it as "dev", which is the honest answer for a
+// binary built without that stamp.
+var version = "dev"
+
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
@@ -43,7 +51,7 @@ func main() {
 	case "experiment":
 		experimentCmd(os.Args[2:])
 	case "version":
-		fmt.Println("narwhal dev")
+		fmt.Println("narwhal " + version)
 	case "-h", "--help", "help":
 		printUsage()
 	default:

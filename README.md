@@ -106,7 +106,7 @@ Graph                                    Radio (2)
             └─────────────┘
 
 done 1  running 1  ready 0  failed 0  [following]
-tab pane · j/k move · enter detail · s session · esc runs · b boxes · q quit
+tab pane · hjkl move · enter detail · s session · esc runs · b boxes · q quit
 ```
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
@@ -116,6 +116,11 @@ when they do not. A fan-out or fan-in is drawn as one shape — a single
 horizontal bar — rather than as independent edges that would overwrite each
 other, and a run that would otherwise cut through a wrapped row detours
 through the margin.
+
+The graph is two-dimensional, so navigation is too: `h` and `l` step between
+boxes in the order they are drawn, row by row and left to right. Backing out
+of the graph is `esc`, not `h` — a direction key inside a diagram should
+move, not exit.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 
@@ -170,6 +175,7 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 |---|---|
 | `tab` | Switch between the graph and radio panes |
 | `j` / `k` | Move the cursor (also `↓` / `↑`) |
+| `h` / `l` | Move between boxes in the graph (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |

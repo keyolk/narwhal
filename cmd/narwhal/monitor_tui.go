@@ -363,7 +363,25 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Boxes read as a diagram; lanes fit more tasks on screen. Which
 		// one is better depends on the graph, so it is a toggle.
 		m.boxMode = !m.boxMode
-	case "r", "esc", "h", "left":
+	case "h", "left":
+		// Inside the graph, h/l navigate the diagram: the box left or right
+		// of the selected one. The graph is two-dimensional, so a direction
+		// key has a direction to mean here — making h back out to the run
+		// list would leave the diagram the one place where an arrow key
+		// exits instead of moving. From the radio, which is a flat list with
+		// no horizontal axis, h/l step between panes.
+		if m.focus == focusTasks {
+			m.moveSibling(-1)
+		} else {
+			m.focus = focusTasks
+		}
+	case "l", "right":
+		if m.focus == focusTasks {
+			m.moveSibling(1)
+		} else {
+			m.focus = focusRadio
+		}
+	case "r", "esc":
 		// Back to the run list. esc pairs with enter: enter digs into a run,
 		// esc backs out of it. Allowed even with a single run — backing out
 		// to a one-line list is less surprising than a key that silently
@@ -496,6 +514,67 @@ func (m *tuiModel) jumpToEnd() {
 	m.clampCursors()
 }
 
+// moveSibling walks the graph horizontally: to the box left or right of the
+// selected one in the order the boxes are drawn. In the box view the graph
+// is two-dimensional, so h/l are a navigation axis in their own right rather
+// than a synonym for "back out" — leaving the graph on h would make the
+// diagram the one place where a direction key means "exit".
+func (m *tuiModel) moveSibling(delta int) {
+	if m.focus != focusTasks {
+		return
+	}
+	order := m.boxNodeOrder()
+	if len(order) < 2 {
+		return
+	}
+	at := -1
+	for i, n := range order {
+		if n == m.taskCur {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return
+	}
+	next := at + delta
+	if next < 0 || next >= len(order) {
+		return
+	}
+	m.taskCur = order[next]
+	m.clampCursors()
+}
+
+// boxNodeOrder is every task in the order its box is drawn: row by row, and
+// left to right within a row. This is reading order on screen, which is what
+// horizontal movement should follow — the layout order the cursor indexes is
+// by layer and id, and on a wrapped row those two disagree.
+//
+// Outside the box view the graph is a vertical list with no horizontal axis,
+// so reading order is just layout order and h/l behave like k/j.
+func (m tuiModel) boxNodeOrder() []int {
+	if !m.boxMode {
+		order := make([]int, len(m.snap.Tasks))
+		for i := range order {
+			order[i] = i
+		}
+		return order
+	}
+	rows := m.boxRows(m.graphPaneWidth())
+	var order []int
+	seen := map[int]bool{}
+	for _, r := range rows {
+		for _, s := range r.spans {
+			if seen[s.node] {
+				continue
+			}
+			seen[s.node] = true
+			order = append(order, s.node)
+		}
+	}
+	return order
+}
+
 func (m *tuiModel) clampCursors() {
 	if m.taskCur < 0 {
 		m.taskCur = 0
@@ -542,19 +621,7 @@ func (m tuiModel) View() string {
 		bodyHeight = 3
 	}
 
-	// Boxes need room for two borders plus a readable label, so the graph
-	// pane gets a wider floor in box mode than the lane gutter needs.
-	leftWidth := m.width / 3
-	minLeft, maxLeft := 24, 44
-	if m.boxMode {
-		minLeft, maxLeft = 30, 52
-	}
-	if leftWidth < minLeft {
-		leftWidth = minLeft
-	}
-	if leftWidth > maxLeft {
-		leftWidth = maxLeft
-	}
+	leftWidth := m.graphPaneWidth()
 	rightWidth := m.width - leftWidth - 1
 	if rightWidth < 20 {
 		rightWidth = 20
@@ -565,6 +632,28 @@ func (m tuiModel) View() string {
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
 	return header + "\n" + body + "\n" + footer
+}
+
+// graphPaneWidth is the width the graph pane is rendered at. Navigation
+// needs it too: moving between sibling boxes means asking the layout which
+// boxes share a row, and the layout depends on how wide the pane is. If the
+// two disagreed, `l` would step to a box that is not on screen where the
+// user sees it.
+func (m tuiModel) graphPaneWidth() int {
+	// Boxes need room for two borders plus a readable label, so the graph
+	// pane gets a wider floor in box mode than the lane gutter needs.
+	w := m.width / 3
+	minLeft, maxLeft := 24, 44
+	if m.boxMode {
+		minLeft, maxLeft = 30, 52
+	}
+	if w < minLeft {
+		w = minLeft
+	}
+	if w > maxLeft {
+		w = maxLeft
+	}
+	return w
 }
 
 var (
@@ -729,9 +818,9 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := "tab pane · j/k move · enter detail · s session · esc runs · b boxes · q quit"
+	keys := "tab pane · hjkl move · enter detail · s session · esc runs · b boxes · q quit"
 	if len(m.runs) > 1 {
-		keys = "tab pane · j/k move · enter detail · s session · esc runs · [ ] run · q quit"
+		keys = "tab pane · hjkl move · enter detail · s session · esc runs · [ ] run · q quit"
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }

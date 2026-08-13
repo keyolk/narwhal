@@ -26,7 +26,7 @@ func TestFileClaimIsRecorded(t *testing.T) {
 	run.PostMessage("worklog", "worker-task-1", nil, broker.PriorityNormal,
 		broker.FormatFileClaimRequest(broker.FileClaimPrefix, "task-1", []string{"a.go"}))
 
-	c.intakeDepEdgeRequests()
+	c.intakeGraphRequests()
 
 	if owner := run.FileOwner("a.go"); owner != "task-1" {
 		t.Fatalf("FileOwner = %q, want task-1", owner)
@@ -42,7 +42,7 @@ func TestConflictingClaimIsAnsweredOnTheRadio(t *testing.T) {
 	run.PostMessage("worklog", "worker-task-2", nil, broker.PriorityNormal,
 		broker.FormatFileClaimRequest(broker.FileClaimPrefix, "task-2", []string{"shared.go"}))
 
-	c.intakeDepEdgeRequests()
+	c.intakeGraphRequests()
 
 	var reply *broker.Message
 	for _, m := range run.MessagesSince(0) {
@@ -74,7 +74,7 @@ func TestFileReleaseFreesThePath(t *testing.T) {
 	run.PostMessage("worklog", "worker-task-1", nil, broker.PriorityNormal,
 		broker.FormatFileClaimRequest(broker.FileReleasePrefix, "task-1", []string{"a.go"}))
 
-	c.intakeDepEdgeRequests()
+	c.intakeGraphRequests()
 
 	if owner := run.FileOwner("a.go"); owner != "" {
 		t.Fatalf("path still held after release: %q", owner)

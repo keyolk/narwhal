@@ -168,7 +168,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 			return
 		}
 		t := run.AddTask(req.ID, req.Name, req.Assignment, req.Deps)
-		t.Model = req.Model
+		t.SetModel(req.Model)
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":    t.ID,
 			"state": string(t.State),

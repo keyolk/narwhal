@@ -138,7 +138,7 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		}
 
 		task := run.AddTask(taskID, name, spec.Assignment, spec.Deps)
-		task.Model = spec.Model
+		task.SetModel(spec.Model)
 
 		note := "queued; the dispatcher will launch it shortly"
 		if task.CurrentState() != broker.TaskReady {

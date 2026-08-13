@@ -195,6 +195,19 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
+	"escalate": fmt.Sprintf(`#!/bin/bash
+# usage: escalate "<taskId>" "<model|empty>" "<reason>"
+# Ask the coordinator to retry this task on a stronger model. Use when the
+# area turns out to need more than the tier you were given — a thin answer
+# from a model that cannot do the work is worse than a retry.
+# Leave the model empty to move one tier up (haiku → sonnet → opus).
+set -euo pipefail
+TASK="$1"; MODEL="${2:-}"; REASON="${3:-}"
+BODY="MODEL_ESCALATE|$TASK|$MODEL|$REASON"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"urgent"}))' "$BODY")"
+`, base),
 	}
 
 	for name, content := range scripts {
@@ -268,6 +281,10 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "- bash %s/file-release %s \"<path1,path2,...>\"\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "    Give up files you are done with. Your claims are released when you\n")
 	fmt.Fprintf(&b, "    exit, but releasing early unblocks a waiting peer.\n")
+	fmt.Fprintf(&b, "- bash %s/escalate %s \"\" \"<reason>\"\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "    Ask to be retried on a stronger model. Use when the area needs more\n")
+	fmt.Fprintf(&b, "    than the tier you were given — a thin answer from a model that cannot\n")
+	fmt.Fprintf(&b, "    do the work is worse than a retry. Say concretely what exceeded you.\n")
 	fmt.Fprintf(&b, "\n## Passive Awareness (CRITICAL)\n\n")
 	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
 	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)

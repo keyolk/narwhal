@@ -125,7 +125,7 @@ func (c *Coordinator) Run() Result {
 
 		c.reapFinishedWorkers()
 		c.intakeSplitRequests()
-		c.intakeDepEdgeRequests()
+		c.intakeGraphRequests()
 		dispatched := c.dispatchReady()
 
 		c.mu.Lock()
@@ -214,7 +214,7 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 		AgentID:    agentID,
 		TaskID:     task.ID,
 		Assignment: task.Assignment,
-		Model:      task.Model,
+		Model:      task.CurrentModel(),
 	}
 	// The synthesis task integrates peer findings — it needs frontier
 	// intelligence even when the investigation workers do not. Apply the
@@ -380,11 +380,12 @@ func (c *Coordinator) intakeSplitRequests() {
 	}
 }
 
-// intakeDepEdgeRequests scans every thread for the graph-mutating messages
-// the coordinator has not yet processed: dep-edge changes and file claims.
-// Unlike split-request, these can come on any thread — a worker discovers a
-// relationship or is about to write a file and posts to worklog, not planning.
-func (c *Coordinator) intakeDepEdgeRequests() {
+// intakeGraphRequests scans every thread for the messages that mutate the
+// run: dep-edge changes, file claims, and model escalations. Unlike
+// split-request, these can come on any thread — a worker discovers a
+// relationship, is about to write a file, or finds its area too hard, and
+// posts to worklog rather than planning.
+func (c *Coordinator) intakeGraphRequests() {
 	msgs := c.run.MessagesSince(c.depCursor)
 	for _, m := range msgs {
 		if action, taskID, deps, ok := broker.ParseDepEdgeRequest(m.Content); ok {
@@ -393,10 +394,56 @@ func (c *Coordinator) intakeDepEdgeRequests() {
 		}
 		if action, taskID, paths, ok := broker.ParseFileClaimRequest(m.Content); ok {
 			c.applyFileClaim(action, taskID, paths, m.Sender)
+			continue
+		}
+		if taskID, model, reason, ok := broker.ParseModelEscalateRequest(m.Content); ok {
+			c.applyModelEscalation(taskID, model, reason, m.Sender)
 		}
 	}
 	if len(msgs) > 0 {
 		c.depCursor = msgs[len(msgs)-1].Seq
+	}
+}
+
+// applyModelEscalation retries a task on a stronger model. The worker asks
+// for this when its area turns out to need more than the tier it was given;
+// without it, a cheap worker's thin answer is the run's final answer.
+//
+// The escalation reuses the dispatch-failure path so the circuit breaker
+// still bounds retries: a task cannot escalate its way past
+// MaxDispatchFailures attempts.
+func (c *Coordinator) applyModelEscalation(taskID, model, reason, sender string) {
+	task := c.run.GetTask(taskID)
+	if task == nil {
+		log.Printf("[coordinator] escalation for unknown task %s, ignoring", taskID)
+		return
+	}
+
+	current := task.CurrentModel()
+	target := model
+	if target == "" {
+		next, ok := broker.NextModelTier(current)
+		if !ok {
+			log.Printf("[coordinator] %s already at the strongest tier (%s); not escalating",
+				taskID, current)
+			return
+		}
+		target = next
+	}
+	if target == current {
+		log.Printf("[coordinator] %s already on %s; not escalating", taskID, target)
+		return
+	}
+
+	task.SetModel(target)
+	log.Printf("[coordinator] escalating %s: %s → %s (%s, from %s)",
+		taskID, current, target, reason, sender)
+
+	// Only force a retry if the task is still in flight. A completed task
+	// that asks to escalate has already produced its answer; re-running it
+	// would discard work the synthesis task may already have drained.
+	if task.CurrentState() == broker.TaskDispatched {
+		task.FailDispatch("escalated to "+target+": "+reason, c.run)
 	}
 }
 

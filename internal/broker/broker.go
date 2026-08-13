@@ -116,6 +116,58 @@ const (
 	FileReleasePrefix = "FILE_RELEASE"
 )
 
+// ModelEscalatePrefix marks a radio message as a request to retry a task on
+// a stronger model. A worker that finds its area harder than the planner
+// assumed asks for the escalation rather than producing a thin answer on a
+// model that cannot do the work.
+//
+// The benchmark showed why this matters: haiku investigators aced narrow
+// tasks but missed rubrics that needed opus-level reading, and nothing in
+// the run could notice and correct it. Escalation is the correction path.
+//
+// Format: "MODEL_ESCALATE|<taskId>|<model>|<reason>"
+const ModelEscalatePrefix = "MODEL_ESCALATE"
+
+// ParseModelEscalateRequest extracts the fields from a MODEL_ESCALATE body.
+// The model may be empty, meaning "one tier up, coordinator's choice".
+func ParseModelEscalateRequest(content string) (taskID, model, reason string, ok bool) {
+	if !strings.HasPrefix(content, ModelEscalatePrefix) {
+		return "", "", "", false
+	}
+	rest := content[len(ModelEscalatePrefix):]
+	if len(rest) == 0 || rest[0] != '|' {
+		return "", "", "", false
+	}
+	parts := strings.SplitN(rest[1:], "|", 3)
+	if len(parts) < 2 {
+		return "", "", "", false
+	}
+	if len(parts) == 3 {
+		reason = parts[2]
+	}
+	return parts[0], parts[1], reason, true
+}
+
+// FormatModelEscalateRequest builds a MODEL_ESCALATE message body.
+func FormatModelEscalateRequest(taskID, model, reason string) string {
+	return ModelEscalatePrefix + "|" + taskID + "|" + model + "|" + reason
+}
+
+// NextModelTier returns the model one step stronger than current, and
+// ok=false when there is nothing stronger to escalate to. The ladder is
+// deliberately short: these are tiers Narwhal asks for, and the backend
+// decides which concrete model serves each tier.
+func NextModelTier(current string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(current)) {
+	case "", "haiku":
+		return "sonnet", true
+	case "sonnet":
+		return "opus", true
+	default:
+		return "", false
+	}
+}
+
 // ParseSplitRequest extracts the fields from a split-request message body.
 // Returns ok=false if the body is not a well-formed split request.
 func ParseSplitRequest(content string) (taskID, name, assignment string, deps []string, ok bool) {
@@ -498,6 +550,21 @@ func (t *Task) CurrentState() TaskState {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.State
+}
+
+// SetModel changes the model tier this task's worker runs on. Used by the
+// coordinator when a worker escalates; the next dispatch picks it up.
+func (t *Task) SetModel(model string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Model = model
+}
+
+// CurrentModel returns the task's model tier under a read lock.
+func (t *Task) CurrentModel() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.Model
 }
 
 // DispatchCount returns how many dispatch attempts this task has had.

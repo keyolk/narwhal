@@ -741,7 +741,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 	// anchored on it.
 	anchor := 0
 	for i, r := range rows {
-		if r.node == m.taskCur {
+		if r.owns(m.taskCur) {
 			anchor = i
 			break
 		}
@@ -751,28 +751,64 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 	start := scrollStart(anchor, visible, len(rows))
 	for i := start; i < len(rows) && len(out) < height; i++ {
 		r := rows[i]
-		line := truncate(r.text, width)
-		switch {
-		case r.node == m.taskCur && m.focus == focusTasks:
-			line = stySel.Render(padRight(line, width))
-		case r.part == partRoute:
-			line = styDim.Render(line)
-		default:
-			line = m.styleBoxLine(r, line)
+		selected := -1
+		if m.focus == focusTasks {
+			selected = m.taskCur
 		}
-		out = append(out, line)
+		out = append(out, m.styleBoxLine(r, truncate(r.text, width), selected))
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
 }
 
-// styleBoxLine colors a box by its task state: the body carries the state
-// color, borders stay dim so the graph does not fight the content.
-func (m tuiModel) styleBoxLine(r boxRow, line string) string {
-	if r.part != partBody {
+// styleBoxLine colors one rendered line. Each box on the line gets its own
+// task's state color, the selected box is reversed, and everything between
+// boxes (edges, margins) stays dim. Coloring per span rather than per line
+// matters because siblings share a row: styling the whole line would give
+// three boxes the first one's state, and highlight all three when one is
+// selected. selected is -1 when the graph pane does not have focus.
+func (m tuiModel) styleBoxLine(r boxRow, line string, selected int) string {
+	if len(r.spans) == 0 {
 		return styDim.Render(line)
 	}
-	_, style := taskIconStyle(m.taskByIndex(r.node).State)
-	return style.Render(line)
+
+	runes := []rune(line)
+	clamp := func(x int) int {
+		if x < 0 {
+			return 0
+		}
+		if x > len(runes) {
+			return len(runes)
+		}
+		return x
+	}
+
+	var b strings.Builder
+	at := 0
+	for _, s := range r.spans {
+		x0, x1 := clamp(s.x0), clamp(s.x1)
+		if x1 <= x0 {
+			continue
+		}
+		if x0 > at {
+			b.WriteString(styDim.Render(string(runes[at:x0])))
+		}
+		seg := string(runes[x0:x1])
+		switch {
+		case s.node == selected:
+			b.WriteString(stySel.Render(seg))
+		case s.part == partBody:
+			_, style := taskIconStyle(m.taskByIndex(s.node).State)
+			b.WriteString(style.Render(seg))
+		default:
+			// Borders stay dim so the graph does not fight the content.
+			b.WriteString(styDim.Render(seg))
+		}
+		at = x1
+	}
+	if at < len(runes) {
+		b.WriteString(styDim.Render(string(runes[at:])))
+	}
+	return b.String()
 }
 
 // taskByIndex resolves a layout position to its task.

@@ -76,6 +76,41 @@ type boxRow struct {
 	text string
 	node int
 	part boxPart
+	// spans says which columns belong to which task on this line. Siblings
+	// share a row, so a single node field cannot describe it: with three
+	// boxes side by side, the first claim would win and the other two would
+	// be unselectable. Spans let the renderer highlight just the selected
+	// box rather than the whole line.
+	spans []boxSpan
+}
+
+// boxSpan is the half-open column range [x0, x1) a task's box occupies on
+// one line.
+type boxSpan struct {
+	node   int
+	x0, x1 int
+	part   boxPart
+}
+
+// owns reports whether any box on this line belongs to the given task.
+func (r boxRow) owns(node int) bool {
+	for _, s := range r.spans {
+		if s.node == node {
+			return true
+		}
+	}
+	return false
+}
+
+// spanOf returns the column range the given task occupies on this line.
+// The zero value means "not on this line"; callers check owns first.
+func (r boxRow) spanOf(node int) boxSpan {
+	for _, s := range r.spans {
+		if s.node == node {
+			return s
+		}
+	}
+	return boxSpan{}
 }
 
 // canvas is a fixed-size grid of runes drawn onto by absolute coordinates.
@@ -323,8 +358,12 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 			case b.h - 1:
 				part = partBottom
 			}
-			// A line can only belong to one task; layers never overlap
-			// vertically, so the first claim is the only claim.
+			rows[y].spans = append(rows[y].spans, boxSpan{
+				node: b.index, x0: b.x, x1: b.x + b.w, part: part,
+			})
+			// node/part describe the line as a whole, for callers that only
+			// need "is this a box line" — the first box on the row wins.
+			// Selection uses spans instead, so siblings stay distinguishable.
 			if rows[y].node == -1 {
 				rows[y].node = b.index
 				rows[y].part = part

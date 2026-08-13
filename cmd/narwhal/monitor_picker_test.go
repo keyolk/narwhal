@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,4 +90,43 @@ func TestPickerListsNewestRunFirst(t *testing.T) {
 	if m.runs[0].RunID != "new" {
 		t.Fatalf("first row = %q, want the newest run", m.runs[0].RunID)
 	}
+}
+
+func TestPickerRowsDoNotLeakStyleAcrossLines(t *testing.T) {
+	// Regression: the unselected row was assembled with an already-styled
+	// fragment and then passed to truncate(), which counts escape bytes as
+	// content. A cut landing inside an escape drops its reset, and the
+	// style bleeds into every row below — on screen, several rows looked
+	// selected at once.
+	forceColor(t)
+
+	runs := make([]store.LiveRun, 4)
+	for i := range runs {
+		runs[i] = store.LiveRun{
+			RunID:     fmt.Sprintf("s%d-1", i),
+			BrokerURL: "u",
+			Prompt:    fmt.Sprintf("run number %d", i),
+			CWD:       "/tmp/nw-flicker",
+			StartedAt: int64(100 - i),
+		}
+	}
+	m := newTUIModel(runs, 0, time.Second, true)
+	// Narrow enough that rows have to be cut.
+	m.width, m.height = 40, 24
+
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Count(line, "\x1b[") == 0 {
+			continue
+		}
+		// Every style opened on a line must be closed on that line.
+		if !strings.HasSuffix(stripTrailingSpace(line), "\x1b[0m") {
+			t.Fatalf("line ends without a reset, style will bleed:\n%q", line)
+		}
+	}
+}
+
+// stripTrailingSpace drops padding so the reset check looks at the last
+// meaningful byte.
+func stripTrailingSpace(s string) string {
+	return strings.TrimRight(s, " ")
 }

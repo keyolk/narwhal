@@ -639,12 +639,23 @@ func (m tuiModel) viewPicker() string {
 			origin = fmt.Sprintf("pid %d", r.PID)
 		}
 
-		head := fmt.Sprintf("%-11s  %-28s  %s", when, where, styDim.Render(origin))
-		line := "  " + head
+		// Truncate in plain text, then style. truncate() counts bytes and
+		// rune widths, so handing it a styled string miscounts the escape
+		// sequences as content — and cutting one mid-escape drops the reset,
+		// which bleeds the style into every row below.
+		// Truncate in plain text, then style. truncate() counts bytes and
+		// rune widths, so handing it a styled string miscounts the escape
+		// sequences as content — and cutting one mid-escape drops the reset,
+		// which bleeds the style into every row below.
+		marker, rowStyle := "  ", styDim
 		if i == m.runCur {
-			line = stySel.Render(padRight("▸ "+when+"  "+where+"  "+origin, m.width-1))
+			marker, rowStyle = "▸ ", stySel
 		}
-		b.WriteString(truncate(line, m.width) + "\n")
+		head := fmt.Sprintf("%s%-11s  %-28s  %s", marker, when, where, origin)
+		if i == m.runCur {
+			head = padRight(head, m.width-1)
+		}
+		b.WriteString(rowStyle.Render(truncate(head, m.width)) + "\n")
 
 		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
 		if prompt == "" {

@@ -133,9 +133,14 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 	}
 }
 
-// dispatchReady launches ready tasks up to the per-run concurrency cap.
+// dispatchReady launches dispatchable tasks up to the per-run concurrency cap.
 func (d *Dispatcher) dispatchReady(runID string, run *broker.Run) {
-	ready := run.ReadyTasks()
+	// Dispatchable rather than ready: a synthesis task starts alongside
+	// its dependencies so it can listen while they work, and the broker
+	// gates its completion instead. The batch coordinator uses the same
+	// helper — a rule only one dispatcher knew would silently not apply
+	// to interactive runs, which is where most runs happen.
+	ready := run.DispatchableTasks()
 	if len(ready) == 0 {
 		return
 	}

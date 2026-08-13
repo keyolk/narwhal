@@ -260,6 +260,27 @@ Existing tasks are immutable. New tasks can be added to the same Run
 (split-request). This is a deliberate compromise between Orca's strict
 immutability and AgentRadio's free-form plan negotiation.
 
+### Deps gate completion, not dispatch
+
+The synthesis task depends on every investigation task, but it is
+dispatched immediately alongside them. Its job is to be listening while
+they work — a watcher on the radio, folding findings in as they land — and
+that only works if it is alive at the same time as its peers.
+
+The dependency is enforced at the other end: the broker refuses its
+`task-done` until every dep has finished, answering with `pending_deps` and
+posting an urgent message naming who is still running.
+
+This replaced an instruction-only version, where the synthesis task had no
+deps at all and its assignment simply told it to wait. It did not. Across
+three consecutive runs the synthesis worker posted its last message before
+its peers posted theirs — in one case four messages early, missing the
+peer's final summary entirely — and in another it gave up waiting and
+re-ran a peer's investigation itself, spending a frontier model on
+duplicate work. A worker has no way to observe that a peer has finished, so
+"wait until they are done" was not a followable instruction. The gate makes
+it one.
+
 ### Why directly-executed workers, not Workflow subagents
 
 Experiments (see `docs/experiments.md`) showed that Workflow subagents do
@@ -324,6 +345,7 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Partial failure → dependents unreached
 - ✓ Dynamic task addition (split-request, immutable existing tasks)
 - ✓ Dynamic dependency edges (DEP_ADD / DEP_REMOVE mid-run)
+- ✓ Completion gate (synthesis runs early, but cannot finish before its deps)
 - ✓ File ownership (claim / release, conflicts answered on the radio)
 - ✓ Model escalation (worker asks for a stronger tier, breaker still bounds retries)
 - ✓ Run terminal state (done/failed)
@@ -355,6 +377,7 @@ See `docs/experiments.md` for the full record:
 - **E3**: Live peer correction during a real run — **confirmed** (workers cross-corrected)
 - **E4**: Split-request — **confirmed** (worker created 3 new tasks mid-run)
 - **E5**: Multi-thread radio + coordinating agent — **confirmed** (planner built 5-task DAG, 10 radio messages, synthesis task integrated findings)
+- **E9**: "Wait for your peers" as an instruction — **refuted** (synthesis finished early in 3 of 3 runs; deps now gate completion)
 
 ### SWE-Atlas QnA benchmark slice
 

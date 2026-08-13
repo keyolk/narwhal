@@ -180,7 +180,10 @@ func (c *Coordinator) dispatchReady() int {
 		return 0
 	}
 
-	ready := c.run.ReadyTasks()
+	// Dispatchable, not just ready: a synthesis task is launched ahead of
+	// its dependencies so it can listen while its peers work. Its deps
+	// still hold — the broker refuses its task-done until they finish.
+	ready := c.run.DispatchableTasks()
 	dispatched := 0
 	for _, task := range ready {
 		if dispatched >= slots {
@@ -220,7 +223,7 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 	// intelligence even when the investigation workers do not. Apply the
 	// config-level synthesis model unless the planner already set a
 	// per-task model (per-task wins; it is more specific).
-	if cfg.Model == "" && c.cfg.SynthesisModel != "" && isSynthesisTask(task) {
+	if cfg.Model == "" && c.cfg.SynthesisModel != "" && task.IsSynthesis() {
 		cfg.Model = c.cfg.SynthesisModel
 	}
 
@@ -306,17 +309,6 @@ func (c *Coordinator) reapFinishedWorkers() {
 			c.mu.Unlock()
 		}
 	}
-}
-
-// isSynthesisTask returns true if the task is the synthesis step — the
-// one that drains peer findings and writes the final answer. The planner
-// names it with "synthesis" in the name or assignment by convention.
-func isSynthesisTask(task *broker.Task) bool {
-	name := strings.ToLower(task.Name)
-	if strings.Contains(name, "synthesis") {
-		return true
-	}
-	return strings.Contains(strings.ToLower(task.Assignment), "synthesis task")
 }
 
 // releaseTaskFiles gives up every path a task still holds. Called when a

@@ -386,6 +386,34 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			Outcome string `json:"outcome"`
 		}
 		_ = decodeBody(r, &req)
+
+		// Gate completion, not dispatch. A task with deps is launched
+		// immediately — synthesis drains the radio as peers post, which is
+		// why it does not queue behind them — but declaring itself done
+		// while a peer is still writing means the final answer was
+		// assembled from a partial picture. Observed on real runs: the
+		// synthesis worker stopped four messages before its peer posted
+		// its final summary, and nothing noticed.
+		//
+		// The refusal names who is outstanding so the worker can go back
+		// to waiting instead of guessing what went wrong.
+		if pending := run.PendingDeps(taskID); len(pending) > 0 {
+			run.PostMessage(broker.WorklogThread, "coordinator",
+				[]string{task.ID}, broker.PriorityUrgent,
+				fmt.Sprintf("NOT_DONE|%s|task-done refused: %s still running. "+
+					"Keep the watcher up and drain until every one has finished, "+
+					"then call task-done again.",
+					task.ID, strings.Join(pending, ", ")))
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error":        "dependencies still running",
+				"task_id":      task.ID,
+				"pending_deps": pending,
+				"hint": "Your task depends on peers that have not finished. Keep " +
+					"draining the radio and call task-done again once they have.",
+			})
+			return
+		}
+
 		task.CompleteDispatch(req.Outcome, run)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"task_id": task.ID,

@@ -137,11 +137,28 @@ curl -s %s/state
 		"task-done": fmt.Sprintf(`#!/bin/bash
 # usage: task-done <taskId> <outcome>
 # Mark a task as completed with the given outcome text.
+#
+# A refusal (409) is a real outcome, not a transport error: it means peers
+# this task depends on are still running. curl exits 0 on an HTTP error, so
+# the status is checked explicitly — otherwise the worker reads the refusal
+# body as success and stops, which is exactly the failure the gate exists
+# to prevent.
 set -euo pipefail
 TASK="$1"; OUTCOME="$2"
-curl -s -X POST %s/task/$TASK/done \
-  -H "Content-Type: application/json" \
-  -d "$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")"
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")
+OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
+  -H "Content-Type: application/json" -d "$BODY")
+CODE="${OUT##*$'\n'}"
+echo "${OUT%%$'\n'*}"
+if [ "$CODE" = "409" ]; then
+  echo "task-done REFUSED: peers listed in pending_deps are still running." >&2
+  echo "Keep your watcher up, keep draining, and call task-done again." >&2
+  exit 3
+fi
+if [ "$CODE" != "200" ]; then
+  echo "task-done failed with HTTP $CODE" >&2
+  exit 1
+fi
 `, base),
 		"split": fmt.Sprintf(`#!/bin/bash
 # usage: split "<taskId>" "<name>" "<assignment>" [depsCSV]
@@ -311,6 +328,12 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "  bash %s/task-done %s \"summary of your findings\"\n\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "You MUST call task-done, otherwise the coordinator records a failed\n")
 	fmt.Fprintf(&b, "dispatch and retries your task.\n\n")
+	fmt.Fprintf(&b, "If your task depends on peers, task-done is REFUSED until they finish.\n")
+	fmt.Fprintf(&b, "The reply names who is still running:\n\n")
+	fmt.Fprintf(&b, "  {\"error\":\"dependencies still running\",\"pending_deps\":[\"task-2\"]}\n\n")
+	fmt.Fprintf(&b, "That is not an error you worked around — it means your answer would\n")
+	fmt.Fprintf(&b, "have been written from a partial picture. Keep the watcher up, keep\n")
+	fmt.Fprintf(&b, "draining, fold in what arrives, and call task-done again.\n\n")
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")

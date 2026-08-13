@@ -262,6 +262,8 @@ Five issues found during E7/E8 were fixed:
    the planner assign a model per task, not per run.
 4. **Synthesis parallelization** — synthesis task has no deps, starts
    alongside investigation, drains radio as peers post. Depth-1 DAG.
+   *(Superseded — see E9. Running early was right; dropping the deps to
+   achieve it was not.)*
 
 ## Implications for the design
 
@@ -273,9 +275,67 @@ Five issues found during E7/E8 were fixed:
 4. The "exactly one watcher" invariant from AgentRadio carries over: the
    worker must restart its watcher as soon as one resolves.
 5. Synthesis should run in parallel with investigation, not after it — a
-   depth-2 DAG costs roughly 2× wall-clock of a single agent.
+   depth-2 DAG costs roughly 2× wall-clock of a single agent. Running it
+   early must not mean dropping its dependencies; see E9.
 6. Model assignment is per-task, not per-run: synthesis needs frontier
    intelligence even when investigation does not.
+
+## E9 — "Wait for your peers" as an instruction: REFUTED
+
+**Question.** E8 removed the synthesis task's dependencies so it could run
+alongside the investigators, and moved the ordering requirement into its
+assignment: *wait until every investigation task has called task-done
+before writing the final answer.* Does a worker follow that?
+
+**Method.** Read the radio log of every planner run executed after the
+change, comparing the sequence number of the synthesis worker's last
+message against its peers' last messages. If synthesis was still listening
+when its peers finished, its last message is the later one.
+
+**Result: refuted.** All three runs have it backwards.
+
+| Run | synthesis last | peers last | |
+|---|---|---|---|
+| plan-1786554611131 | seq 10 | seq 14 | finished first |
+| plan-1786553326689 | seq 8 | seq 9 | finished first |
+| plan-1786551892357 | seq 8 | seq 9 | finished first |
+
+The first is the clearest. The synthesis worker stopped at seq 10;
+`worker-task-1` then posted seq 11, 12, 13 and — at seq 14 — its **final
+summary**. Whatever synthesis wrote could not have contained it.
+
+A second failure mode appears in the same log. At seq 6 the synthesis
+worker announced it had run its own runtime verification "to fill the gap
+left by task-4's one-line report". Rather than waiting for a peer, it
+re-did the peer's work: a frontier model spent on duplicate investigation,
+which is the opposite of the economics the arrangement exists to capture.
+
+**Why the instruction could not be followed.** A worker has no way to
+observe that a peer has finished. `drain` returns messages, not task
+states; nothing in the worker's toolkit answers "is task-2 done?". So
+"wait until every task has called task-done" is not an instruction a worker
+can execute — it can only guess when it has heard enough, and three out of
+three times it guessed early.
+
+**Resolution.** Deps are restored on the synthesis task, but they gate
+*completion* rather than *dispatch*:
+
+- The coordinator dispatches a pending synthesis task without waiting for
+  its deps, so it is alive and listening while its peers work (E8's real
+  finding, which stands).
+- The broker refuses its `task-done` while any dep is unfinished, replying
+  `409` with `pending_deps` and posting an urgent radio message naming who
+  is outstanding.
+
+The guarantee moves from something the worker must remember to do into
+something the runtime enforces. A failed dep counts as finished — waiting
+on a peer that will never post would strand the run.
+
+**Method note.** The regression was invisible to the benchmark. E8 measured
+rubric coverage, and a synthesis written from 3 of 4 peers can still score
+well when the missing peer's findings overlap the others'. Ordering was
+never asserted. A benchmark that improves on the metric it measures can
+still hide a correctness change underneath it.
 
 ## Reproducing
 

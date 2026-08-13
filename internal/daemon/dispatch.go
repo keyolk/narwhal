@@ -102,6 +102,7 @@ func (d *Dispatcher) tick() {
 		if run.CurrentState() == broker.RunCanceled {
 			d.reap(runID, run, l.ActiveWorkers())
 			d.persistRun(runID, run)
+			d.retireIfSettled(runID, run, l.ActiveWorkers())
 			continue
 		}
 		// Read the radio before touching the graph. Workers are given six
@@ -119,7 +120,63 @@ func (d *Dispatcher) tick() {
 		// The write is gated on an actual change, so an idle run costs
 		// nothing.
 		d.persistRun(runID, run)
+		d.retireIfSettled(runID, run, l.ActiveWorkers())
 	}
+}
+
+// retireIfSettled drops a run's launcher once there is nothing left to do.
+//
+// DropLauncher existed and was never called, so a launcher lived for the
+// life of the daemon. ActiveRuns drives the monitor's run picker, this tick,
+// and the guard that refuses to stop while workers run — so finished runs
+// piled up in all three: the picker filled with runs that ended hours ago,
+// and the stop guard could be tripped by one of them.
+//
+// Settled means every task is terminal and no worker is alive. An
+// interactive run has no natural end — the user can add work at any time —
+// so the run itself is left in the broker and can be dispatched again if a
+// new task appears; only the launcher is released. The run's final state is
+// persisted first, so retiring never loses the record.
+func (d *Dispatcher) retireIfSettled(runID string, run *broker.Run, active []string) {
+	if len(active) > 0 {
+		return
+	}
+	tasks := run.SnapshotTasks()
+	if len(tasks) == 0 {
+		// A run with no tasks yet is one whose first spawn is still in
+		// flight, not a finished one.
+		return
+	}
+	for _, t := range tasks {
+		switch t.State {
+		case broker.TaskCompleted, broker.TaskFailed:
+		default:
+			return
+		}
+	}
+
+	d.mu.Lock()
+	for key := range d.running {
+		if runOf(key) == runID {
+			// A worker is still being tracked even though the launcher
+			// reports none alive; let the next tick reap it first.
+			d.mu.Unlock()
+			return
+		}
+	}
+	delete(d.saved, runID)
+	delete(d.cursors, runID)
+	d.mu.Unlock()
+
+	if run.CurrentState() == broker.RunActive {
+		// Nothing else sets this on the interactive path, so an
+		// interactive run stayed "active" forever — including in the
+		// monitor header and in every persisted snapshot.
+		run.SetState(broker.RunDone)
+		_ = d.persistRun(runID, run)
+	}
+	d.sess.DropLauncher(runID)
+	log.Printf("[dispatch] %s settled; launcher retired", runID)
 }
 
 // intake applies the graph-mutating requests a run's workers have posted

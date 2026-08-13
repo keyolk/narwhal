@@ -856,9 +856,8 @@ func (m tuiModel) viewPicker() string {
 		b.WriteString(styDim.Render(truncate("    "+prompt, m.width)) + "\n")
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styDim.Render("j/k move · enter open · esc quit"))
-	return b.String()
+	return pinFooter(strings.TrimRight(b.String(), "\n"),
+		styDim.Render("j/k move · enter open · esc quit"), m.height)
 }
 
 func (m tuiModel) viewHeader() string {
@@ -895,6 +894,23 @@ func runGlyph(s broker.RunState) (string, string) {
 	default:
 		return styCyan.Render(icons.runActive), styCyan.Render(string(s))
 	}
+}
+
+// pinFooter puts the key hints on the last line of the terminal.
+//
+// Every view built its output as "content, newline, hints" and stopped
+// there, so the hints sat wherever the content happened to end — four rows
+// down in a run picker with one run, with the rest of the screen empty
+// below them. A hint line is furniture: it belongs at the bottom edge, in
+// the same place every time, or the eye has to hunt for it.
+//
+// body is everything above the hints; height is the terminal's.
+func pinFooter(body, hints string, height int) string {
+	used := lipgloss.Height(body) + lipgloss.Height(hints)
+	if pad := height - used; pad > 0 {
+		body += strings.Repeat("\n", pad)
+	}
+	return body + "\n" + hints
 }
 
 func (m tuiModel) viewFooter() string {
@@ -1283,9 +1299,9 @@ func (m tuiModel) viewSessionDetail() string {
 	}
 	footer := styDim.Render("j/k scroll · n/p task · f follow · a attach · esc back · q close")
 
-	return head + pos + styDim.Render(follow) + "\n" +
-		styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
-		strings.Join(body[scroll:end], "\n") + "\n" + footer
+	return pinFooter(head+pos+styDim.Render(follow)+"\n"+
+		styDim.Render(strings.Join(meta, "  "))+"\n\n"+
+		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
 // workerActivity reads the selected worker's session transcript.
@@ -1360,8 +1376,8 @@ func (m tuiModel) viewTaskDetail() string {
 	}
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 
-	return head + pos + "\n" + styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
-		strings.Join(body[scroll:end], "\n") + "\n" + footer
+	return pinFooter(head+pos+"\n"+styDim.Render(strings.Join(meta, "  "))+"\n\n"+
+		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
 // sessionLogPath returns where the launcher writes a worker's Claude output:
@@ -1508,8 +1524,8 @@ func (m tuiModel) viewMessageDetail() string {
 	}
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 
-	return head + pos + "\n" + meta + "\n\n" +
-		strings.Join(body[scroll:end], "\n") + "\n" + footer
+	return pinFooter(head+pos+"\n"+meta+"\n\n"+
+		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
 func mentionsLabel(m []string) string {

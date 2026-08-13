@@ -20,6 +20,46 @@ import (
 func toolDefinitions() []map[string]any {
 	return []map[string]any{
 		{
+			"name": "narwhal_plan",
+			"description": "Decompose a request into a task DAG using a planner " +
+				"agent, then let the daemon dispatch workers in parallel. The " +
+				"planner decides how to split the work; you observe progress via " +
+				"narwhal_status and narwhal_drain. Use this instead of " +
+				"narwhal_spawn when the request has genuinely independent parts " +
+				"worth decomposing — for work you can finish yourself in a few " +
+				"steps, do it directly.",
+			"inputSchema": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"cwd": map[string]any{
+						"type":        "string",
+						"description": "Absolute path the workers run in (usually the repository root).",
+					},
+					"prompt": map[string]any{
+						"type":        "string",
+						"description": "The overall request the workers serve. Recorded on the run.",
+					},
+					"planner_model": map[string]any{
+						"type":        "string",
+						"description": "Model for the planner agent (e.g. opus). Omit for ccproxy rotation.",
+					},
+					"worker_model": map[string]any{
+						"type":        "string",
+						"description": "Model for investigation workers (e.g. haiku). Omit for ccproxy rotation.",
+					},
+					"synthesis_model": map[string]any{
+						"type":        "string",
+						"description": "Model for the synthesis task (e.g. opus). Defaults to worker_model.",
+					},
+					"plan_timeout_secs": map[string]any{
+						"type":        "integer",
+						"description": "Max seconds for the planning phase. Default 300.",
+					},
+				},
+				"required": []string{"cwd", "prompt"},
+			},
+		},
+		{
 			"name": "narwhal_spawn",
 			"description": "Launch one or more headless Claude Code workers on independent " +
 				"sub-tasks. Each worker gets its own radio identity and can share findings " +
@@ -147,6 +187,8 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 	}
 
 	switch name {
+	case "narwhal_plan":
+		return s.post(base+"/api/v1/control/plan", args)
 	case "narwhal_spawn":
 		return s.spawn(base, args)
 	case "narwhal_drain":

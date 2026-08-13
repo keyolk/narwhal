@@ -15,6 +15,10 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/launcher"
@@ -51,6 +55,8 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, parts []s
 	switch parts[0] {
 	case "spawn":
 		s.handleSpawn(w, r)
+	case "plan":
+		s.handlePlan(w, r)
 	case "drain":
 		s.handleControlDrain(w, r)
 	case "status":
@@ -69,6 +75,7 @@ type spawnWorkerSpec struct {
 	Name       string   `json:"name"`
 	Assignment string   `json:"assignment"`
 	Deps       []string `json:"deps"`
+	Model      string   `json:"model"`
 }
 
 // handleSpawn creates a run (or adds to an existing one) and launches a
@@ -131,6 +138,7 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		}
 
 		task := run.AddTask(taskID, name, spec.Assignment, spec.Deps)
+		task.Model = spec.Model
 
 		note := "queued; the dispatcher will launch it shortly"
 		if task.CurrentState() != broker.TaskReady {
@@ -310,5 +318,105 @@ func (s *Server) handleControlCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"run_id": req.RunID,
 		"killed": killed,
+	})
+}
+
+// handlePlan runs a planner agent that decomposes the request into a task DAG,
+// then returns. The daemon's dispatch loop launches the workers the planner
+// created — the caller (MCP) observes progress via status/drain.
+//
+// This is the /control path for what `narwhal plan` does in-process. It
+// exists so an interactive Claude session can ask for a DAG without leaving
+// the conversation: the MCP tool calls this endpoint, the daemon runs the
+// planner, and the caller polls status.
+func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+		return
+	}
+	var req struct {
+		CWD            string `json:"cwd"`
+		Prompt          string `json:"prompt"`
+		PlannerModel    string `json:"planner_model"`
+		WorkerModel     string `json:"worker_model"`
+		SynthesisModel  string `json:"synthesis_model"`
+		PlanTimeoutSecs int  `json:"plan_timeout_secs"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if req.Prompt == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
+		return
+	}
+	if req.CWD == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd is required"})
+		return
+	}
+
+	runID := s.control.NewRunID()
+	run := s.broker.CreateRun(runID, req.Prompt, req.CWD, "main")
+	mainAgent := s.registry.Register("main", runID, true)
+	run.CreateThread("planning", "planning", []string{"main"})
+	run.CreateThread("worklog", "worklog", []string{"main"})
+	run.CreateThread("results", "results", []string{"main"})
+
+	l := s.control.LauncherFor(runID, req.CWD)
+	l.SetWorkerModel(req.WorkerModel)
+
+	// The synthesis task integrates peer findings — it needs frontier
+	// intelligence even when the investigation workers do not.
+	synModel := req.SynthesisModel
+	if synModel == "" {
+		synModel = req.WorkerModel
+	}
+
+	// Build the planner instructions and launch the planner agent, mirroring
+	// what narwhal plan does in-process. The planner talks to the broker
+	// HTTP API to create tasks with deps.
+	planInstructions := BuildPlanInstructions(runID, s.baseURL(), mainAgent.Token, req.Prompt)
+	planTimeout := time.Duration(req.PlanTimeoutSecs) * time.Second
+	if planTimeout == 0 {
+		planTimeout = 5 * time.Minute
+	}
+
+	planArgs := []string{"claude", "--print",
+		"--permission-mode", "bypassPermissions",
+		"--append-system-prompt", planInstructions,
+	}
+	if req.PlannerModel != "" {
+		planArgs = append(planArgs, "--model", req.PlannerModel)
+	}
+	planArgs = append(planArgs, "Decompose the user's request into a task DAG and create the tasks via the broker API. When done, post PLAN_DONE to the planning thread.")
+	planCmd := exec.Command("ccproxy", planArgs...)
+	planCmd.Dir = req.CWD
+	planLog, _ := os.Create(filepath.Join(l.SessionDir(), "planner-output.txt"))
+	planCmd.Stdout = planLog
+	planCmd.Stderr = planLog
+	planCmd.Env = append(os.Environ(),
+		"NARWHAL_RUN_ID="+runID,
+		"NARWHAL_BROKER_URL="+s.baseURL(),
+		"NARWHAL_AGENT_TOKEN="+mainAgent.Token,
+	)
+	if err := planCmd.Start(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "start planner: " + err.Error()})
+		return
+	}
+
+	// Wait for the planner in a goroutine so the HTTP response can return
+	// the run id immediately. The caller polls status to learn when the
+	// DAG is ready and workers start dispatching.
+	go func() {
+		_ = planCmd.Wait()
+		planLog.Close()
+	}()
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"run_id":         runID,
+		"broker_url":      s.baseURL(),
+		"planner_model":   req.PlannerModel,
+		"worker_model":    req.WorkerModel,
+		"synthesis_model": synModel,
 	})
 }

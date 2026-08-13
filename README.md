@@ -30,15 +30,26 @@ go build -o ~/.local/bin/narwhal ./cmd/narwhal
 claude mcp add --scope user narwhal narwhal mcp
 ```
 
-Five tools become available:
+Six tools become available:
 
 | Tool | Purpose |
 |---|---|
+| `narwhal_plan` | Decompose a request into a task DAG via a planner agent |
 | `narwhal_spawn` | Launch workers on independent sub-tasks |
 | `narwhal_drain` | Read radio messages since a cursor |
 | `narwhal_status` | Task states and active workers |
 | `narwhal_send` | Steer workers with an operator message |
 | `narwhal_cancel` | Kill a run's workers |
+
+`narwhal_plan` is the MCP path for what `narwhal plan` does in batch mode.
+A planner agent decomposes the request into a DAG, the daemon dispatches
+workers in parallel, and you observe progress via `narwhal_status` and
+`narwhal_drain`. Use it instead of `narwhal_spawn` when the request has
+genuinely independent parts worth decomposing — for work you can finish
+yourself in a few steps, do it directly. It accepts `planner_model`,
+`worker_model`, and `synthesis_model` so you can steer the Cursor
+economics split (frontier planner, cheap workers, frontier synthesis)
+without leaving the conversation.
 
 The broker daemon starts on demand and outlives MCP server restarts, so a
 run survives Claude Code reconnecting. You can add workers to a run that is

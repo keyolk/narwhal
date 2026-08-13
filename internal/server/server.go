@@ -34,6 +34,7 @@ type Server struct {
 	registry *broker.AgentRegistry
 	listener net.Listener
 	server   *http.Server
+	addr     string // the base URL once Start binds
 
 	// control is set only by the daemon. It backs the /control routes an
 	// interactive client uses to spawn and steer workers; the batch CLI
@@ -56,10 +57,14 @@ func (s *Server) Start() (string, error) {
 		return "", fmt.Errorf("listen: %w", err)
 	}
 	s.listener = ln
+	s.addr = fmt.Sprintf("http://%s", ln.Addr().String())
 	s.server = &http.Server{Handler: http.HandlerFunc(s.handle)}
 	go func() { _ = s.server.Serve(ln) }()
-	return fmt.Sprintf("http://%s", ln.Addr().String()), nil
+	return s.addr, nil
 }
+
+// baseURL returns the address the server is listening on. Empty before Start.
+func (s *Server) baseURL() string { return s.addr }
 
 // Shutdown stops the server.
 func (s *Server) Shutdown() {

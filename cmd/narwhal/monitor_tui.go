@@ -46,6 +46,9 @@ const (
 	detailClosed detailMode = iota
 	detailMessage
 	detailTask
+	// detailSession shows a worker's full Claude session output. The task
+	// detail summarizes; this is where you actually watch a worker work.
+	detailSession
 )
 
 // tickMsg drives the poll loop.
@@ -86,6 +89,11 @@ type tuiModel struct {
 	followTail bool
 	detail     detailMode
 	detailScroll int
+	// sessionTail keeps the session view pinned to the newest output while
+	// the worker is still writing. Scrolling up releases it, the same way
+	// the radio list works — reading back through what a worker did should
+	// not be yanked away by its next line.
+	sessionTail bool
 	// boxMode draws tasks as connected boxes instead of a git-style lane
 	// gutter. Boxes read better as a diagram; lanes fit more on screen.
 	boxMode bool
@@ -309,6 +317,16 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 			}
 		}
+	case "s":
+		// Open the selected task's Claude session output. Reachable from
+		// either pane: when the radio has focus, the task cursor still
+		// points at something, and watching a worker is the common reason
+		// to reach for the keyboard at all.
+		if len(m.snap.Tasks) > 0 {
+			m.detail = detailSession
+			m.detailScroll = 0
+			m.sessionTail = true
+		}
 	case "f":
 		// Re-arm tail following after manual navigation.
 		m.followTail = true
@@ -348,19 +366,41 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "j", "down":
 		m.detailScroll++
+		m.sessionTail = false
 	case "k", "up":
 		if m.detailScroll > 0 {
 			m.detailScroll--
 		}
+		m.sessionTail = false
 	case "ctrl+d", "pgdown":
 		m.detailScroll += 10
+		m.sessionTail = false
 	case "ctrl+u", "pgup":
 		m.detailScroll -= 10
 		if m.detailScroll < 0 {
 			m.detailScroll = 0
 		}
+		m.sessionTail = false
 	case "g", "home":
 		m.detailScroll = 0
+		m.sessionTail = false
+	case "f":
+		// Re-arm session following, matching what f does on the radio list.
+		if m.detail == detailSession {
+			m.sessionTail = true
+		}
+	case "s":
+		// Toggle between a task's summary and its session output without
+		// closing the detail view.
+		switch m.detail {
+		case detailTask:
+			m.detail = detailSession
+			m.detailScroll = 0
+			m.sessionTail = true
+		case detailSession:
+			m.detail = detailTask
+			m.detailScroll = 0
+		}
 	case "n":
 		// Walk to the next item without leaving the detail view.
 		switch m.detail {
@@ -370,10 +410,11 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 				m.followTail = false
 			}
-		case detailTask:
+		case detailTask, detailSession:
 			if m.taskCur < len(m.snap.Tasks)-1 {
 				m.taskCur++
 				m.detailScroll = 0
+				m.sessionTail = true
 			}
 		}
 	case "p":
@@ -384,10 +425,11 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 				m.followTail = false
 			}
-		case detailTask:
+		case detailTask, detailSession:
 			if m.taskCur > 0 {
 				m.taskCur--
 				m.detailScroll = 0
+				m.sessionTail = true
 			}
 		}
 	}
@@ -461,6 +503,8 @@ func (m tuiModel) View() string {
 		return m.viewMessageDetail()
 	case detailTask:
 		return m.viewTaskDetail()
+	case detailSession:
+		return m.viewSessionDetail()
 	}
 
 	header := m.viewHeader()
@@ -605,9 +649,9 @@ func (m tuiModel) viewFooter() string {
 	if m.followTail {
 		tail = styDim.Render("  [following]")
 	}
-	keys := "tab pane · j/k move · enter detail · b boxes · f follow · q quit"
+	keys := "tab pane · j/k move · enter detail · s session · b boxes · f follow · q quit"
 	if len(m.runs) > 1 {
-		keys = "tab pane · j/k move · enter detail · [ ] run · r runs · b boxes · q quit"
+		keys = "tab pane · j/k move · enter detail · s session · [ ] run · r runs · q quit"
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }
@@ -816,6 +860,85 @@ func (m tuiModel) taskByID(id string) broker.TaskSnapshot {
 	return broker.TaskSnapshot{ID: id}
 }
 
+// selectedTask returns the task the cursor points at, and ok=false when the
+// graph is empty.
+func (m tuiModel) selectedTask() (broker.TaskSnapshot, bool) {
+	rows := m.graphRows()
+	if len(rows) == 0 {
+		return broker.TaskSnapshot{}, false
+	}
+	cur := m.taskCur
+	if cur >= len(rows) {
+		cur = len(rows) - 1
+	}
+	return m.taskByID(rows[cur].id), true
+}
+
+// viewSessionDetail shows a worker's full Claude session output. The task
+// detail summarizes with a short tail; this is the view for actually
+// watching a worker work — full scrollback, and it follows new output until
+// you scroll up.
+func (m tuiModel) viewSessionDetail() string {
+	t, ok := m.selectedTask()
+	if !ok {
+		return "no tasks"
+	}
+
+	icon, style := taskIconStyle(t.State)
+	head := fmt.Sprintf("%s  %s %s  %s",
+		styTitle.Render("Session"), style.Render(icon), t.ID, style.Render(string(t.State)))
+
+	meta := []string{"agent=worker-" + t.ID}
+	if t.Model != "" {
+		meta = append(meta, "model="+t.Model)
+	}
+	if t.Dispatches > 0 {
+		meta = append(meta, fmt.Sprintf("dispatches=%d", t.Dispatches))
+	}
+
+	body := m.workerOutputLines(t.ID)
+	if len(body) == 0 {
+		// Say which is true rather than leaving a blank pane: a task that
+		// has not started yet and a run whose logs live elsewhere look the
+		// same from here otherwise.
+		reason := "no session log yet — this task has not been dispatched"
+		if t.Dispatches > 0 {
+			reason = "no session log at " + m.sessionLogPath(t.ID)
+		}
+		body = wrapText(reason, m.width-2)
+	} else {
+		meta = append(meta, fmt.Sprintf("%d lines", len(body)))
+		// The log is written by a --print process, so lines can be far
+		// wider than the pane; wrap rather than truncate, since the tail
+		// of a long line is often the part that matters.
+		var wrapped []string
+		for _, l := range body {
+			wrapped = append(wrapped, wrapText(l, m.width-2)...)
+		}
+		body = wrapped
+	}
+
+	avail := m.height - 5
+	if avail < 3 {
+		avail = 3
+	}
+	// Following pins the view to the end as the worker writes.
+	if m.sessionTail && len(body) > avail {
+		m.detailScroll = len(body) - avail
+	}
+	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
+
+	follow := "  [following]"
+	if !m.sessionTail {
+		follow = ""
+	}
+	footer := styDim.Render("j/k scroll · n/p task · f follow · esc back · q close")
+
+	return head + pos + styDim.Render(follow) + "\n" +
+		styDim.Render(strings.Join(meta, "  ")) + "\n\n" +
+		strings.Join(body[scroll:end], "\n") + "\n" + footer
+}
+
 // viewTaskDetail shows the selected task's state, its place in the graph,
 // and its full assignment — which the graph pane can only show truncated.
 // If the task has a running or completed worker, the tail of its
@@ -861,15 +984,15 @@ func (m tuiModel) viewTaskDetail() string {
 
 	body := wrapText(t.Assignment, m.width-2)
 
-	// Append the worker's live output tail, if any. The session directory is
-	// ~/.narwhal/sessions/<run-id>/agents/worker-<task-id>/claude-output.txt.
-	// This is the same path the launcher writes to, so the operator sees the
-	// same view the harness would collect after the run.
+	// Append the tail of the worker's session output. This is a preview —
+	// `s` opens the full log with scrollback.
 	if workerTail := m.workerOutputTail(t.ID); workerTail != "" {
-		body = append(body, "", styDim.Render("── worker output (tail) ──"), workerTail)
+		body = append(body, "",
+			styDim.Render("── worker output (tail — press s for the full session) ──"),
+			workerTail)
 	}
 
-	footer := styDim.Render("j/k scroll · n/p task · esc back · q close")
+	footer := styDim.Render("j/k scroll · n/p task · s session · esc back · q close")
 
 	avail := m.height - 5
 	if avail < 3 {
@@ -881,24 +1004,44 @@ func (m tuiModel) viewTaskDetail() string {
 		strings.Join(body[scroll:end], "\n") + "\n" + footer
 }
 
-// workerOutputTail reads the last ~30 lines of the worker's claude-output.txt.
-// The path mirrors what the launcher writes: ~/.narwhal/sessions/<run-id>/
-// agents/worker-<task-id>/claude-output.txt. Returns "" if the file does not
-// exist yet (task not dispatched, or running under a batch-mode run that uses
-// a different session directory layout).
-func (m tuiModel) workerOutputTail(taskID string) string {
+// sessionLogPath returns where the launcher writes a worker's Claude output:
+// ~/.narwhal/sessions/<run-id>/agents/worker-<task-id>/claude-output.txt.
+func (m tuiModel) sessionLogPath(taskID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	agentID := "worker-" + taskID
-	path := filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
-		"agents", agentID, "claude-output.txt")
+	return filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
+		"agents", "worker-"+taskID, "claude-output.txt")
+}
+
+// workerOutputLines reads a worker's whole session log, newest last.
+// Returns nil when the file does not exist yet — the task has not been
+// dispatched, or this run keeps its sessions elsewhere.
+func (m tuiModel) workerOutputLines(taskID string) []string {
+	path := m.sessionLogPath(taskID)
+	if path == "" {
+		return nil
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		return nil
+	}
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return nil
+	}
+	return strings.Split(text, "\n")
+}
+
+// workerOutputTail reads the last ~30 lines of the worker's session log,
+// for the summary shown inside the task detail. The full log lives in the
+// session view.
+func (m tuiModel) workerOutputTail(taskID string) string {
+	lines := m.workerOutputLines(taskID)
+	if len(lines) == 0 {
 		return ""
 	}
-	lines := strings.Split(string(data), "\n")
 	const tail = 30
 	if len(lines) > tail {
 		lines = lines[len(lines)-tail:]

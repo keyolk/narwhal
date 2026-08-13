@@ -6,16 +6,17 @@ Narwhal combines **Orca-style graph engineering** (Run/Task/Dispatch DAG)
 with **AgentRadio-style passive awareness** (background watcher + radio
 channel) to coordinate multiple Claude Code workers on a single task.
 
-Each worker runs as a directly-executed `ccproxy claude --print` process,
-which preserves Claude Code's full tool surface — including background Bash
-task completion notifications, the mechanism Workflow subagents currently
-do not surface. ccproxy handles account routing and quota; Narwhal owns the
-collaboration and planning layer.
+Each worker runs as a directly-executed `claude --print` process, which
+preserves Claude Code's full tool surface — including background Bash task
+completion notifications, the mechanism Workflow subagents currently do not
+surface. Narwhal owns the collaboration and planning layer and asks for a
+model *tier*; whatever fronts the API (ccproxy here) decides which backend
+serves that tier and handles account routing and quota.
 
 ## Status
 
-Functional. 23 unit tests (race-clean), 5 end-to-end experiments with real
-Claude Code workers.
+Functional. 158 unit tests (race-clean), 8 end-to-end experiments with real
+Claude Code workers, and a benchmark slice against SWE-Atlas QnA.
 
 ## Quick Start
 
@@ -85,6 +86,11 @@ the right, and a detail pane for reading a full message. Radio messages are
 long — that is the point of them — so the list truncates and the detail view
 is where you actually read one.
 
+`s` opens the selected task's Claude session: the worker's full output with
+scrollback, pinned to the newest line until you scroll up. This is how you
+watch a worker work rather than inferring it from what it has posted —
+`n`/`p` walk between workers without leaving the view.
+
 ```
 Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
@@ -100,7 +106,7 @@ Graph                                    Radio (2)
             └─────────────┘
 
 done 1  running 1  ready 0  failed 0  [following]
-tab pane · j/k move · enter detail · b boxes · f follow · q quit
+tab pane · j/k move · enter detail · s session · b boxes · f follow · q quit
 ```
 
 Tasks are drawn as boxes wired together, in the style of Graph::Easy and
@@ -165,6 +171,7 @@ since guessing wrong toward Nerd Font fills the pane with tofu boxes.
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |
+| `s` | Open the selected task's Claude session (full output, follows live) |
 | `b` | Toggle between box and lane graph views |
 | `[` / `]` | Previous / next live run |
 | `r` | Open the run picker |
@@ -188,7 +195,7 @@ narwhal
 │
 ├── radio layer (AgentRadio style)
 │   ├── channel     message bus scoped to a Run
-│   ├── thread      planning / worklog / results
+│   ├── thread      planning / worklog / results / environment
 │   ├── message     content + mentions + priority (fyi/normal/urgent)
 │   ├── cursor      monotonic sequence (no message lost on watcher restart)
 │   └── watch       background long-poll + completion notification
@@ -299,10 +306,13 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Diamond dependency (A→B, A→C, B+C→D)
 - ✓ Partial failure → dependents unreached
 - ✓ Dynamic task addition (split-request, immutable existing tasks)
+- ✓ Dynamic dependency edges (DEP_ADD / DEP_REMOVE mid-run)
+- ✓ File ownership (claim / release, conflicts answered on the radio)
+- ✓ Model escalation (worker asks for a stronger tier, breaker still bounds retries)
 - ✓ Run terminal state (done/failed)
 - ✓ Run persistence + inspection
 - ✓ Coordinating agent (planner decomposes request into DAG)
-- ✓ Live monitor (DAG progress + radio traffic during a run)
+- ✓ Live monitor (DAG progress + radio traffic + per-worker session view)
 - ✓ Interactive mode (daemon + MCP; add workers to an in-flight run)
 
 ### AgentRadio-style passive awareness
@@ -314,7 +324,7 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Agent identity token = endpoint path
 - ✓ Background notification (verified in directly-executed Claude Code)
 - ✓ Live peer correction (verified: workers cross-correct mid-flight)
-- ✓ Multi-thread radio (planning/worklog/results)
+- ✓ Multi-thread radio (planning/worklog/results/environment)
 - ✓ Watcher restart preserves messages (cursor-based recovery)
 - ✓ Mention-based wake (broadcast wakes all, mention wakes specific)
 - ✓ Worker = `ccproxy claude --print` with `--permission-mode bypassPermissions`

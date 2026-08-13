@@ -145,15 +145,29 @@ curl -s %s/state
 # exits when its turn ends, so a worker that is told to "wait and try
 # again" simply dies. Holding this request open holds the turn open.
 #
+# When peers post during the wait, the server answers 202 with those
+# messages instead of completing: the outcome was written before they
+# arrived, so completing on it would record a synthesis that had not seen
+# them. The 202 is surfaced to the worker, which is expected to fold them
+# in and call again.
+#
 # No --max-time: the wait is bounded by the server, and a client-side
 # timeout would defeat the whole point.
 set -euo pipefail
-TASK="$1"; OUTCOME="$2"
-BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1]}))' "$OUTCOME")
+TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final"}))' "$OUTCOME" "$FINAL")
 OUT=$(curl -s -w '\n%%{http_code}' -X POST %s/task/$TASK/done \
   -H "Content-Type: application/json" -d "$BODY")
 CODE="${OUT##*$'\n'}"
 echo "${OUT%%$'\n'*}"
+if [ "$CODE" = "202" ]; then
+  echo "" >&2
+  echo "NOT COMPLETE YET. Your peers finished while this call waited, and the" >&2
+  echo "messages above arrived after you wrote your outcome. Fold them into" >&2
+  echo "your answer and run:" >&2
+  echo "  bash $0 $TASK \"<updated answer>\" final" >&2
+  exit 4
+fi
 if [ "$CODE" = "409" ]; then
   echo "task-done timed out waiting for peers listed in pending_deps." >&2
   echo "Call task-done again — it blocks until they finish." >&2
@@ -337,6 +351,10 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "written what you can and let it hold. Do NOT decide to \"wait and call\n")
 	fmt.Fprintf(&b, "it later\": your process ends when your turn does, so a plan to wait\n")
 	fmt.Fprintf(&b, "is not waiting. Blocking inside task-done is what keeps you alive.\n\n")
+	fmt.Fprintf(&b, "If peers posted while you were held, task-done exits 4 and prints what\n")
+	fmt.Fprintf(&b, "arrived. Your task is NOT complete. Those messages landed after you\n")
+	fmt.Fprintf(&b, "wrote your answer, so fold them in and call it once more:\n\n")
+	fmt.Fprintf(&b, "  bash %s/task-done %s \"<updated answer>\" final\n\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")

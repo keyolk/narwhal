@@ -269,7 +269,10 @@ that only works if it is alive at the same time as its peers.
 
 The dependency is enforced at the other end: `task-done` blocks until every
 dep has finished, announcing the wait on the radio so a held worker is
-distinguishable from a hung one.
+distinguishable from a hung one. If peers posted while the call was held,
+it answers `202` with those messages instead of completing — the outcome
+was written before they arrived — and the worker folds them in and calls
+once more.
 
 Blocking rather than refusing is the part that took two tries. The first
 version answered `409` and told the worker to try again later. The worker

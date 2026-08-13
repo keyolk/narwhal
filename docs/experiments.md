@@ -348,6 +348,28 @@ to.** Anything a worker must do *later* has to be attached to a call it is
 making *now*. Blocking inside `task-done` holds the turn open, which is the
 only thing that holds the process open.
 
+**And waiting alone was not enough.** With the blocking gate in place, a
+verification run behaved correctly and the synthesis worker still reported
+the remaining hole itself:
+
+> **task-done**: 100초 블로킹 후 반환. […] 다만 한 가지 짚을 점: 제가
+> task-done에 넘긴 outcome 문자열은 **블로킹 시작 시점의 상태**로 고정돼
+> 있습니다. 게이트가 저를 살려둔 덕에 fact A를 받긴 했지만, 그 내용은 이미
+> 제출된 outcome에 반영되지 못했습니다.
+
+The ordering was fixed and the content was still stale: the outcome is an
+argument, evaluated before the call blocks. So the gate no longer completes
+the task when messages arrive during the wait. It answers `202` with those
+messages and asks for one more call — which the worker can act on, because
+it is alive and mid-tool-call, the only moment it can. A `final` flag on
+the second call completes it, so the same messages are not handed back
+forever.
+
+Three iterations, each exposed only by running it: instruction → refusal →
+blocking → blocking with a fold-in round. The pattern across all of them is
+that a guarantee must be attached to something the runtime does, not to
+something the worker is asked to remember.
+
 **Method note.** The regression was invisible to the benchmark. E8 measured
 rubric coverage, and a synthesis written from 3 of 4 peers can still score
 well when the missing peer's findings overlap the others'. Ordering was

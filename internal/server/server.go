@@ -385,6 +385,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		var req struct {
 			Outcome   string `json:"outcome"`
 			TimeoutMs int    `json:"timeout_ms"`
+			// Final says the worker has already folded in what arrived
+			// during the wait. Without it a second call would be handed
+			// the same messages again and the task would never complete.
+			Final bool `json:"final"`
 		}
 		_ = decodeBody(r, &req)
 
@@ -406,6 +410,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		// try. Holding the HTTP request open keeps the worker's turn alive,
 		// which is the only thing that actually makes it wait.
 		if pending := run.PendingDeps(taskID); len(pending) > 0 {
+			// Everything the worker has already seen. Messages that land
+			// during the wait are the ones it could not have folded in.
+			seen := lastSeq(run.MessagesSince(0))
+
 			run.PostMessage(broker.WorklogThread, "coordinator",
 				[]string{task.ID}, broker.PriorityNormal,
 				fmt.Sprintf("WAITING|%s|task-done is holding until %s finish.",
@@ -422,6 +430,30 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 					"pending_deps": remaining,
 					"hint": "Peers are still working. Call task-done again — it " +
 						"blocks until they finish.",
+				})
+				return
+			}
+
+			// The wait is over, but the outcome the worker submitted was
+			// written before it. Waiting fixed the ordering and left the
+			// content stale: on the run that exposed this, task-done held
+			// 100 seconds, the peer posted its finding during the hold,
+			// and the recorded outcome still read "nothing to synthesize".
+			//
+			// So do not complete yet. Hand back what arrived during the
+			// wait and ask for one more call. The worker is alive and in
+			// the middle of a tool call, which is the only moment it can
+			// act on this.
+			if arrived := run.MessagesSince(seen); len(arrived) > 0 && !req.Final {
+				writeJSON(w, http.StatusAccepted, map[string]any{
+					"task_id":       task.ID,
+					"state":         string(task.CurrentState()),
+					"new_messages":  arrived,
+					"waited_for":    pending,
+					"hint": "Your peers finished while this call was waiting, and these " +
+						"messages arrived after you wrote your outcome. Fold them in and " +
+						"call task-done again with the updated answer — the next call " +
+						"completes the task.",
 				})
 				return
 			}

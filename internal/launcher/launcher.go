@@ -172,6 +172,29 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
 `, base),
+	"file-claim": fmt.Sprintf(`#!/bin/bash
+# usage: file-claim "<taskId>" "<path1,path2,...>"
+# Claim the files you are about to modify. If a peer already holds one,
+# the coordinator replies on the radio with who holds it — negotiate there
+# rather than overwriting. Claim before your first write, not after.
+set -euo pipefail
+TASK="$1"; PATHS="${2:-}"
+BODY="FILE_CLAIM|$TASK|$PATHS"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
+`, base),
+	"file-release": fmt.Sprintf(`#!/bin/bash
+# usage: file-release "<taskId>" "<path1,path2,...>"
+# Give up files you are done with so a peer can take them. Claims are
+# released automatically when you exit, but releasing early unblocks peers.
+set -euo pipefail
+TASK="$1"; PATHS="${2:-}"
+BODY="FILE_RELEASE|$TASK|$PATHS"
+curl -s -X POST %s/send \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"normal"}))' "$BODY")"
+`, base),
 	}
 
 	for name, content := range scripts {
@@ -238,6 +261,13 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    'this area depends on that area being finished first.'\n")
 	fmt.Fprintf(&b, "- bash %s/dep-remove \"<taskId>\" \"<dep1,dep2,...>\"\n", scriptsDir)
 	fmt.Fprintf(&b, "    Remove dependency edges that turn out not to hold.\n")
+	fmt.Fprintf(&b, "- bash %s/file-claim %s \"<path1,path2,...>\"\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "    Claim files BEFORE you modify them. If a peer holds one, the\n")
+	fmt.Fprintf(&b, "    coordinator replies urgently with who holds it — negotiate on the\n")
+	fmt.Fprintf(&b, "    radio instead of overwriting.\n")
+	fmt.Fprintf(&b, "- bash %s/file-release %s \"<path1,path2,...>\"\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "    Give up files you are done with. Your claims are released when you\n")
+	fmt.Fprintf(&b, "    exit, but releasing early unblocks a waiting peer.\n")
 	fmt.Fprintf(&b, "\n## Passive Awareness (CRITICAL)\n\n")
 	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
 	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)
@@ -256,6 +286,13 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "You MUST call task-done, otherwise the coordinator records a failed\n")
 	fmt.Fprintf(&b, "dispatch and retries your task.\n\n")
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
+	fmt.Fprintf(&b, "\n## Writing Files\n\n")
+	fmt.Fprintf(&b, "If your assignment does have you modify files, claim them first:\n\n")
+	fmt.Fprintf(&b, "  bash %s/file-claim %s \"path/one.go,path/two.go\"\n\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "Peers work in parallel on the same repository. A claim is how they\n")
+	fmt.Fprintf(&b, "find out you are there. If the coordinator answers that a path is\n")
+	fmt.Fprintf(&b, "already held, do not write it — say what you need on the radio and\n")
+	fmt.Fprintf(&b, "let the holder either hand it over or make the change for you.\n")
 	return b.String()
 }
 

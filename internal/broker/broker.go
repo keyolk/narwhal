@@ -98,6 +98,24 @@ const (
 	DepRemovePrefix = "DEP_REMOVE"
 )
 
+// File-claim prefixes let workers coordinate writes to shared files.
+// Cursor's swarm experiment cut merge conflicts from 70,000 to under
+// 1,000 by giving each agent clear ownership rather than letting them
+// all write freely; this is the same idea at radio granularity.
+//
+// A worker claims the files it is about to modify. The coordinator keeps
+// the claim map and answers conflicting claims by telling the second
+// worker who holds the file, so it can negotiate on the radio instead of
+// silently overwriting. Releasing is explicit — a worker that finishes
+// with a file gives it up so a peer can take it.
+//
+// Format: "FILE_CLAIM|<taskId>|<path1,path2,...>"
+//        "FILE_RELEASE|<taskId>|<path1,path2,...>"
+const (
+	FileClaimPrefix   = "FILE_CLAIM"
+	FileReleasePrefix = "FILE_RELEASE"
+)
+
 // ParseSplitRequest extracts the fields from a split-request message body.
 // Returns ok=false if the body is not a well-formed split request.
 func ParseSplitRequest(content string) (taskID, name, assignment string, deps []string, ok bool) {
@@ -135,30 +153,44 @@ func FormatSplitRequest(taskID, name, assignment string, deps []string) string {
 // message body. action is the prefix that matched. Returns ok=false if
 // the body is not well-formed.
 func ParseDepEdgeRequest(content string) (action, taskID string, deps []string, ok bool) {
-	for _, p := range []string{DepAddPrefix, DepRemovePrefix} {
-		if strings.HasPrefix(content, p) {
-			action = p
-			rest := content[len(p):]
-			if len(rest) == 0 || rest[0] != '|' {
-				return "", "", nil, false
-			}
-			parts := strings.SplitN(rest[1:], "|", 2)
-			if len(parts) < 1 {
-				return "", "", nil, false
-			}
-			taskID = parts[0]
-			if len(parts) == 2 && parts[1] != "" {
-				deps = strings.Split(parts[1], ",")
-			}
-			return action, taskID, deps, true
-		}
-	}
-	return "", "", nil, false
+	return parsePrefixedList(content, DepAddPrefix, DepRemovePrefix)
 }
 
 // FormatDepEdgeRequest builds a DEP_ADD or DEP_REMOVE message body.
 func FormatDepEdgeRequest(action, taskID string, deps []string) string {
 	return action + "|" + taskID + "|" + strings.Join(deps, ",")
+}
+
+// ParseFileClaimRequest extracts the fields from a FILE_CLAIM or
+// FILE_RELEASE message body. action is the prefix that matched.
+func ParseFileClaimRequest(content string) (action, taskID string, paths []string, ok bool) {
+	return parsePrefixedList(content, FileClaimPrefix, FileReleasePrefix)
+}
+
+// FormatFileClaimRequest builds a FILE_CLAIM or FILE_RELEASE message body.
+func FormatFileClaimRequest(action, taskID string, paths []string) string {
+	return action + "|" + taskID + "|" + strings.Join(paths, ",")
+}
+
+// parsePrefixedList parses the "<PREFIX>|<taskId>|<a,b,c>" shape shared by
+// the dep-edge and file-claim messages. The trailing list may be empty.
+func parsePrefixedList(content string, prefixes ...string) (action, taskID string, items []string, ok bool) {
+	for _, p := range prefixes {
+		if !strings.HasPrefix(content, p) {
+			continue
+		}
+		rest := content[len(p):]
+		if len(rest) == 0 || rest[0] != '|' {
+			return "", "", nil, false
+		}
+		parts := strings.SplitN(rest[1:], "|", 2)
+		taskID = parts[0]
+		if len(parts) == 2 && parts[1] != "" {
+			items = strings.Split(parts[1], ",")
+		}
+		return p, taskID, items, true
+	}
+	return "", "", nil, false
 }
 
 // Run is a namespace holding one or more task graphs plus a radio channel.
@@ -177,6 +209,65 @@ type Run struct {
 	messages    []*Message // append-only log, indexed by Seq-1
 	msgMu       sync.Mutex // guards messages slice and watcher signaling
 	watchers    []watchSink // active long-poll sessions waiting for new messages
+
+	// fileClaims maps a path to the task that claimed it. Guarded by
+	// claimMu rather than mu so a claim check never contends with graph
+	// traversal.
+	fileClaims map[string]string
+	claimMu    sync.RWMutex
+}
+
+// ClaimFiles records ownership of paths for a task. Paths already held by
+// another task are returned as conflicts and are NOT reassigned — the
+// caller tells the requesting worker who holds them so it can negotiate on
+// the radio. Re-claiming a path the same task already owns is a no-op.
+func (r *Run) ClaimFiles(taskID string, paths []string) (conflicts map[string]string) {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
+	if r.fileClaims == nil {
+		r.fileClaims = make(map[string]string)
+	}
+	for _, p := range paths {
+		if owner, held := r.fileClaims[p]; held && owner != taskID {
+			if conflicts == nil {
+				conflicts = make(map[string]string)
+			}
+			conflicts[p] = owner
+			continue
+		}
+		r.fileClaims[p] = taskID
+	}
+	return conflicts
+}
+
+// ReleaseFiles gives up paths held by a task. Paths held by a different
+// task are left alone: a worker cannot release someone else's claim.
+func (r *Run) ReleaseFiles(taskID string, paths []string) {
+	r.claimMu.Lock()
+	defer r.claimMu.Unlock()
+	for _, p := range paths {
+		if r.fileClaims[p] == taskID {
+			delete(r.fileClaims, p)
+		}
+	}
+}
+
+// FileOwner returns the task holding a path, or "" if unclaimed.
+func (r *Run) FileOwner(path string) string {
+	r.claimMu.RLock()
+	defer r.claimMu.RUnlock()
+	return r.fileClaims[path]
+}
+
+// FileClaims returns a copy of the claim map, for snapshots and the monitor.
+func (r *Run) FileClaims() map[string]string {
+	r.claimMu.RLock()
+	defer r.claimMu.RUnlock()
+	out := make(map[string]string, len(r.fileClaims))
+	for k, v := range r.fileClaims {
+		out[k] = v
+	}
+	return out
 }
 
 // watchSink is fed to long-poll watchers so PostMessage can wake them.

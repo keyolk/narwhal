@@ -274,6 +274,10 @@ func (c *Coordinator) reapFinishedWorkers() {
 		if task == nil {
 			continue
 		}
+		// A worker that exits still holding file claims would lock those
+		// paths for the rest of the run, so release them here rather than
+		// trusting every exit path to have called FILE_RELEASE.
+		c.releaseTaskFiles(et.taskID)
 		state := task.CurrentState()
 		if state == broker.TaskCompleted || state == broker.TaskFailed {
 			c.mu.Lock()
@@ -313,6 +317,23 @@ func isSynthesisTask(task *broker.Task) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(task.Assignment), "synthesis task")
+}
+
+// releaseTaskFiles gives up every path a task still holds. Called when a
+// worker exits, so a forgotten FILE_RELEASE cannot strand a path for the
+// rest of the run.
+func (c *Coordinator) releaseTaskFiles(taskID string) {
+	var held []string
+	for path, owner := range c.run.FileClaims() {
+		if owner == taskID {
+			held = append(held, path)
+		}
+	}
+	if len(held) == 0 {
+		return
+	}
+	c.run.ReleaseFiles(taskID, held)
+	log.Printf("[coordinator] released %d file(s) held by exited %s", len(held), taskID)
 }
 
 // workerPostedToRadio returns true if the agent sent any message to the run's
@@ -359,33 +380,64 @@ func (c *Coordinator) intakeSplitRequests() {
 	}
 }
 
-// intakeDepEdgeRequests scans every thread for DEP_ADD / DEP_REMOVE messages
-// the coordinator has not yet processed and applies them to the graph.
-// Unlike split-request, dep-edge messages can come on any thread — a
-// worker discovers a relationship and posts it to worklog, not planning.
+// intakeDepEdgeRequests scans every thread for the graph-mutating messages
+// the coordinator has not yet processed: dep-edge changes and file claims.
+// Unlike split-request, these can come on any thread — a worker discovers a
+// relationship or is about to write a file and posts to worklog, not planning.
 func (c *Coordinator) intakeDepEdgeRequests() {
 	msgs := c.run.MessagesSince(c.depCursor)
 	for _, m := range msgs {
-		action, taskID, deps, ok := broker.ParseDepEdgeRequest(m.Content)
-		if !ok {
+		if action, taskID, deps, ok := broker.ParseDepEdgeRequest(m.Content); ok {
+			c.applyDepEdge(action, taskID, deps, m.Sender)
 			continue
 		}
-		task := c.run.GetTask(taskID)
-		if task == nil {
-			log.Printf("[coordinator] dep-edge for unknown task %s, ignoring", taskID)
-			continue
-		}
-		switch action {
-		case broker.DepAddPrefix:
-			task.AddDep(deps, c.run)
-			log.Printf("[coordinator] dep-edge added: %s ← %v from %s", taskID, deps, m.Sender)
-		case broker.DepRemovePrefix:
-			task.RemoveDep(deps)
-			log.Printf("[coordinator] dep-edge removed: %s ⊘ %v from %s", taskID, deps, m.Sender)
+		if action, taskID, paths, ok := broker.ParseFileClaimRequest(m.Content); ok {
+			c.applyFileClaim(action, taskID, paths, m.Sender)
 		}
 	}
 	if len(msgs) > 0 {
 		c.depCursor = msgs[len(msgs)-1].Seq
+	}
+}
+
+func (c *Coordinator) applyDepEdge(action, taskID string, deps []string, sender string) {
+	task := c.run.GetTask(taskID)
+	if task == nil {
+		log.Printf("[coordinator] dep-edge for unknown task %s, ignoring", taskID)
+		return
+	}
+	switch action {
+	case broker.DepAddPrefix:
+		task.AddDep(deps, c.run)
+		log.Printf("[coordinator] dep-edge added: %s ← %v from %s", taskID, deps, sender)
+	case broker.DepRemovePrefix:
+		task.RemoveDep(deps)
+		log.Printf("[coordinator] dep-edge removed: %s ⊘ %v from %s", taskID, deps, sender)
+	}
+}
+
+// applyFileClaim records or releases file ownership. A conflicting claim is
+// answered on the radio rather than silently dropped: the requesting worker
+// has to know who holds the file, or it will go ahead and overwrite.
+func (c *Coordinator) applyFileClaim(action, taskID string, paths []string, sender string) {
+	switch action {
+	case broker.FileClaimPrefix:
+		conflicts := c.run.ClaimFiles(taskID, paths)
+		if len(conflicts) == 0 {
+			log.Printf("[coordinator] files claimed by %s: %v", taskID, paths)
+			return
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "FILE_CONFLICT: these paths are already held by another task.\n")
+		for p, owner := range conflicts {
+			fmt.Fprintf(&b, "  %s → held by %s\n", p, owner)
+		}
+		fmt.Fprintf(&b, "Coordinate on the radio before writing; do not overwrite.")
+		c.run.PostMessage("worklog", "coordinator", []string{sender}, broker.PriorityUrgent, b.String())
+		log.Printf("[coordinator] file conflict for %s: %v", taskID, conflicts)
+	case broker.FileReleasePrefix:
+		c.run.ReleaseFiles(taskID, paths)
+		log.Printf("[coordinator] files released by %s: %v", taskID, paths)
 	}
 }
 

@@ -79,9 +79,13 @@ func TestCursorMovesWithinFocusedPane(t *testing.T) {
 		t.Fatalf("task cursor moved while radio was focused: %d", m.taskCur)
 	}
 
-	m = press(m, "tab", "j")
-	if m.taskCur != 1 {
-		t.Fatalf("taskCur = %d, want 1", m.taskCur)
+	// In the graph the cursor moves by geometry, so which task j lands on
+	// depends on the drawn layout — what this test pins is that the focused
+	// pane is the one that moves. These four tasks have no deps and share a
+	// row, so l is the direction with somewhere to go.
+	m = press(m, "tab", "l")
+	if m.taskCur == 0 {
+		t.Fatalf("task cursor did not move while tasks were focused")
 	}
 	if m.radioCur != 2 {
 		t.Fatalf("radio cursor moved while tasks were focused: %d", m.radioCur)

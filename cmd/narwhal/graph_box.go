@@ -274,6 +274,8 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		}
 	}
 
+	alignUnderParents(placed, width, gapX)
+
 	height := y
 	if height < boxHeight {
 		height = boxHeight
@@ -371,6 +373,77 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		}
 	}
 	return rows
+}
+
+// alignUnderParents nudges each row so a box sits under what it depends on.
+//
+// Rows are centred independently, which is right for a row of siblings and
+// wrong the moment a row has one box: a lone child of the second box in a
+// five-box row was drawn dead centre, under the third. The edge still
+// pointed at the right parent, so the diagram was correct and unreadable —
+// and it made "press down" land somewhere the eye did not expect.
+//
+// Only whole rows move, and only when every box in the row can shift by the
+// same amount without leaving the pane. Moving boxes individually would let
+// siblings overlap, which is a worse defect than being off-centre.
+func alignUnderParents(placed []placedBox, width, gapX int) {
+	byRow := map[int][]int{} // y → indices into placed
+	for i, b := range placed {
+		byRow[b.y] = append(byRow[b.y], i)
+	}
+	pos := map[string]placedBox{}
+	for _, b := range placed {
+		pos[b.node.task.ID] = b
+	}
+
+	rows := make([]int, 0, len(byRow))
+	for y := range byRow {
+		rows = append(rows, y)
+	}
+	sort.Ints(rows)
+
+	for _, y := range rows {
+		idx := byRow[y]
+		if len(idx) != 1 {
+			// A row of siblings has no single parent to line up with, and
+			// centring is the right answer for it.
+			continue
+		}
+		b := placed[idx[0]]
+
+		// Where the parents are. A box with several parents belongs over
+		// their midpoint, which is also where a fan-in bar is drawn.
+		lo, hi, found := 0, 0, false
+		for _, d := range b.node.task.Deps {
+			p, ok := pos[d]
+			if !ok || p.y >= b.y {
+				continue
+			}
+			if !found {
+				lo, hi, found = p.x, p.x+p.w, true
+				continue
+			}
+			if p.x < lo {
+				lo = p.x
+			}
+			if p.x+p.w > hi {
+				hi = p.x + p.w
+			}
+		}
+		if !found {
+			continue
+		}
+
+		want := (lo+hi)/2 - b.w/2
+		if want < 0 {
+			want = 0
+		}
+		if want+b.w > width {
+			want = width - b.w
+		}
+		placed[idx[0]].x = want
+		pos[b.node.task.ID] = placed[idx[0]]
+	}
 }
 
 // packRow splits a layer's nodes into rows that fit the pane. Siblings sit

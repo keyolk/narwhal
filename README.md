@@ -121,7 +121,7 @@ watching a worker must not append to the transcript it is still writing.
 Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
-Graph ───────────────────────────────── Node ──────────────────────────────────
+1 Graph ─────────────────────────────── Node ──────────────────────────────────
         ┌──────────┐  ┌────────┐        ▶ api (api-audit)  dispatched
         │ ▶ api ×2 │  │ ✓ auth │         ◆ model haiku
         └─────┬────┘  └────┬───┘         ↓ blocks synthesis
@@ -131,14 +131,14 @@ Graph ────────────────────────�
             │ · synthesis │                14:34:28 → Bash  send worklog "..."
             └─────────────┘                14:34:31 · worklog 게시 완료.
 
-                                        Radio (4) ─────────────────────────────
+                                        2 Radio (4) ───────────────────────────
                                         03:12:00 · auth cross-path asymmetries…
                                         03:13:34 ! api URGENT: provider lock re…
                                         03:15:30 · coordinator →synthesis ⋮ tas…
                                         03:16:00 · api ⋮ claims api/router.go
 
 done 1  running 2  ready 0  failed 0  [following]
-tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
+1/2 pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
 ```
 
 The right side follows the graph cursor. Moving between nodes used to change
@@ -168,10 +168,23 @@ horizontal bar — rather than as independent edges that would overwrite each
 other, and a run that would otherwise cut through a wrapped row detours
 through the margin.
 
-The graph is two-dimensional, so navigation is too: `h` and `l` step between
-boxes in the order they are drawn, row by row and left to right. Backing out
-of the graph is `esc`, not `h` — a direction key inside a diagram should
-move, not exit.
+The graph is two-dimensional, so navigation is too — and each axis moves
+along what it actually means. `h` and `l` walk a row of boxes and wrap into
+the next. `j` and `k` follow the **dependency edges**: in a diagram that
+line is what "below" means, and it is the one relationship the horizontal
+keys cannot express. So `j` from any sibling of a fan-in reaches the child
+it feeds, even when the child is drawn off to one side.
+
+With no edge to follow, `j` falls back to a box sharing your columns, so it
+still works in a graph with no dependencies at all. With neither, the cursor
+stays put — moving to an unrelated box because it was the only candidate
+teaches you the arrow keys are unpredictable. Backing out of the graph is
+`esc`, not `h`: a direction key inside a diagram should move, not exit.
+
+A lone child is drawn under its parent rather than centred in the pane.
+Rows are otherwise centred independently, which is right for a row of
+siblings and wrong the moment a row holds one box — the edge still pointed
+at the right parent, but the diagram read as though it pointed elsewhere.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 
@@ -194,13 +207,20 @@ live. Opening the monitor with several running shows a picker:
 ```
 Narwhal  2 live, 1 finished
 
-▸ 08-13 13:58  /tmp/nw-picker                daemon
+▸ ▶ 08-13 13:58  /tmp/nw-picker         running
     auth 모듈 보안 감사
-  08-13 13:58  .../keyolk/narwhal            daemon
+  ✓ 08-13 13:58  .../keyolk/narwhal     5/5  12 msg
     monitor TUI 리팩터링 계획
-  08-12 23:03  .../src/myrepo                finished
-    audit the auth module
+  ✗ 08-12 23:03  .../src/myrepo         3/5  2 failed
 ```
+
+A live run is marked `▶` and keeps its colour; a finished one is `✓` — or
+`✗` when a task failed, which is the reason to open a run you would
+otherwise scroll past. Each row carries its outcome, because a list that
+says only when and where makes you open every run to learn whether it
+worked, which is the question you had before opening anything. With the list now mostly history, a wall of identically dim rows
+would bury the one run you can still act on — and the glyph carries that
+where colour cannot, in a screenshot or a washed-out palette.
 
 The list carries recent history, not just what is running: a finished run
 is exactly when you want to ask what it did, and the snapshots on disk were
@@ -216,6 +236,25 @@ position (`[2/3]`). The list refreshes while the monitor is open — a run
 started afterwards appears, a finished one drops out — and the selection
 follows the run being watched rather than its index.
 `narwhal monitor --run <id>` opens one directly.
+
+Colour carries meaning rather than decorating, and the same hue means the
+same thing in every pane:
+
+| | |
+|---|---|
+| green | finished, and finished well |
+| cyan | in flight — the things actually moving |
+| yellow | waiting on something |
+| red | failed, or urgent |
+| blue | who said it (agent and task names) |
+| magenta | structure the run is built from (threads, models, files) |
+| dim | furniture: borders, labels, keys, anything you read past |
+
+A box takes its task's colour, frame included, so it reads as one object. A
+count of zero stays dim — it is not news. An urgent radio message is the one
+thing pulled across a full pane, since it may invalidate what a peer is
+doing right now. Colours are ANSI 0–7, so the terminal's own theme picks the
+shades; a hard-coded palette fights whatever you have chosen and loses.
 
 Graph glyphs are plain box-drawing, so they render in any font. Task,
 priority and inspector field icons use Nerd Font when the terminal has one:
@@ -235,8 +274,9 @@ terminal's own shell-integration variables survive, and either is enough.
 | Key | Action |
 |---|---|
 | `tab` | Switch between the graph and radio panes |
-| `j` / `k` | Move the cursor (also `↓` / `↑`) |
-| `h` / `l` | Move between boxes in the graph (also `←` / `→`); from the radio, switch panes |
+| `1` / `2` | Jump straight to the graph or the radio |
+| `j` / `k` | Move the cursor; in the graph, along dependency edges (also `↓` / `↑`) |
+| `h` / `l` | Move between boxes along a row (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |

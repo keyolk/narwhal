@@ -240,30 +240,33 @@ func shortenPath(p string) string {
 // for reading its inputs. Assistant text is kept in full — it is the
 // worker explaining itself, which is the most informative part.
 func renderTranscript(entries []transcriptEntry, width int) []string {
+	// Three kinds of line, three weights. A tool call is what the worker
+	// *did* and carries the colour; its result is evidence and recedes;
+	// the worker's own prose is what it *thinks* and reads at full
+	// contrast. Undifferentiated, the feed was a wall of grey where the
+	// actions and the reasoning looked alike.
 	var out []string
 	for _, e := range entries {
 		stamp := ""
 		if !e.at.IsZero() {
 			stamp = e.at.Format("15:04:05") + " "
 		}
+		pad := strings.Repeat(" ", len(stamp)) + "  "
 		switch e.kind {
 		case "tool":
-			out = append(out, stamp+"→ "+truncate(e.text, width-len(stamp)-2))
+			out = append(out, styDim.Render(stamp)+styCyan.Render("→ ")+
+				styCyan.Render(truncate(e.text, width-len(stamp)-2)))
 		case "result":
-			for i, l := range clipLines(e.text, 2) {
-				prefix := strings.Repeat(" ", len(stamp)) + "  "
-				if i == 0 {
-					prefix = strings.Repeat(" ", len(stamp)) + "  "
-				}
-				out = append(out, prefix+truncate(oneLine(l), width-len(prefix)))
+			for _, l := range clipLines(e.text, 2) {
+				out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
 			}
 		default:
 			for i, l := range wrapText(e.text, width-len(stamp)-2) {
-				prefix := strings.Repeat(" ", len(stamp)) + "  "
 				if i == 0 {
-					prefix = stamp + "· "
+					out = append(out, styDim.Render(stamp)+styGreen.Render("· ")+l)
+					continue
 				}
-				out = append(out, prefix+l)
+				out = append(out, pad+l)
 			}
 		}
 	}

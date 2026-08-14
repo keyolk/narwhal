@@ -61,8 +61,8 @@ func (m tuiModel) inspectorHeadline(t broker.TaskSnapshot, width int) string {
 	if t.Name != "" && t.Name != t.ID {
 		name += styDim.Render(" (" + t.Name + ")")
 	}
-	return fmt.Sprintf("%s %s  %s", style.Render(icon), name,
-		style.Render(string(t.State)))
+	return fmt.Sprintf("%s %s  %s", style.Render(icon), styTitle.Render(name),
+		style.Bold(true).Render(string(t.State)))
 }
 
 // inspectorFields renders the one-line facts: model, what it waits on, what
@@ -77,8 +77,12 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 		if value == "" {
 			return
 		}
+		// The icon takes the value's colour and the word stays dim, so a
+		// row reads as one coloured unit with a quiet label rather than
+		// three shades competing across it.
 		prefix := fmt.Sprintf(" %s %s ", icon, label)
-		out = append(out, styDim.Render(prefix)+
+		out = append(out, style.Render(" "+icon)+
+			styDim.Render(" "+label+" ")+
 			style.Render(truncate(value, width-displayWidth(prefix))))
 	}
 
@@ -86,7 +90,14 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 	if model == "" {
 		model = "default"
 	}
-	add(icons.fieldModel, "model", model, styDim)
+	// Model is structural: which tier this task was handed. It matters
+	// most when it is not the default, which is exactly when a dim value
+	// hid it.
+	modelStyle := styMagenta
+	if t.Model == "" {
+		modelStyle = styDim
+	}
+	add(icons.fieldModel, "model", model, modelStyle)
 
 	if len(t.Deps) > 0 {
 		// Say which deps are still outstanding, not just what the edges
@@ -104,18 +115,27 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 	}
 
 	if blocks := m.blockedBy(t.ID); len(blocks) > 0 {
-		add(icons.fieldBlocks, "blocks", strings.Join(blocks, ", "), styDim)
+		// What a task holds up is the reason to care that it is stuck.
+		add(icons.fieldBlocks, "blocks", strings.Join(blocks, ", "), styBlue)
 	}
 
 	if t.Dispatches > 1 {
 		// One dispatch is the normal case and not worth a line; more than
 		// one means it was retried, which is worth seeing.
+		// The last attempt before the circuit breaker fails the task is a
+		// different situation from the second of three.
+		tryStyle := styYellow
+		if t.Dispatches >= broker.MaxDispatchFailures {
+			tryStyle = styRedBold
+		}
 		add(icons.fieldDispatch, "tries",
-			fmt.Sprintf("%d of %d", t.Dispatches, broker.MaxDispatchFailures), styYellow)
+			fmt.Sprintf("%d of %d", t.Dispatches, broker.MaxDispatchFailures), tryStyle)
 	}
 
 	if files := m.filesHeldBy(t.ID); len(files) > 0 {
-		add(icons.fieldFiles, "holds", strings.Join(files, ", "), styDim)
+		// A held path is a claim against every peer, so it reads as
+		// structure rather than as a note.
+		add(icons.fieldFiles, "holds", strings.Join(files, ", "), styMagenta)
 	}
 
 	return out

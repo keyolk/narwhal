@@ -235,6 +235,25 @@ started afterwards appears, a finished one drops out — and the selection
 follows the run being watched rather than its index.
 `narwhal monitor --run <id>` opens one directly.
 
+Colour carries meaning rather than decorating, and the same hue means the
+same thing in every pane:
+
+| | |
+|---|---|
+| green | finished, and finished well |
+| cyan | in flight — the things actually moving |
+| yellow | waiting on something |
+| red | failed, or urgent |
+| blue | who said it (agent and task names) |
+| magenta | structure the run is built from (threads, models, files) |
+| dim | furniture: borders, labels, keys, anything you read past |
+
+A box takes its task's colour, frame included, so it reads as one object. A
+count of zero stays dim — it is not news. An urgent radio message is the one
+thing pulled across a full pane, since it may invalidate what a peer is
+doing right now. Colours are ANSI 0–7, so the terminal's own theme picks the
+shades; a hard-coded palette fights whatever you have chosen and loses.
+
 Graph glyphs are plain box-drawing, so they render in any font. Task,
 priority and inspector field icons use Nerd Font when the terminal has one:
 

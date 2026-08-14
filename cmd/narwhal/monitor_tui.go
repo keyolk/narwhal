@@ -745,16 +745,38 @@ func (m tuiModel) graphPaneWidth() int {
 	return w
 }
 
+// The palette. Colour carries meaning here rather than decorating: the
+// same hue means the same thing everywhere, so a glance at any pane reads
+// the same way.
+//
+//	green   finished, and finished well
+//	cyan    in flight — the things actually moving
+//	yellow  waiting on something
+//	red     failed, or urgent
+//	blue    who said it (agent and task names)
+//	magenta structure the run is built from (threads, models, files)
+//	dim     furniture: borders, labels, keys, anything you read past
+//
+// ANSI 0–7 rather than 256-colour or truecolour, so the terminal's own
+// theme decides the exact shade. A hard-coded palette fights whatever the
+// user has chosen and loses.
 var (
-	styTitle  = lipgloss.NewStyle().Bold(true)
-	styDim    = lipgloss.NewStyle().Faint(true)
-	styGreen  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	styYellow = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	styRed    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	styCyan   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-	styBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
-	stySel    = lipgloss.NewStyle().Reverse(true)
-	styPanel  = lipgloss.NewStyle().Bold(true).Underline(true)
+	styTitle   = lipgloss.NewStyle().Bold(true)
+	styDim     = lipgloss.NewStyle().Faint(true)
+	styGreen   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	styYellow  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	styRed     = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	styCyan    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	styBlue    = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
+	styMagenta = lipgloss.NewStyle().Foreground(lipgloss.Color("5"))
+	stySel     = lipgloss.NewStyle().Reverse(true)
+
+	// Bold variants for the few places where a colour has to carry across
+	// a pane of text — a running count, an urgent message, a focused pane
+	// title — without a second colour competing with it.
+	styGreenBold = styGreen.Bold(true)
+	styCyanBold  = styCyan.Bold(true)
+	styRedBold   = styRed.Bold(true)
 )
 
 // runCountLabel says how many runs there are and how many are still going.
@@ -822,7 +844,7 @@ func abbreviatePath(p string) string {
 func (m tuiModel) viewPicker() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n\n",
-		styTitle.Render("Narwhal"),
+		styCyanBold.Render("Narwhal"),
 		styDim.Render(m.runCountLabel()))
 
 	if len(m.runs) == 0 {
@@ -871,8 +893,12 @@ func (m tuiModel) viewPicker() string {
 			// it, so the selection styles the whole line at once.
 			b.WriteString(stySel.Render(padRight(truncate(head+origin, m.width), m.width-1)) + "\n")
 		} else {
-			b.WriteString(styDim.Render(truncate(head, m.width)) +
-				originStyle.Render(origin) + "\n")
+			// The glyph carries the run's state and the directory is what
+			// you actually recognise a run by; the clock is scaffolding.
+			b.WriteString(originStyle.Render(marker+icon) +
+				styDim.Render(fmt.Sprintf(" %-11s  ", when)) +
+				styBlue.Render(fmt.Sprintf("%-28s", where)) +
+				"  " + originStyle.Render(origin) + "\n")
 		}
 
 		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
@@ -895,7 +921,7 @@ func (m tuiModel) viewPicker() string {
 func (m tuiModel) viewHeader() string {
 	icon, state := runGlyph(m.snap.State)
 	line := fmt.Sprintf("%s  %s  %s %s",
-		styTitle.Render("Narwhal"), m.snap.RunID, icon, state)
+		styCyanBold.Render("Narwhal"), styDim.Render(m.snap.RunID), icon, state)
 	// With several runs live, say which one this is — otherwise the view
 	// gives no hint that the others exist.
 	if len(m.runs) > 1 {
@@ -911,7 +937,10 @@ func (m tuiModel) viewHeader() string {
 	if prompt == "" {
 		return line
 	}
-	return line + "\n" + styDim.Render(prompt)
+	// The prompt is what the run is *for*, and it was the dimmest thing on
+	// screen. Leave it unstyled so it reads at full contrast against the
+	// furniture around it.
+	return line + "\n" + prompt
 }
 
 // runGlyph returns the icon and colored label for a run state.
@@ -950,15 +979,27 @@ func (m tuiModel) viewFooter() string {
 	for _, t := range m.snap.Tasks {
 		counts[t.State]++
 	}
-	stats := fmt.Sprintf("%s %d  %s %d  %s %d  %s %d",
-		styGreen.Render("done"), counts[broker.TaskCompleted],
-		styCyan.Render("running"), counts[broker.TaskDispatched],
-		styYellow.Render("ready"), counts[broker.TaskReady],
-		styRed.Render("failed"), counts[broker.TaskFailed])
+	// Colour the number as well as the label. A count of zero is not news,
+	// so it stays dim and the eye skips it; a non-zero one is the thing
+	// you came to the footer for.
+	stat := func(label string, n int, style lipgloss.Style) string {
+		if n == 0 {
+			return styDim.Render(fmt.Sprintf("%s %d", label, n))
+		}
+		return style.Render(label) + " " + style.Bold(true).Render(strconv.Itoa(n))
+	}
+	stats := strings.Join([]string{
+		stat("done", counts[broker.TaskCompleted], styGreen),
+		stat("running", counts[broker.TaskDispatched], styCyan),
+		stat("ready", counts[broker.TaskReady], styYellow),
+		stat("failed", counts[broker.TaskFailed], styRed),
+	}, "  ")
 
 	tail := ""
 	if m.followTail {
-		tail = styDim.Render("  [following]")
+		// This says the view is tracking new messages, which is a live
+		// state — dim made it read as a label nobody had to notice.
+		tail = "  " + styCyan.Render("[following]")
 	}
 	keys := "tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit"
 	if len(m.runs) > 1 {
@@ -1064,8 +1105,15 @@ func (m tuiModel) styleBoxLine(r boxRow, line string, selected int) string {
 		case s.part == partBody:
 			_, style := taskIconStyle(m.taskByIndex(s.node).State)
 			b.WriteString(style.Render(seg))
+		case s.part == partTop || s.part == partBottom:
+			// The frame takes its task's colour, faintly, so a box reads as
+			// one object. Dim borders around a coloured label made every
+			// box look like a grey frame someone had written inside.
+			_, style := taskIconStyle(m.taskByIndex(s.node).State)
+			b.WriteString(style.Faint(true).Render(seg))
 		default:
-			// Borders stay dim so the graph does not fight the content.
+			// Routing between boxes stays dim: the edges are structure, and
+			// colouring them would compete with the nodes they connect.
 			b.WriteString(styDim.Render(seg))
 		}
 		at = x1
@@ -1136,9 +1184,16 @@ func (m tuiModel) graphRows() []graphRow {
 // The rule is one column short of the pane so a full-width line cannot
 // push into its neighbour when the panes are joined horizontally.
 func paneTitle(label string, focused bool, width int) string {
+	// The focused pane is where the keys go, so it gets the colour. Bold
+	// and underline alone had to be compared against the other titles to
+	// be read; a hue is apparent without comparison.
 	styled := styDim.Render(label)
 	if focused {
-		styled = styPanel.Render(label)
+		// Bold + colour, without the underline. Underline made lipgloss
+		// emit a full escape pair per character — the pane title alone was
+		// a dozen sequences — and a coloured bold word already stands out
+		// against dim neighbours.
+		styled = styCyanBold.Render(label)
 	}
 	rule := width - displayWidth(label) - 2
 	if rule < 1 {
@@ -1181,37 +1236,56 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 	stamp := msg.CreatedAt.Format("15:04:05")
 	prefix := fmt.Sprintf("%s %s %s ", stamp, prioCh, sender)
 
-	// The mention marker is short and fixed; keeping it unstyled in the row
-	// body avoids re-styling a fragment truncation cut in half.
-	var body strings.Builder
+	// A mention says the message is addressed at someone, which changes
+	// how you read the rest of it — so it is kept as its own coloured
+	// fragment rather than folded into the body.
+	mention := ""
 	if len(msg.Mentions) > 0 {
-		body.WriteString("→" + strings.Join(msg.Mentions, ",") + " ")
+		mention = "→" + strings.Join(msg.Mentions, ",") + " "
 	}
+
 	// Protocol messages are a wire format, not prose. Rendered raw they
 	// read as noise — FILE_CLAIM|api|internal/api/router.go tells you a
 	// worker claimed a file only after you split it on pipes yourself.
 	summary, isProtocol := radioSummary(msg.Content)
+	marker := ""
 	if isProtocol {
 		// These summaries lead with the task they concern, which is
 		// usually the sender: "api  ⋮ api claims router.go" says it twice.
 		summary = strings.TrimPrefix(summary, sender+" ")
-		body.WriteString("⋮ ")
+		marker = "⋮ "
 	}
-	body.WriteString(summary)
 
-	rest := truncate(body.String(), width-displayWidth(prefix))
+	// Measure and cut as plain text, then style the pieces. truncate()
+	// counts rune widths, so a styled string miscounts its escapes as
+	// content and a cut mid-escape bleeds into the rows below.
+	rest := truncate(mention+marker+summary, width-displayWidth(prefix))
 
 	if selected {
 		// A reversed row reads better without competing colors inside it.
 		return stySel.Render(padRight(prefix+rest, width))
 	}
+
+	// Re-split the truncated text so each piece keeps its own colour.
+	body := rest
+	styledMention := ""
+	if mention != "" && strings.HasPrefix(body, mention) {
+		styledMention = styMagenta.Render(mention)
+		body = strings.TrimPrefix(body, mention)
+	}
 	if isProtocol {
 		// Coordination traffic is context for the prose around it, so it
 		// recedes rather than competing with a worker's actual finding.
-		rest = styDim.Render(rest)
+		body = styDim.Render(body)
+	} else if msg.Priority == broker.PriorityUrgent {
+		// An urgent message may invalidate what a peer is doing right now.
+		// That is the one kind of traffic worth pulling the eye across a
+		// full pane for.
+		body = styRedBold.Render(body)
 	}
 	return fmt.Sprintf("%s %s %s %s",
-		styDim.Render(stamp), prioStyle.Render(prioCh), styBlue.Render(sender), rest)
+		styDim.Render(stamp), prioStyle.Render(prioCh),
+		styBlue.Render(sender), styledMention+body)
 }
 
 func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
@@ -1221,7 +1295,7 @@ func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
 	case broker.PriorityFYI:
 		return icons.prioFYI, styDim
 	default:
-		return icons.prioNormal, styDim
+		return icons.prioNormal, styCyan
 	}
 }
 
@@ -1268,7 +1342,8 @@ func (m tuiModel) viewSessionDetail() string {
 
 	icon, style := taskIconStyle(t.State)
 	head := fmt.Sprintf("%s  %s %s  %s",
-		styTitle.Render("Session"), style.Render(icon), t.ID, style.Render(string(t.State)))
+		styCyanBold.Render("Session"), style.Render(icon),
+		styTitle.Render(t.ID), style.Bold(true).Render(string(t.State)))
 
 	meta := []string{"agent=worker-" + t.ID}
 	if t.Model != "" {
@@ -1293,7 +1368,7 @@ func (m tuiModel) viewSessionDetail() string {
 		if len(body) > 0 {
 			body = append(body, "")
 		}
-		body = append(body, styDim.Render("── final answer ──"))
+		body = append(body, styGreen.Render("── final answer ──"))
 		for _, l := range final {
 			body = append(body, wrapText(l, width)...)
 		}
@@ -1363,7 +1438,8 @@ func (m tuiModel) viewTaskDetail() string {
 
 	icon, style := taskIconStyle(t.State)
 	head := fmt.Sprintf("%s  %s %s  %s",
-		styTitle.Render("Task"), style.Render(icon), t.ID, style.Render(string(t.State)))
+		styCyanBold.Render("Task"), style.Render(icon),
+		styTitle.Render(t.ID), style.Bold(true).Render(string(t.State)))
 
 	var meta []string
 	if t.Name != "" && t.Name != t.ID {
@@ -1396,7 +1472,8 @@ func (m tuiModel) viewTaskDetail() string {
 	// log only exists after it exits.
 	if tail := m.workerActivityTail(t.ID, m.width-2); len(tail) > 0 {
 		body = append(body, "",
-			styDim.Render("── recent activity (press s for the full session) ──"))
+			styCyan.Render("── recent activity")+
+				styDim.Render(" (press s for the full session) ──"))
 		body = append(body, tail...)
 	}
 
@@ -1541,11 +1618,15 @@ func (m tuiModel) viewMessageDetail() string {
 	}
 	msg := m.snap.Messages[m.radioCur]
 
-	head := fmt.Sprintf("%s  seq %d  %s → %s",
-		styTitle.Render("Message"), msg.Seq,
+	head := fmt.Sprintf("%s  %s  %s → %s",
+		styCyanBold.Render("Message"), styDim.Render(fmt.Sprintf("seq %d", msg.Seq)),
 		styBlue.Render(msg.Sender), mentionsLabel(msg.Mentions))
-	meta := styDim.Render(fmt.Sprintf("thread=%s  priority=%s  %s",
-		msg.ThreadID, msg.Priority, msg.CreatedAt.Format("15:04:05")))
+	// The thread says which conversation this belongs to and the priority
+	// says how to read it; both were dim enough to skip.
+	_, prioStyle := priorityGlyph(msg.Priority)
+	meta := styDim.Render("thread=") + styMagenta.Render(msg.ThreadID) +
+		styDim.Render("  priority=") + prioStyle.Render(string(msg.Priority)) +
+		styDim.Render("  "+msg.CreatedAt.Format("15:04:05"))
 
 	body := wrapText(msg.Content, m.width-2)
 	footer := styDim.Render("j/k scroll · n/p message · esc back · q close")
@@ -1564,7 +1645,7 @@ func mentionsLabel(m []string) string {
 	if len(m) == 0 {
 		return styDim.Render("(broadcast)")
 	}
-	return strings.Join(m, ", ")
+	return styMagenta.Render(strings.Join(m, ", "))
 }
 
 func taskIconStyle(s broker.TaskState) (string, lipgloss.Style) {

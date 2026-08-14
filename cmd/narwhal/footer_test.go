@@ -81,16 +81,19 @@ func TestMessageDetailHintsSitOnTheLastRow(t *testing.T) {
 	}
 }
 
-func TestContentTallerThanTheTerminalIsNotPadded(t *testing.T) {
-	// Padding is for filling a short screen, not for pushing a full one
-	// past its own bottom edge.
+func TestContentTallerThanTheTerminalIsClipped(t *testing.T) {
+	// Padding fills a short screen; content taller than the screen is cut
+	// instead. It used to be left alone, which scrolls the terminal — and
+	// what scrolls away is the top, so the header goes first.
 	long := strings.Repeat("line\n", 50)
 	out := pinFooter(strings.TrimRight(long, "\n"), "hints", 10)
-	if _, n := lastLine(out); n != 51 {
-		t.Fatalf("rendered %d lines, want the content plus one hint line", n)
+
+	last, n := lastLine(out)
+	if n != 10 {
+		t.Fatalf("rendered %d lines for a 10-row terminal", n)
 	}
-	if last, _ := lastLine(out); last != "hints" {
-		t.Errorf("last line = %q, want the hints", last)
+	if last != "hints" {
+		t.Errorf("last line = %q, want the hints — they say how to get out", last)
 	}
 }
 
@@ -310,5 +313,85 @@ func TestRadioTitleStaysBelowTheInspector(t *testing.T) {
 	if radioAt <= nodeAt+3 {
 		t.Errorf("the Radio rule sits %d rows below Node — too close to have "+
 			"cleared the inspector's fields", radioAt-nodeAt)
+	}
+}
+
+func TestNoViewOverflowsItsTerminal(t *testing.T) {
+	// A view that writes past the last row scrolls the terminal, and what
+	// scrolls away is the top — which is how the run picker ended up with
+	// no header and no visible selection. This sweeps every view against
+	// every size rather than pinning one case, because the arithmetic
+	// differs per view and each got it wrong in its own way.
+	t.Setenv("HOME", t.TempDir())
+
+	var runs []store.LiveRun
+	for i := 0; i < 21; i++ {
+		runs = append(runs, store.LiveRun{
+			RunID: string(rune('a' + i)), CWD: "/src/repo",
+			Prompt:    "Consider the following question: how does the parser work?",
+			StartedAt: int64(1786600000 - i*3600),
+			State:     "done", Tasks: 5, Done: 5, Messages: 9,
+		})
+	}
+
+	for _, h := range []int{40, 24, 14, 8, 5, 4, 3, 2, 1} {
+		// Every detail mode of a populated run.
+		m := testModel(0, 40)
+		m.width, m.height = 100, h
+		m.snap.RunID = "r1"
+		m.snap.State = broker.RunActive
+		m.snap.Prompt = "a run with a prompt long enough to wrap on a narrow pane"
+		for i := 0; i < 8; i++ {
+			m.snap.Tasks = append(m.snap.Tasks, broker.TaskSnapshot{
+				ID: string(rune('a' + i)), State: broker.TaskDispatched,
+				Assignment: strings.Repeat("long assignment text ", 20),
+			})
+		}
+		for _, mode := range []struct {
+			name string
+			d    detailMode
+		}{
+			{"main", detailClosed},
+			{"task", detailTask},
+			{"session", detailSession},
+			{"message", detailMessage},
+		} {
+			m.detail = mode.d
+			if n := len(strings.Split(m.View(), "\n")); n > h {
+				t.Errorf("%s view rendered %d lines in a %d-row terminal", mode.name, n, h)
+			}
+		}
+
+		// And the picker, full and empty.
+		for _, rs := range [][]store.LiveRun{runs, nil} {
+			p := newTUIModel(rs, 0, 0, true)
+			p.width, p.height = 100, h
+			if n := len(strings.Split(p.View(), "\n")); n > h {
+				t.Errorf("picker with %d runs rendered %d lines in a %d-row terminal",
+					len(rs), n, h)
+			}
+		}
+	}
+}
+
+func TestPickerBudgetsTwoLinesPerRun(t *testing.T) {
+	// Each run draws its summary and its prompt. Treating the budget as
+	// rows drew 41 lines into a 24-row terminal.
+	var runs []store.LiveRun
+	for i := 0; i < 21; i++ {
+		runs = append(runs, store.LiveRun{
+			RunID: string(rune('a' + i)), Prompt: "q",
+			StartedAt: int64(1786600000 - i*60), State: "done", Tasks: 5, Done: 5,
+		})
+	}
+	m := newTUIModel(runs, 0, 0, true)
+	m.width, m.height = 100, 24
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 24 {
+		t.Fatalf("rendered %d lines for a 24-row terminal", len(lines))
+	}
+	if !strings.Contains(stripEscapes(lines[0]), "Narwhal") {
+		t.Errorf("the header was pushed off the top: %q", stripEscapes(lines[0]))
 	}
 }

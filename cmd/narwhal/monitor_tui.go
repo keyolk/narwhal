@@ -675,8 +675,13 @@ func (m tuiModel) View() string {
 	header := m.viewHeader()
 	footer := m.viewFooter()
 	bodyHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
-	if bodyHeight < 3 {
-		bodyHeight = 3
+	if bodyHeight < 1 {
+		// On a terminal too short for header, body and footer together,
+		// draw one row of body and let the rest be clipped by the caller.
+		// A floor of 3 here overflowed a five-row terminal by two lines —
+		// the panes are told a height and honour it, so a floor larger
+		// than the space available is an instruction to overflow.
+		bodyHeight = 1
 	}
 
 	leftWidth := m.graphPaneWidth()
@@ -942,13 +947,22 @@ func (m tuiModel) viewPicker() string {
 		styDim.Render(m.runCountLabel()))
 
 	if len(m.runs) == 0 {
-		b.WriteString(styDim.Render("(no runs yet)\n"))
-		return b.String()
+		// Through pinFooter like every other exit, so the empty case is
+		// clipped and its hints pinned the same way the populated one is.
+		return pinFooter(b.String()+styDim.Render("(no runs yet)"),
+			styDim.Render("j/k move · enter open · esc quit"), m.height)
 	}
 
-	visible := m.height - 5
-	if visible < 3 {
-		visible = 3
+	// Each run draws two lines — the summary and its prompt — so the
+	// budget is in runs, not rows. Treating it as rows drew 41 lines into
+	// a 24-row terminal and scrolled the header off the top, which is how
+	// a list ends up with no title and no visible selection.
+	//
+	// The reserve covers the title, its blank line, and the key hints.
+	const linesPerRun = 2
+	visible := (m.height - 4) / linesPerRun
+	if visible < 1 {
+		visible = 1
 	}
 	start := scrollStart(m.runCur, visible, len(m.runs))
 
@@ -1072,6 +1086,29 @@ func pinFooter(body, hints string, height int) string {
 	used := lipgloss.Height(body) + lipgloss.Height(hints)
 	if pad := height - used; pad > 0 {
 		body += strings.Repeat("\n", pad)
+	}
+
+	// Clip rather than overflow. Below about five rows there is no room
+	// for a header, a line of content and the hints together, and a view
+	// that writes past the last row scrolls the terminal — which is how
+	// the header disappears off the top. The hints are what survive: they
+	// say how to get out.
+	if lines := strings.Split(body, "\n"); len(lines)+lipgloss.Height(hints) > height {
+		keep := height - lipgloss.Height(hints)
+		if keep < 0 {
+			keep = 0
+		}
+		body = strings.Join(lines[:keep], "\n")
+	}
+	if body == "" {
+		// Not even room for the hints. Keep their last line — for the main
+		// view that is the keys rather than the counts, which is the half
+		// you need when the window is too small to read anything else.
+		hl := strings.Split(hints, "\n")
+		if len(hl) > height && height > 0 {
+			return strings.Join(hl[len(hl)-height:], "\n")
+		}
+		return hints
 	}
 	return body + "\n" + hints
 }
@@ -1504,8 +1541,8 @@ func (m tuiModel) viewSessionDetail() string {
 	}
 
 	avail := m.height - 5
-	if avail < 3 {
-		avail = 3
+	if avail < 1 {
+		avail = 1
 	}
 	// Following pins the view to the end as the worker works.
 	if m.sessionTail && len(body) > avail {
@@ -1593,8 +1630,8 @@ func (m tuiModel) viewTaskDetail() string {
 	footer := styDim.Render("j/k scroll · n/p task · s session · esc back · q close")
 
 	avail := m.height - 5
-	if avail < 3 {
-		avail = 3
+	if avail < 1 {
+		avail = 1
 	}
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 

@@ -230,7 +230,32 @@ func (s *Server) spawn(base string, args json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return s.post(base+"/api/v1/control/spawn", body)
+	out, err := s.post(base+"/api/v1/control/spawn", body)
+	if err != nil {
+		return out, err
+	}
+	return annotateDuplicate(out), nil
+}
+
+// annotateDuplicate turns the duplicate_of field into something the reader
+// cannot skim past.
+//
+// The field alone is a key in a JSON blob among five others, and the whole
+// point is to interrupt: an unfinished run doing this exact work already
+// exists, and either it is running right now or a restart left its results
+// on disk waiting to be collected. Redoing it costs real money.
+func annotateDuplicate(out string) string {
+	var resp struct {
+		DuplicateOf string `json:"duplicate_of"`
+	}
+	if json.Unmarshal([]byte(out), &resp) != nil || resp.DuplicateOf == "" {
+		return out
+	}
+	return out + "\n\nNOTE: run " + resp.DuplicateOf + " is an unfinished run of this" +
+		" same request in this same directory. It may still be working, or it" +
+		" may have been left mid-flight by a daemon restart — in which case its" +
+		" results are on disk and narwhal_status will show them. This run was" +
+		" started anyway; cancel it with narwhal_cancel if it was not intended."
 }
 
 func (s *Server) post(url string, body []byte) (string, error) {

@@ -76,6 +76,18 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, parts []s
 	}
 }
 
+// checkDir reports whether a path is usable as a run's working directory.
+func checkDir(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("cwd %s: %w", path, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("cwd %s is not a directory", path)
+	}
+	return nil
+}
+
 // spawnWorkerSpec describes one worker the caller wants launched.
 type spawnWorkerSpec struct {
 	Name       string   `json:"name"`
@@ -108,6 +120,14 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CWD == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd is required"})
+		return
+	}
+	// Reject a bad cwd here rather than letting every worker fail on it.
+	// The launcher checks too, but by then the caller has a run whose
+	// tasks all failed and a log full of exec errors naming the wrong
+	// file — answering now says what is actually wrong.
+	if err := checkDir(req.CWD); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -372,6 +392,14 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.CWD == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd is required"})
+		return
+	}
+	// Reject a bad cwd here rather than letting every worker fail on it.
+	// The launcher checks too, but by then the caller has a run whose
+	// tasks all failed and a log full of exec errors naming the wrong
+	// file — answering now says what is actually wrong.
+	if err := checkDir(req.CWD); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 

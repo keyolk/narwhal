@@ -448,6 +448,16 @@ func (l *Launcher) SessionID(agentID string) string {
 // It returns immediately; the process runs autonomously and writes its
 // final output to the task's dispatch record via the broker API.
 func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
+	// Check the working directory before spawning. When cwd is missing or
+	// is not a directory, fork/exec fails with ENOTDIR and Go renders it
+	// against the *binary* path: "fork/exec /path/to/ccproxy: not a
+	// directory". That sends you to inspect a file that is perfectly fine
+	// — the failing path is nowhere in the message.
+	if fi, err := os.Stat(l.cwd); err != nil {
+		return fmt.Errorf("working directory %s: %w", l.cwd, err)
+	} else if !fi.IsDir() {
+		return fmt.Errorf("working directory %s is not a directory", l.cwd)
+	}
 	instrPath := filepath.Join(agentDir, "instructions.md")
 	instructions, err := os.ReadFile(instrPath)
 	if err != nil {

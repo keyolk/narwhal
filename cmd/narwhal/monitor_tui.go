@@ -146,6 +146,20 @@ func tick(d time.Duration) tea.Cmd {
 }
 
 func (m tuiModel) poll() tea.Cmd {
+	// A finished run has no broker to ask. Discover marks those with an
+	// empty BrokerURL and the snapshot on disk is the whole record, so
+	// read it instead of failing every second against a dead port.
+	if m.live.BrokerURL == "" {
+		runID := m.live.RunID
+		return func() tea.Msg {
+			snap, err := store.LoadRun(runID)
+			if err != nil {
+				return snapshotMsg{err: fmt.Errorf("read saved run: %w", err)}
+			}
+			return snapshotMsg{snap: snap}
+		}
+	}
+
 	url := m.live.BrokerURL + "/api/v1/monitor/" + m.live.RunID
 	client := m.client
 	return func() tea.Msg {
@@ -763,7 +777,31 @@ var (
 	styPanel  = lipgloss.NewStyle().Bold(true).Underline(true)
 )
 
-// viewPicker lists the live runs.
+// runCountLabel says how many runs there are and how many are still going.
+//
+// It used to read "N live runs" for a list that is now mostly history —
+// which is exactly the kind of label you stop reading because it is
+// always wrong.
+func (m tuiModel) runCountLabel() string {
+	live := 0
+	for _, r := range m.runs {
+		if r.BrokerURL != "" {
+			live++
+		}
+	}
+	switch {
+	case len(m.runs) == 0:
+		return "no runs"
+	case live == 0:
+		return fmt.Sprintf("%d finished runs", len(m.runs))
+	case live == len(m.runs):
+		return fmt.Sprintf("%d live runs", live)
+	default:
+		return fmt.Sprintf("%d live, %d finished", live, len(m.runs)-live)
+	}
+}
+
+// viewPicker lists the runs: live ones first, then recent history.
 //
 // It shows more than ids: an interactive session names runs by timestamp,
 // so the prompt is the only thing that distinguishes them at a glance.
@@ -805,10 +843,10 @@ func (m tuiModel) viewPicker() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s  %s\n\n",
 		styTitle.Render("Narwhal"),
-		styDim.Render(fmt.Sprintf("%d live runs", len(m.runs))))
+		styDim.Render(m.runCountLabel()))
 
 	if len(m.runs) == 0 {
-		b.WriteString(styDim.Render("(no live runs)\n"))
+		b.WriteString(styDim.Render("(no runs yet)\n"))
 		return b.String()
 	}
 
@@ -826,8 +864,14 @@ func (m tuiModel) viewPicker() string {
 		// working, and what it was asked to do.
 		when := runStartTime(r).Format("01-02 15:04")
 		where := abbreviatePath(r.CWD)
+		// A finished run has no broker to name. Saying so is the point:
+		// the picker mixes live and finished runs, and "which of these is
+		// still working" is the first thing you need from the list.
 		origin := "daemon"
-		if r.PID > 0 {
+		switch {
+		case r.BrokerURL == "":
+			origin = "finished"
+		case r.PID > 0:
 			origin = fmt.Sprintf("pid %d", r.PID)
 		}
 

@@ -192,15 +192,21 @@ An interactive session starts a run per request, so more than one is usually
 live. Opening the monitor with several running shows a picker:
 
 ```
-Narwhal  3 live runs
+Narwhal  2 live, 1 finished
 
 ▸ 08-13 13:58  /tmp/nw-picker                daemon
     auth 모듈 보안 감사
   08-13 13:58  .../keyolk/narwhal            daemon
     monitor TUI 리팩터링 계획
-  08-12 23:03  —                             daemon
-    (no prompt — plan-1786543427573)
+  08-12 23:03  .../src/myrepo                finished
+    audit the auth module
 ```
+
+The list carries recent history, not just what is running: a finished run
+is exactly when you want to ask what it did, and the snapshots on disk were
+readable only by `narwhal show`. Live runs come first, then the last 20
+finished ones, marked as such. Opening a finished run reads its snapshot —
+there is no broker left to poll.
 
 A run id is just a timestamp, so the list is keyed on what actually tells
 runs apart: when it started, an abbreviated working directory, and the

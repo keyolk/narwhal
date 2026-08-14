@@ -421,9 +421,10 @@ func TestAStaleActiveLabelLosesToItsTasks(t *testing.T) {
 		t.Error("a stale active label outvoted its own completed tasks")
 	}
 
-	// But an active run with work outstanding is still working.
+	// But an active run with work outstanding, still served, is working.
 	live := store.LiveRun{
-		RunID: "r2", State: string(broker.RunActive), Tasks: 4, Done: 1,
+		RunID: "r2", State: string(broker.RunActive), BrokerURL: "http://127.0.0.1:1",
+		Tasks: 4, Done: 1,
 	}
 	if !runIsWorking(live) {
 		t.Error("a run with three tasks left was called finished")
@@ -456,4 +457,69 @@ func TestOutcomeReportsWorkerCount(t *testing.T) {
 		t.Errorf("outcome = %q, want the worker count", got)
 	}
 	_ = m
+}
+
+// A daemon that dies leaves its runs mid-flight. They come back from disk
+// as active with dispatched tasks and no broker, and the picker called
+// them "running 4" — while their workers posted to a port that had gone.
+// Three sat in the list that way, and two of them were the same request
+// twice: the orphan, and the resubmission on the new daemon.
+
+func TestAnActiveRunWithNoBrokerIsNotWorking(t *testing.T) {
+	// The fixture is a real one, read off disk: s1786688412910-3, four
+	// tasks dispatched, daemon gone.
+	orphan := store.LiveRun{
+		RunID: "r1", State: string(broker.RunActive), Tasks: 4, Done: 0,
+	}
+	if runIsWorking(orphan) {
+		t.Error("a run nothing is serving was called running")
+	}
+	if !runIsOrphaned(orphan) {
+		t.Error("an abandoned run was not recognised as orphaned")
+	}
+}
+
+func TestAnOrphanIsNotReportedAsAResult(t *testing.T) {
+	// Rendering it like a finished run — "0/4" — says the run failed at
+	// everything. It was abandoned, which is a different thing and the one
+	// you have to act on: its workers are still running.
+	orphan := store.LiveRun{
+		RunID: "r1", State: string(broker.RunActive), Tasks: 4, Done: 0,
+	}
+	if got := plainOutcome(orphan); !strings.Contains(got, "orphaned") {
+		t.Errorf("an orphaned run reads as %q", got)
+	}
+}
+
+func TestAFinishedRunIsNotAnOrphan(t *testing.T) {
+	for _, r := range []store.LiveRun{
+		{RunID: "a", State: string(broker.RunDone), Tasks: 4, Done: 4},
+		{RunID: "b", State: string(broker.RunFailed), Tasks: 2, Failed: 2},
+		{RunID: "c", State: string(broker.RunActive), Tasks: 1, Done: 1},
+		{RunID: "d", State: string(broker.RunActive), Tasks: 0},
+	} {
+		if runIsOrphaned(r) {
+			t.Errorf("run %s was called orphaned: %+v", r.RunID, r)
+		}
+	}
+}
+
+func TestOrphansAreCountedApartFromHistory(t *testing.T) {
+	// Folding them into "finished" is how three abandoned runs sat in the
+	// list looking like history.
+	m := testModel(0, 0)
+	m.runs = []store.LiveRun{
+		{RunID: "a", State: string(broker.RunActive), BrokerURL: "http://x", Tasks: 4, Done: 1},
+		{RunID: "b", State: string(broker.RunActive), Tasks: 4, Done: 0},
+		{RunID: "c", State: string(broker.RunActive), Tasks: 4, Done: 0},
+		{RunID: "d", State: string(broker.RunDone), Tasks: 2, Done: 2},
+	}
+
+	label := m.runCountLabel()
+	if !strings.Contains(label, "2 orphaned") {
+		t.Errorf("the count hides the orphans: %q", label)
+	}
+	if !strings.Contains(label, "1 live") || !strings.Contains(label, "1 finished") {
+		t.Errorf("the count lost live or finished: %q", label)
+	}
 }

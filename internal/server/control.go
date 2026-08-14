@@ -249,6 +249,18 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 			if l := s.control.Launcher(id); l != nil {
 				active = len(l.ActiveWorkers())
 			}
+			// Per-state counts, not just a total: the picker shows how a
+			// run turned out, and "4 tasks" says nothing about whether it
+			// worked.
+			done, failed := 0, 0
+			for _, t := range snap.Tasks {
+				switch t.State {
+				case broker.TaskCompleted:
+					done++
+				case broker.TaskFailed:
+					failed++
+				}
+			}
 			runs = append(runs, map[string]any{
 				"run_id":         id,
 				"prompt":         snap.Prompt,
@@ -256,6 +268,8 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 				"started_at":     run.CreatedAt.Unix(),
 				"state":          string(snap.State),
 				"tasks":          len(snap.Tasks),
+				"done":           done,
+				"failed":         failed,
 				"messages":       len(snap.Messages),
 				"active_workers": active,
 			})

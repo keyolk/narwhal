@@ -40,10 +40,16 @@ func daemonRunLister() ([]store.LiveRun, error) {
 	}
 	var payload struct {
 		Runs []struct {
-			RunID     string `json:"run_id"`
-			Prompt    string `json:"prompt"`
-			CWD       string `json:"cwd"`
-			StartedAt int64  `json:"started_at"`
+			RunID         string `json:"run_id"`
+			Prompt        string `json:"prompt"`
+			CWD           string `json:"cwd"`
+			StartedAt     int64  `json:"started_at"`
+			State         string `json:"state"`
+			Tasks         int    `json:"tasks"`
+			Done          int    `json:"done"`
+			Failed        int    `json:"failed"`
+			Messages      int    `json:"messages"`
+			ActiveWorkers int    `json:"active_workers"`
 		} `json:"runs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -51,12 +57,23 @@ func daemonRunLister() ([]store.LiveRun, error) {
 	}
 	runs := make([]store.LiveRun, 0, len(payload.Runs))
 	for _, r := range payload.Runs {
+		// The daemon reports how each run is going and the picker was
+		// throwing it away, so a run whose tasks had all completed still
+		// read as "running" — the presence of a broker was being taken for
+		// the presence of work, and the daemon holds a broker for every run
+		// it has ever hosted.
 		runs = append(runs, store.LiveRun{
 			RunID:     r.RunID,
 			BrokerURL: info.URL,
 			Prompt:    r.Prompt,
 			CWD:       r.CWD,
 			StartedAt: r.StartedAt,
+			State:     r.State,
+			Tasks:     r.Tasks,
+			Done:      r.Done,
+			Failed:    r.Failed,
+			Messages:  r.Messages,
+			Running:   r.ActiveWorkers,
 		})
 	}
 	return runs, nil

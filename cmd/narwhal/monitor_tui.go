@@ -836,9 +836,9 @@ func runLabel(r store.LiveRun) string {
 // whether it worked — which is the question you had before opening
 // anything.
 func (m tuiModel) runOutcome(r store.LiveRun) string {
-	if r.BrokerURL != "" {
-		if r.PID > 0 {
-			return styCyan.Render(fmt.Sprintf("pid %d", r.PID))
+	if runIsWorking(r) {
+		if r.Running > 0 {
+			return styCyan.Render(fmt.Sprintf("running %d", r.Running))
 		}
 		return styCyan.Render("running")
 	}
@@ -855,13 +855,40 @@ func (m tuiModel) runOutcome(r store.LiveRun) string {
 	return strings.Join(parts, "  ")
 }
 
+// runIsWorking reports whether a run still has work in flight.
+//
+// Having a broker is not the same as having work. The daemon holds one for
+// every run it has ever hosted, so testing BrokerURL called a run whose
+// tasks had all completed "running" — the picker said running while the
+// graph beside it showed four ticks.
+//
+// The run's own state is the answer where there is one; a batch run
+// advertised through the registry file has none, and there its broker
+// really does die with the process.
+func runIsWorking(r store.LiveRun) bool {
+	switch r.State {
+	case string(broker.RunDone), string(broker.RunFailed), string(broker.RunCanceled):
+		return false
+	case string(broker.RunActive):
+		// "active" is not proof of work. A run persisted before the daemon
+		// learned to retire settled runs kept that state forever, and a
+		// snapshot written mid-flight keeps it too — so believe the tasks
+		// over the label when every one of them is terminal.
+		if r.Tasks > 0 && r.Done+r.Failed >= r.Tasks {
+			return false
+		}
+		return true
+	}
+	return r.BrokerURL != ""
+}
+
 // plainOutcome is runOutcome without styling, for measuring and for the
 // selected row — which reverses the whole line and must not carry escapes
 // inside it.
 func plainOutcome(r store.LiveRun) string {
-	if r.BrokerURL != "" {
-		if r.PID > 0 {
-			return fmt.Sprintf("pid %d", r.PID)
+	if runIsWorking(r) {
+		if r.Running > 0 {
+			return fmt.Sprintf("running %d", r.Running)
 		}
 		return "running"
 	}
@@ -886,7 +913,7 @@ func plainOutcome(r store.LiveRun) string {
 func (m tuiModel) runCountLabel() string {
 	live := 0
 	for _, r := range m.runs {
-		if r.BrokerURL != "" {
+		if runIsWorking(r) {
 			live++
 		}
 	}
@@ -981,7 +1008,7 @@ func (m tuiModel) viewPicker() string {
 		// rows makes the one live run — the only one you can still act on —
 		// disappear into it.
 		icon, originStyle := icons.runActive, styCyan
-		if r.BrokerURL == "" {
+		if !runIsWorking(r) {
 			icon, originStyle = icons.runDone, styGreen
 			// A finished run says how it finished. Failed tasks are the
 			// reason to open a run you would otherwise scroll past.
@@ -1023,7 +1050,7 @@ func (m tuiModel) viewPicker() string {
 
 		// A live run's prompt is what you are choosing between; a finished
 		// one's is a label on something already done.
-		if r.BrokerURL != "" {
+		if runIsWorking(r) {
 			b.WriteString(prompt + "\n")
 		} else {
 			b.WriteString(styDim.Render(prompt) + "\n")

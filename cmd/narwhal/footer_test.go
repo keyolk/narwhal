@@ -395,3 +395,65 @@ func TestPickerBudgetsTwoLinesPerRun(t *testing.T) {
 		t.Errorf("the header was pushed off the top: %q", stripEscapes(lines[0]))
 	}
 }
+
+func TestARunWithNoWorkLeftIsNotCalledRunning(t *testing.T) {
+	// Having a broker is not the same as having work. The daemon holds one
+	// for every run it has ever hosted, so testing BrokerURL called a run
+	// whose tasks had all completed "running" — the picker said running
+	// while the graph beside it showed four ticks.
+	done := store.LiveRun{
+		RunID: "r1", BrokerURL: "http://127.0.0.1:1",
+		State: string(broker.RunDone), Tasks: 4, Done: 4,
+	}
+	if runIsWorking(done) {
+		t.Error("a run the daemon reports as done was treated as running")
+	}
+}
+
+func TestAStaleActiveLabelLosesToItsTasks(t *testing.T) {
+	// A run persisted before the daemon learned to retire settled runs
+	// keeps state=active forever, and so does a snapshot written
+	// mid-flight. The tasks are the more reliable witness.
+	stale := store.LiveRun{
+		RunID: "r1", State: string(broker.RunActive), Tasks: 1, Done: 1,
+	}
+	if runIsWorking(stale) {
+		t.Error("a stale active label outvoted its own completed tasks")
+	}
+
+	// But an active run with work outstanding is still working.
+	live := store.LiveRun{
+		RunID: "r2", State: string(broker.RunActive), Tasks: 4, Done: 1,
+	}
+	if !runIsWorking(live) {
+		t.Error("a run with three tasks left was called finished")
+	}
+}
+
+func TestABatchRunFallsBackToItsBroker(t *testing.T) {
+	// A batch run advertised through the registry file carries no state,
+	// and there the broker really does die with the process.
+	live := store.LiveRun{RunID: "r1", PID: 123, BrokerURL: "http://127.0.0.1:1"}
+	if !runIsWorking(live) {
+		t.Error("a live batch run was called finished")
+	}
+	gone := store.LiveRun{RunID: "r2"}
+	if runIsWorking(gone) {
+		t.Error("a batch run with no broker was called running")
+	}
+}
+
+func TestOutcomeReportsWorkerCount(t *testing.T) {
+	// "running" alone does not say whether anything is actually happening;
+	// a run can be active with every worker exited and its next task not
+	// yet dispatched.
+	m := testModel(0, 0)
+	r := store.LiveRun{
+		RunID: "r1", BrokerURL: "http://x",
+		State: string(broker.RunActive), Tasks: 4, Done: 1, Running: 2,
+	}
+	if got := plainOutcome(r); !strings.Contains(got, "2") {
+		t.Errorf("outcome = %q, want the worker count", got)
+	}
+	_ = m
+}

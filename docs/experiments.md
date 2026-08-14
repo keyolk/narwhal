@@ -376,6 +376,58 @@ well when the missing peer's findings overlap the others'. Ordering was
 never asserted. A benchmark that improves on the metric it measures can
 still hide a correctness change underneath it.
 
+## E10 — A daemon restart destroys finished work: CONFIRMED, then fixed
+
+**Not designed.** This one was run by accident, on production, by the
+author: a `pkill` on the daemon while three runs were in flight, ten
+minutes after a `status` check that showed none.
+
+**What was expected.** Workers die with their broker, or the run resumes.
+
+**What happened.** Neither. Workers are detached processes with the
+broker's URL baked into their wrapper scripts, so they kept working
+against a port that had gone. `NewSession()` started with an empty
+broker, so the daemon that came back had no memory of them.
+
+**The measurement that reframed it.** The obvious reading — "the workers
+were interrupted mid-task" — was wrong. Counting the outcome files on
+disk afterwards:
+
+| run | workers | reports written | delivered |
+|---|---|---|---|
+| s1786688257754-2 | 4 | 4 | 0 |
+| s1786688169827-1 | 4 | 4 | 0 |
+| s1786688412910-3 | 4 | 3 | 0 |
+
+**Eleven of twelve tasks had finished.** Two runs completed every task
+they were given. Only one worker was genuinely mid-flight. The broker
+recorded all twelve as `dispatched` forever.
+
+The `task-done` script already wrote those files, with a comment saying
+it did so "so the run can be reconciled from disk". Nothing reconciled
+them. Half of a recovery mechanism had been built and left unfinished,
+and it took a real loss to notice — the half that existed was written
+during an earlier incident and never exercised again.
+
+**Why the ratio decided the design.** Resuming dead workers from their
+recorded Claude session ids is the intuitive fix and would have been the
+wrong one to build first: applied here it would have re-run eleven
+finished tasks to recover one. Harvesting what was already written
+recovers 11/12 and needs no new machinery. Adoption now classifies each
+task by evidence — outcome file, live process, or neither — rather than
+guessing, and only the "neither" case is a candidate for resuming.
+
+**The trap inside the fix.** `FailDispatch` returns a task to ready when
+it has retries left, and the dispatch tick launches ready tasks, so the
+first implementation of "abandoned" would have relaunched that work on
+the next tick. An adopted run can be hours old and its tasks already
+redone in a later run. Recovering a run and re-running it are different
+operations, and the code has to say which one it is doing.
+
+**Method note.** Every number here came from files the system had
+already written and nobody had read. The failure was not a lack of
+instrumentation; it was that the instrumentation had no reader.
+
 ## Reproducing
 
 ```bash

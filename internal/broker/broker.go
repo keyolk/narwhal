@@ -943,12 +943,18 @@ func (r *Run) PostMessage(threadID, sender string, mentions []string, priority P
 // by the HTTP API and the viewer. It is safe to serialize and hand to
 // callers without holding any locks.
 type Snapshot struct {
-	RunID    string           `json:"run_id"`
-	Prompt   string           `json:"prompt"`
-	State    RunState         `json:"state"`
-	Tasks    []TaskSnapshot   `json:"tasks"`
-	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []*Message       `json:"messages"`
+	RunID  string   `json:"run_id"`
+	Prompt string   `json:"prompt"`
+	State  RunState `json:"state"`
+	// CWD and StartedAt describe the run itself rather than its graph.
+	// They were missing, which meant a snapshot read back from disk could
+	// not say where the run happened or when — the two things that tell
+	// runs apart in a list, since a run id is only a timestamp.
+	CWD       string           `json:"cwd,omitempty"`
+	StartedAt int64            `json:"started_at,omitempty"`
+	Tasks     []TaskSnapshot   `json:"tasks"`
+	Threads   []ThreadSnapshot `json:"threads"`
+	Messages  []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -972,9 +978,11 @@ func (r *Run) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s := Snapshot{
-		RunID:  r.ID,
-		Prompt: r.Prompt,
-		State:  r.State,
+		RunID:     r.ID,
+		Prompt:    r.Prompt,
+		State:     r.State,
+		CWD:       r.CWD,
+		StartedAt: r.CreatedAt.Unix(),
 	}
 	for _, t := range r.Tasks {
 		t.mu.RLock()

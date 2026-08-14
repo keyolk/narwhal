@@ -145,35 +145,47 @@ func ListLive() []LiveRun {
 // only has ids cannot tell six runs apart.
 type DaemonRunLister func() (runs []LiveRun, err error)
 
-// Discover returns every live run: batch runs from the registry file plus
-// runs hosted by the daemon.
+// Discover returns every run worth showing: batch runs from the registry
+// file, runs hosted by the daemon, and finished runs read back from disk.
 //
 // Batch runs and daemon runs are advertised differently on purpose. A batch
 // run owns its broker for the length of one command, so a file entry that
 // disappears when the process exits is exactly right. Daemon runs come and
 // go inside a process that outlives all of them, so the daemon is the
 // authority and gets asked directly.
+//
+// Finished runs come from the snapshots on disk. Without them the monitor
+// showed only what was running this second: 25 runs sat in ~/.narwhal/runs
+// readable by `narwhal show` and by nothing else, and the daemon's own
+// memory of retired runs died with the process. A monitor that forgets
+// everything the moment it finishes cannot answer "what did that run do",
+// which is most of what you want a monitor for.
 func Discover(lister DaemonRunLister) []LiveRun {
 	out := ListLive()
-	if lister == nil {
-		return out
-	}
-	daemonRuns, err := lister()
-	if err != nil {
-		return out
-	}
 	seen := make(map[string]bool, len(out))
 	for _, e := range out {
 		seen[e.RunID] = true
 	}
-	for _, r := range daemonRuns {
-		if seen[r.RunID] {
-			continue
+
+	if lister != nil {
+		if daemonRuns, err := lister(); err == nil {
+			for _, r := range daemonRuns {
+				if seen[r.RunID] {
+					continue
+				}
+				seen[r.RunID] = true
+				// PID stays zero: it would be the daemon's, not a
+				// run-owned process, and callers must not mistake it for
+				// one.
+				out = append(out, r)
+			}
 		}
-		// PID stays zero: it would be the daemon's, not a run-owned
-		// process, and callers must not mistake it for one.
+	}
+
+	for _, r := range listFinished(seen) {
 		out = append(out, r)
 	}
+
 	// Newest first, and stable: the monitor re-discovers every second, so
 	// an order that shifts between polls makes the picker flicker and moves
 	// rows out from under the cursor.
@@ -184,6 +196,45 @@ func Discover(lister DaemonRunLister) []LiveRun {
 		}
 		return out[i].RunID > out[j].RunID
 	})
+	return out
+}
+
+// MaxFinishedRuns caps how many finished runs the picker carries.
+//
+// The directory grows without bound and the list is meant to be read at a
+// glance; a hundred rows of last month is not history, it is noise. Older
+// runs stay on disk for `narwhal show`.
+const MaxFinishedRuns = 20
+
+// listFinished reads persisted runs that are not already in the live set.
+//
+// BrokerURL is deliberately empty: there is no process to poll. That is
+// the flag callers use to tell a finished run from a live one, and to read
+// its state from the snapshot instead.
+func listFinished(seen map[string]bool) []LiveRun {
+	ids, err := ListRuns()
+	if err != nil {
+		return nil
+	}
+	var out []LiveRun
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		if len(out) >= MaxFinishedRuns {
+			break
+		}
+		snap, err := LoadRun(id)
+		if err != nil {
+			continue
+		}
+		out = append(out, LiveRun{
+			RunID:     id,
+			Prompt:    snap.Prompt,
+			CWD:       snap.CWD,
+			StartedAt: snap.StartedAt,
+		})
+	}
 	return out
 }
 

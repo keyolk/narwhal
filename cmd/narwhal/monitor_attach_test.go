@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -45,8 +46,12 @@ func TestAttachNeedsARecordedSession(t *testing.T) {
 	// report that rather than launching claude with an empty --resume,
 	// which would silently open the wrong conversation.
 	m := attachModel(t)
-	if cmd := m.attachToSession("alpha"); cmd != nil {
+	cmd, err := m.attachToSession("alpha")
+	if cmd != nil {
 		t.Fatal("attach produced a command with no recorded session id")
+	}
+	if err == nil {
+		t.Fatal("attach refused silently")
 	}
 }
 
@@ -57,7 +62,11 @@ func TestAttachUsesTheRecordedSession(t *testing.T) {
 	if got := m.workerSessionID("alpha"); got != "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" {
 		t.Fatalf("workerSessionID = %q", got)
 	}
-	if cmd := m.attachToSession("alpha"); cmd == nil {
+	cmd, err := m.attachToSession("alpha")
+	if err != nil {
+		t.Fatalf("attach refused: %v", err)
+	}
+	if cmd == nil {
 		t.Fatal("attach produced no command despite a recorded session")
 	}
 }
@@ -105,14 +114,59 @@ func TestUndispatchedTaskStillSaysSo(t *testing.T) {
 }
 
 func TestAttachNeedsAWorkingDirectory(t *testing.T) {
-	// A run read back from disk before snapshots carried cwd has none.
-	// Launching claude from wherever the monitor happens to be would
-	// resume into a directory with no such session.
+	// A run read back from disk before snapshots carried cwd has none, and
+	// with no transcript to ask either there is nothing to resume from.
+	// Launching claude from wherever the monitor happens to be would resume
+	// into a directory with no such session.
 	m := attachModel(t)
 	m.live.CWD = ""
 	writeSessionID(t, m, "alpha", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
 
-	if cmd := m.attachToSession("alpha"); cmd != nil {
+	cmd, err := m.attachToSession("alpha")
+	if cmd != nil {
 		t.Fatal("attach produced a command with no working directory")
+	}
+	// The two failures are different problems and were reported as one:
+	// a run with four good session ids read as never having pinned any.
+	if err == nil || !strings.Contains(err.Error(), "transcript") {
+		t.Errorf("a missing cwd was not reported as a missing transcript: %v", err)
+	}
+}
+
+func TestAttachFindsTheCWDInTheTranscript(t *testing.T) {
+	// Every run persisted before snapshots carried cwd — the whole backlog
+	// on disk — reached attach with no directory, so pressing a on a
+	// finished run did nothing at all. The session's own transcript records
+	// where it ran, and a session id is a UUID, so finding the file is
+	// enough to find the directory.
+	m := attachModel(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	m.live.CWD = ""
+	sid := "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	writeSessionID(t, m, "alpha", sid)
+
+	ranIn := t.TempDir()
+	dir := filepath.Join(home, ".claude", "projects", "-some-encoded-path")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// The first records carry no cwd, which is why this is a scan and not
+	// a read of line one.
+	body := `{"type":"summary"}` + "\n" +
+		`{"type":"user","cwd":` + strconv.Quote(ranIn) + `}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, sid+".jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := m.workerCWD(sid); got != ranIn {
+		t.Fatalf("workerCWD = %q, want the directory in the transcript %q", got, ranIn)
+	}
+	cmd, err := m.attachToSession("alpha")
+	if err != nil {
+		t.Fatalf("attach refused despite a findable transcript: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("attach produced no command")
 	}
 }

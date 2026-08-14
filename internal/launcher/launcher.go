@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -529,6 +530,7 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	l.mu.Lock()
 	l.workers[cfg.AgentID] = cmd
 	l.mu.Unlock()
+	l.recordPID(cfg.AgentID, cmd.Process.Pid)
 
 	// Monitor the process in the background. When it exits, the log file
 	// is closed and the worker is removed from the active map.
@@ -538,9 +540,30 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 		l.mu.Lock()
 		delete(l.workers, cfg.AgentID)
 		l.mu.Unlock()
+		l.clearPID(cfg.AgentID)
 	}()
 
 	return nil
+}
+
+// recordPID writes the worker's process id next to its other artifacts.
+//
+// A daemon that restarts loses the map of running workers, and the workers
+// themselves survive — they are detached processes. Without a pid on disk
+// the new daemon cannot tell a task whose worker is still going from one
+// whose worker died, and the difference decides whether re-dispatching it
+// is a recovery or a duplicate.
+func (l *Launcher) recordPID(agentID string, pid int) {
+	path := filepath.Join(l.sessionDir, "agents", agentID, "claude-pid")
+	if err := os.WriteFile(path, []byte(strconv.Itoa(pid)+"\n"), 0o600); err != nil {
+		fmt.Fprintf(os.Stderr, "[launcher] warning: record pid for %s: %v\n", agentID, err)
+	}
+}
+
+// clearPID removes the pid file when a worker exits, so a later adoption
+// does not mistake a recycled pid for the worker still running.
+func (l *Launcher) clearPID(agentID string) {
+	_ = os.Remove(filepath.Join(l.sessionDir, "agents", agentID, "claude-pid"))
 }
 
 // Wait blocks until all launched workers have exited or the timeout elapses.

@@ -96,10 +96,21 @@ func daemonStart(args []string) {
 	}
 	sess.URL = addr
 
+	// Reload runs that were in flight when this daemon last stopped. This
+	// must happen before the dispatcher starts: its reap treats a
+	// dispatched task with no tracked worker as a failed dispatch, so a
+	// run adopted after the first tick would have its still-running work
+	// launched a second time.
+	adopted, stillRunning := nd.AdoptRuns(sess)
+	for _, r := range adopted {
+		fmt.Fprintf(os.Stderr, "[narwhal] adopted %s\n", r.Summary())
+	}
+
 	// Watch for tasks whose deps have completed. Without this loop a task
 	// created with unmet deps becomes ready and then never launches,
 	// because nothing on the daemon path dispatches it.
 	dispatcher := nd.NewDispatcher(sess)
+	dispatcher.AdoptRunning(stillRunning)
 	dispatcher.Start()
 	defer dispatcher.Stop()
 

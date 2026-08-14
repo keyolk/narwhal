@@ -464,6 +464,8 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Coordinating agent (planner decomposes request into DAG)
 - ✓ Live monitor (DAG progress + radio traffic + per-worker session view)
 - ✓ Interactive mode (daemon + MCP; add workers to an in-flight run)
+- ✓ Restart recovery (daemon adopts in-flight runs; results written while it
+  was down are harvested from disk, not re-run)
 
 ### AgentRadio-style passive awareness
 
@@ -489,6 +491,7 @@ See `docs/experiments.md` for the full record:
 - **E4**: Split-request — **confirmed** (worker created 3 new tasks mid-run)
 - **E5**: Multi-thread radio + coordinating agent — **confirmed** (planner built 5-task DAG, 10 radio messages, synthesis task integrated findings)
 - **E9**: "Wait for your peers" as an instruction — **refuted** (synthesis finished early in 3 of 3 runs; deps now gate completion)
+- **E10**: A daemon restart destroys finished work — **confirmed, then fixed** (11 of 12 tasks had written their reports; the broker recorded all 12 as dispatched)
 
 ### SWE-Atlas QnA benchmark slice
 

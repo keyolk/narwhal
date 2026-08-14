@@ -93,3 +93,61 @@ func TestContentTallerThanTheTerminalIsNotPadded(t *testing.T) {
 		t.Errorf("last line = %q, want the hints", last)
 	}
 }
+
+func TestPickerDistinguishesLiveFromFinished(t *testing.T) {
+	// The list is now mostly history. A wall of identically dim rows makes
+	// the one live run — the only one you can still act on — disappear
+	// into it, so live and finished must not render the same.
+	forceColor(t)
+
+	runs := []store.LiveRun{
+		{RunID: "live", BrokerURL: "http://x", CWD: "/src/repo",
+			Prompt: "still working", StartedAt: 1786600000},
+		{RunID: "done", CWD: "/src/repo",
+			Prompt: "already finished", StartedAt: 1786500000},
+	}
+	m := newTUIModel(runs, 0, 0, true)
+	m.width, m.height = 100, 20
+	// Move the cursor off both rows so the selection style is not what is
+	// being compared.
+	m.runCur = -1
+	out := m.View()
+
+	liveRow := lineContaining(out, "still working")
+	doneRow := lineContaining(out, "already finished")
+	if liveRow == "" || doneRow == "" {
+		t.Fatalf("rows missing:\n%s", out)
+	}
+	if liveRow == doneRow {
+		t.Fatal("live and finished prompts rendered identically")
+	}
+	// The live prompt is what you are choosing between; the finished one
+	// is a label on something already done.
+	if !strings.Contains(doneRow, "\x1b[") {
+		t.Errorf("the finished prompt is not dimmed: %q", doneRow)
+	}
+	if strings.Contains(liveRow, "\x1b[2m") {
+		t.Errorf("the live prompt was dimmed like history: %q", liveRow)
+	}
+}
+
+func TestPickerMarksRunStateWithAGlyph(t *testing.T) {
+	// Colour alone is not enough — it does not survive a screenshot, a
+	// colourblind reader, or a terminal with a washed-out palette.
+	runs := []store.LiveRun{
+		{RunID: "live", BrokerURL: "http://x", CWD: "/src", Prompt: "working", StartedAt: 1786600000},
+		{RunID: "done", CWD: "/src", Prompt: "finished", StartedAt: 1786500000},
+	}
+	m := newTUIModel(runs, 0, 0, true)
+	m.width, m.height = 100, 20
+	m.runCur = -1
+	out := m.View()
+
+	if !strings.Contains(lineContaining(out, "08-14"), icons.runActive) &&
+		!strings.Contains(out, icons.runActive) {
+		t.Errorf("no live glyph in the picker:\n%s", out)
+	}
+	if !strings.Contains(out, icons.runDone) {
+		t.Errorf("no finished glyph in the picker:\n%s", out)
+	}
+}

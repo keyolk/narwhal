@@ -353,9 +353,17 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.focus = focusTasks
 		}
 	case "j", "down":
-		m.moveCursor(1)
+		if m.focus == focusTasks {
+			m.moveVertical(1)
+		} else {
+			m.moveCursor(1)
+		}
 	case "k", "up":
-		m.moveCursor(-1)
+		if m.focus == focusTasks {
+			m.moveVertical(-1)
+		} else {
+			m.moveCursor(-1)
+		}
 	case "g", "home":
 		m.jumpTo(0)
 	case "G", "end":
@@ -414,13 +422,13 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// exits instead of moving. From the radio, which is a flat list with
 		// no horizontal axis, h/l step between panes.
 		if m.focus == focusTasks {
-			m.moveSibling(-1)
+			m.moveHorizontal(-1)
 		} else {
 			m.focus = focusTasks
 		}
 	case "l", "right":
 		if m.focus == focusTasks {
-			m.moveSibling(1)
+			m.moveHorizontal(1)
 		} else {
 			m.focus = focusRadio
 		}
@@ -564,37 +572,6 @@ func (m *tuiModel) jumpToEnd() {
 	case focusRadio:
 		m.radioCur = len(m.snap.Messages) - 1
 	}
-	m.clampCursors()
-}
-
-// moveSibling walks the graph horizontally: to the box left or right of the
-// selected one in the order the boxes are drawn. In the box view the graph
-// is two-dimensional, so h/l are a navigation axis in their own right rather
-// than a synonym for "back out" — leaving the graph on h would make the
-// diagram the one place where a direction key means "exit".
-func (m *tuiModel) moveSibling(delta int) {
-	if m.focus != focusTasks {
-		return
-	}
-	order := m.boxNodeOrder()
-	if len(order) < 2 {
-		return
-	}
-	at := -1
-	for i, n := range order {
-		if n == m.taskCur {
-			at = i
-			break
-		}
-	}
-	if at < 0 {
-		return
-	}
-	next := at + delta
-	if next < 0 || next >= len(order) {
-		return
-	}
-	m.taskCur = order[next]
 	m.clampCursors()
 }
 
@@ -864,40 +841,48 @@ func (m tuiModel) viewPicker() string {
 		// working, and what it was asked to do.
 		when := runStartTime(r).Format("01-02 15:04")
 		where := abbreviatePath(r.CWD)
-		// A finished run has no broker to name. Saying so is the point:
-		// the picker mixes live and finished runs, and "which of these is
-		// still working" is the first thing you need from the list.
-		origin := "daemon"
+		// A finished run has no broker to name. Which of these is still
+		// working is the first thing you need from the list, so it gets a
+		// glyph and a colour rather than a word alone: the list is now
+		// mostly history, and a wall of identically dim rows makes the one
+		// live run — the only one you can still act on — disappear into it.
+		icon, origin, originStyle := icons.runActive, "daemon", styCyan
 		switch {
 		case r.BrokerURL == "":
-			origin = "finished"
+			icon, origin, originStyle = icons.runDone, "finished", styDim
 		case r.PID > 0:
-			origin = fmt.Sprintf("pid %d", r.PID)
+			origin, originStyle = fmt.Sprintf("pid %d", r.PID), styCyan
 		}
 
 		// Truncate in plain text, then style. truncate() counts bytes and
 		// rune widths, so handing it a styled string miscounts the escape
 		// sequences as content — and cutting one mid-escape drops the reset,
 		// which bleeds the style into every row below.
-		// Truncate in plain text, then style. truncate() counts bytes and
-		// rune widths, so handing it a styled string miscounts the escape
-		// sequences as content — and cutting one mid-escape drops the reset,
-		// which bleeds the style into every row below.
-		marker, rowStyle := "  ", styDim
+		marker := "  "
 		if i == m.runCur {
-			marker, rowStyle = "▸ ", stySel
+			marker = "▸ "
 		}
-		head := fmt.Sprintf("%s%-11s  %-28s  %s", marker, when, where, origin)
+		head := fmt.Sprintf("%s%s %-11s  %-28s  ", marker, icon, when, where)
 		if i == m.runCur {
-			head = padRight(head, m.width-1)
+			// A reversed row reads better without competing colours inside
+			// it, so the selection styles the whole line at once.
+			b.WriteString(stySel.Render(padRight(truncate(head+origin, m.width), m.width-1)) + "\n")
+		} else {
+			b.WriteString(styDim.Render(truncate(head, m.width)) +
+				originStyle.Render(origin) + "\n")
 		}
-		b.WriteString(rowStyle.Render(truncate(head, m.width)) + "\n")
 
 		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
 		if prompt == "" {
 			prompt = "(no prompt — " + r.RunID + ")"
 		}
-		b.WriteString(styDim.Render(truncate("    "+prompt, m.width)) + "\n")
+		// A live run's prompt is what you are choosing between; a finished
+		// one's is a label on something already done.
+		promptStyle := styDim
+		if r.BrokerURL != "" {
+			promptStyle = lipgloss.NewStyle()
+		}
+		b.WriteString(promptStyle.Render(truncate("    "+prompt, m.width)) + "\n")
 	}
 
 	return pinFooter(strings.TrimRight(b.String(), "\n"),

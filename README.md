@@ -168,10 +168,14 @@ horizontal bar — rather than as independent edges that would overwrite each
 other, and a run that would otherwise cut through a wrapped row detours
 through the margin.
 
-The graph is two-dimensional, so navigation is too: `h` and `l` step between
-boxes in the order they are drawn, row by row and left to right. Backing out
-of the graph is `esc`, not `h` — a direction key inside a diagram should
-move, not exit.
+The graph is two-dimensional, so navigation is too — and it follows the
+drawing, not the task list. `j` goes to the box below the one you are on,
+picking the nearest by horizontal centre when a row has several; `h` and `l`
+walk the row and wrap into the next. Moving down from a fan-out lands on the
+child under your box rather than on whichever sibling happens to sort next
+by (layer, id), which is what index arithmetic did and what made the cursor
+jump sideways. Backing out of the graph is `esc`, not `h` — a direction key
+inside a diagram should move, not exit.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 
@@ -194,13 +198,18 @@ live. Opening the monitor with several running shows a picker:
 ```
 Narwhal  2 live, 1 finished
 
-▸ 08-13 13:58  /tmp/nw-picker                daemon
+▸ ▶ 08-13 13:58  /tmp/nw-picker             daemon
     auth 모듈 보안 감사
-  08-13 13:58  .../keyolk/narwhal            daemon
+  ▶ 08-13 13:58  .../keyolk/narwhal         daemon
     monitor TUI 리팩터링 계획
-  08-12 23:03  .../src/myrepo                finished
+  ✓ 08-12 23:03  .../src/myrepo             finished
     audit the auth module
 ```
+
+A live run is marked `▶` and keeps its colour; a finished one is `✓` and
+recedes. With the list now mostly history, a wall of identically dim rows
+would bury the one run you can still act on — and the glyph carries that
+where colour cannot, in a screenshot or a washed-out palette.
 
 The list carries recent history, not just what is running: a finished run
 is exactly when you want to ask what it did, and the snapshots on disk were
@@ -235,8 +244,8 @@ terminal's own shell-integration variables survive, and either is enough.
 | Key | Action |
 |---|---|
 | `tab` | Switch between the graph and radio panes |
-| `j` / `k` | Move the cursor (also `↓` / `↑`) |
-| `h` / `l` | Move between boxes in the graph (also `←` / `→`); from the radio, switch panes |
+| `j` / `k` | Move the cursor; in the graph, to the box below or above (also `↓` / `↑`) |
+| `h` / `l` | Move between boxes along a row (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |
 | `enter` | Open the selected task or message |

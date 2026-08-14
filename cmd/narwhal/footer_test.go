@@ -151,3 +151,27 @@ func TestPickerMarksRunStateWithAGlyph(t *testing.T) {
 		t.Errorf("no finished glyph in the picker:\n%s", out)
 	}
 }
+
+func TestMainViewHintsSitOnTheLastRow(t *testing.T) {
+	// The main view was the one place pinFooter was not applied. Its panes
+	// render only the rows they have content for, so on a tall terminal
+	// the body stopped short and the hints rode up with it — halfway up a
+	// 40-row screen with a four-task graph.
+	t.Setenv("HOME", t.TempDir())
+	m := testModel(0, 0)
+	m.width, m.height = 100, 40
+	m.snap.RunID = "r4"
+	m.snap.State = broker.RunActive
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "t1", State: broker.TaskDispatched},
+		{ID: "t2", State: broker.TaskReady, Deps: []string{"t1"}},
+	}
+
+	last, n := lastLine(m.View())
+	if n != 40 {
+		t.Errorf("rendered %d lines for a 40-row terminal", n)
+	}
+	if !strings.Contains(last, "q quit") {
+		t.Errorf("last line is not the hints: %q", last)
+	}
+}

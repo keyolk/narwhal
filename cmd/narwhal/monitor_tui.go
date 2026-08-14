@@ -701,7 +701,10 @@ func (m tuiModel) View() string {
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
-	return header + "\n" + body + "\n" + footer
+	// The panes only render the rows they have content for, so on a tall
+	// terminal the body stops short and the footer rides up with it. Pin
+	// it to the bottom edge the same way every other view does.
+	return pinFooter(header+"\n"+body, footer, m.height)
 }
 
 // inspectorHeight splits the right pane between the node inspector and the

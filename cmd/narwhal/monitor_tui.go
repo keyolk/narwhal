@@ -887,6 +887,11 @@ func (m tuiModel) runOutcome(r store.LiveRun) string {
 		}
 		return styCyan.Render("running")
 	}
+	if runIsOrphaned(r) {
+		// Yellow, not red: nothing failed. It was abandoned, which is a
+		// thing to go and look at rather than a result to read.
+		return styYellow.Render(fmt.Sprintf("orphaned %d/%d", r.Done, r.Tasks))
+	}
 	if r.Tasks == 0 {
 		return styDim.Render("finished")
 	}
@@ -922,9 +927,36 @@ func runIsWorking(r store.LiveRun) bool {
 		if r.Tasks > 0 && r.Done+r.Failed >= r.Tasks {
 			return false
 		}
-		return true
+		// Nor is it proof of work when nothing is serving the run. An
+		// active run comes back from disk once the daemon that hosted it
+		// is gone, and it kept saying "running 4" — while its workers were
+		// posting to a port that no longer answers.
+		return r.BrokerURL != ""
 	}
 	return r.BrokerURL != ""
+}
+
+// runIsOrphaned reports a run left mid-flight by the death of its host.
+//
+// This is not the same as finished, and rendering it as "0/4" would say the
+// run failed at everything. It stopped being served: the daemon exited, or
+// was restarted underneath it, and its workers — detached processes with
+// the old broker's URL baked into their scripts — keep working and report
+// to a port that is not there.
+//
+// Distinguishing it matters because it is the state you must act on. A
+// finished run needs nothing; an orphan has processes still running, and
+// nothing will ever record what they produce.
+//
+// A transient lister error shows hosted runs as orphaned for one poll and
+// heals on the next. That is honest — for that moment the monitor cannot
+// reach them either.
+func runIsOrphaned(r store.LiveRun) bool {
+	if r.State != string(broker.RunActive) || r.BrokerURL != "" {
+		return false
+	}
+	// No tasks at all is a run that never got going, not one interrupted.
+	return r.Tasks > 0 && r.Done+r.Failed < r.Tasks
 }
 
 // plainOutcome is runOutcome without styling, for measuring and for the
@@ -936,6 +968,9 @@ func plainOutcome(r store.LiveRun) string {
 			return fmt.Sprintf("running %d", r.Running)
 		}
 		return "running"
+	}
+	if runIsOrphaned(r) {
+		return fmt.Sprintf("orphaned %d/%d", r.Done, r.Tasks)
 	}
 	if r.Tasks == 0 {
 		return "finished"
@@ -955,23 +990,41 @@ func plainOutcome(r store.LiveRun) string {
 // It used to read "N live runs" for a list that is now mostly history —
 // which is exactly the kind of label you stop reading because it is
 // always wrong.
+//
+// Orphans are counted apart from both. Folding them into "finished" is how
+// three abandoned runs sat in the list looking like history while their
+// workers were still burning through a task nobody would ever collect.
 func (m tuiModel) runCountLabel() string {
-	live := 0
+	live, orphaned := 0, 0
 	for _, r := range m.runs {
-		if runIsWorking(r) {
+		switch {
+		case runIsWorking(r):
 			live++
+		case runIsOrphaned(r):
+			orphaned++
 		}
+	}
+	done := len(m.runs) - live - orphaned
+
+	var parts []string
+	if live > 0 {
+		parts = append(parts, fmt.Sprintf("%d live", live))
+	}
+	if orphaned > 0 {
+		parts = append(parts, fmt.Sprintf("%d orphaned", orphaned))
 	}
 	switch {
 	case len(m.runs) == 0:
 		return "no runs"
-	case live == 0:
+	case len(parts) == 0:
 		return fmt.Sprintf("%d finished runs", len(m.runs))
-	case live == len(m.runs):
+	case done == 0 && len(parts) == 1 && live > 0:
 		return fmt.Sprintf("%d live runs", live)
-	default:
-		return fmt.Sprintf("%d live, %d finished", live, len(m.runs)-live)
 	}
+	if done > 0 {
+		parts = append(parts, fmt.Sprintf("%d finished", done))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // viewPicker lists the runs: live ones first, then recent history.

@@ -26,12 +26,29 @@ func daemonCmd(args []string) {
 	case "stop":
 		daemonStop(args[1:])
 	case "status":
-		out, _ := nd.StatusJSON()
-		fmt.Println(string(out))
+		out, code := daemonStatus()
+		fmt.Println(out)
+		if code != 0 {
+			os.Exit(code)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown daemon subcommand: %s\n", args[0])
 		os.Exit(1)
 	}
+}
+
+// daemonStatus renders the daemon's status and the exit code to leave with.
+//
+// The code is the point. Status always exited 0, so `if narwhal daemon
+// status` was always true: make daemon-restart read a dead daemon as a live
+// one, tried to stop it, and aborted the whole restart on that failure —
+// leaving no daemon at all after an install.
+func daemonStatus() (string, int) {
+	out, _ := nd.StatusJSON()
+	if _, err := nd.Status(); err != nil {
+		return string(out), 1
+	}
+	return string(out), 0
 }
 
 // daemonStop asks the running daemon to shut down.

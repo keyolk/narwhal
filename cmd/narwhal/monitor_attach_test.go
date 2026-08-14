@@ -17,6 +17,10 @@ func attachModel(t *testing.T) tuiModel {
 	t.Setenv("HOME", t.TempDir())
 	m := testModel(0, 0)
 	m.snap.RunID = "run-attach"
+	// Every real run has a working directory, and attach needs it: Claude
+	// files transcripts per directory, so resuming from the wrong one
+	// silently finds nothing.
+	m.live.CWD = t.TempDir()
 	m.snap.Tasks = []broker.TaskSnapshot{
 		{ID: "alpha", State: broker.TaskDispatched, Dispatches: 1},
 	}
@@ -97,5 +101,18 @@ func TestUndispatchedTaskStillSaysSo(t *testing.T) {
 	out := m.viewSessionDetail()
 	if !strings.Contains(out, "not dispatched yet") {
 		t.Errorf("a pending task should say it has not started:\n%s", out)
+	}
+}
+
+func TestAttachNeedsAWorkingDirectory(t *testing.T) {
+	// A run read back from disk before snapshots carried cwd has none.
+	// Launching claude from wherever the monitor happens to be would
+	// resume into a directory with no such session.
+	m := attachModel(t)
+	m.live.CWD = ""
+	writeSessionID(t, m, "alpha", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee")
+
+	if cmd := m.attachToSession("alpha"); cmd != nil {
+		t.Fatal("attach produced a command with no working directory")
 	}
 }

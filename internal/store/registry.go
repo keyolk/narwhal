@@ -16,6 +16,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // LiveRun describes a run whose broker is currently serving.
@@ -26,6 +28,16 @@ type LiveRun struct {
 	CWD       string `json:"cwd,omitempty"`
 	Prompt    string `json:"prompt,omitempty"`
 	StartedAt int64  `json:"started_at"`
+
+	// Outcome, for the picker. A list of runs that says only when and where
+	// makes you open each one to learn whether it worked — which is the
+	// question you had before opening anything.
+	State    string `json:"state,omitempty"`
+	Tasks    int    `json:"tasks,omitempty"`
+	Done     int    `json:"done,omitempty"`
+	Failed   int    `json:"failed,omitempty"`
+	Running  int    `json:"running,omitempty"`
+	Messages int    `json:"messages,omitempty"`
 }
 
 func registryPath() string {
@@ -228,12 +240,26 @@ func listFinished(seen map[string]bool) []LiveRun {
 		if err != nil {
 			continue
 		}
-		out = append(out, LiveRun{
+		e := LiveRun{
 			RunID:     id,
 			Prompt:    snap.Prompt,
 			CWD:       snap.CWD,
 			StartedAt: snap.StartedAt,
-		})
+			State:     string(snap.State),
+			Tasks:     len(snap.Tasks),
+			Messages:  len(snap.Messages),
+		}
+		for _, t := range snap.Tasks {
+			switch t.State {
+			case broker.TaskCompleted:
+				e.Done++
+			case broker.TaskFailed:
+				e.Failed++
+			case broker.TaskDispatched:
+				e.Running++
+			}
+		}
+		out = append(out, e)
 	}
 	return out
 }

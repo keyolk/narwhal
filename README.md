@@ -207,16 +207,18 @@ live. Opening the monitor with several running shows a picker:
 ```
 Narwhal  2 live, 1 finished
 
-▸ ▶ 08-13 13:58  /tmp/nw-picker             daemon
+▸ ▶ 08-13 13:58  /tmp/nw-picker         running
     auth 모듈 보안 감사
-  ▶ 08-13 13:58  .../keyolk/narwhal         daemon
+  ✓ 08-13 13:58  .../keyolk/narwhal     5/5  12 msg
     monitor TUI 리팩터링 계획
-  ✓ 08-12 23:03  .../src/myrepo             finished
-    audit the auth module
+  ✗ 08-12 23:03  .../src/myrepo         3/5  2 failed
 ```
 
-A live run is marked `▶` and keeps its colour; a finished one is `✓` and
-recedes. With the list now mostly history, a wall of identically dim rows
+A live run is marked `▶` and keeps its colour; a finished one is `✓` — or
+`✗` when a task failed, which is the reason to open a run you would
+otherwise scroll past. Each row carries its outcome, because a list that
+says only when and where makes you open every run to learn whether it
+worked, which is the question you had before opening anything. With the list now mostly history, a wall of identically dim rows
 would bury the one run you can still act on — and the glyph carries that
 where colour cannot, in a screenshot or a washed-out palette.
 

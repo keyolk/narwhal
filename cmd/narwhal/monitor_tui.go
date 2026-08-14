@@ -779,6 +779,54 @@ var (
 	styRedBold   = styRed.Bold(true)
 )
 
+// runOutcome renders a finished run's result, or a live run's progress.
+//
+// A list that says only when and where makes you open every run to learn
+// whether it worked — which is the question you had before opening
+// anything.
+func (m tuiModel) runOutcome(r store.LiveRun) string {
+	if r.BrokerURL != "" {
+		if r.PID > 0 {
+			return styCyan.Render(fmt.Sprintf("pid %d", r.PID))
+		}
+		return styCyan.Render("running")
+	}
+	if r.Tasks == 0 {
+		return styDim.Render("finished")
+	}
+	parts := []string{styGreen.Render(fmt.Sprintf("%d/%d", r.Done, r.Tasks))}
+	if r.Failed > 0 {
+		parts = append(parts, styRedBold.Render(fmt.Sprintf("%d failed", r.Failed)))
+	}
+	if r.Messages > 0 {
+		parts = append(parts, styDim.Render(fmt.Sprintf("%d msg", r.Messages)))
+	}
+	return strings.Join(parts, "  ")
+}
+
+// plainOutcome is runOutcome without styling, for measuring and for the
+// selected row — which reverses the whole line and must not carry escapes
+// inside it.
+func plainOutcome(r store.LiveRun) string {
+	if r.BrokerURL != "" {
+		if r.PID > 0 {
+			return fmt.Sprintf("pid %d", r.PID)
+		}
+		return "running"
+	}
+	if r.Tasks == 0 {
+		return "finished"
+	}
+	s := fmt.Sprintf("%d/%d", r.Done, r.Tasks)
+	if r.Failed > 0 {
+		s += fmt.Sprintf("  %d failed", r.Failed)
+	}
+	if r.Messages > 0 {
+		s += fmt.Sprintf("  %d msg", r.Messages)
+	}
+	return s
+}
+
 // runCountLabel says how many runs there are and how many are still going.
 //
 // It used to read "N live runs" for a list that is now mostly history —
@@ -863,55 +911,66 @@ func (m tuiModel) viewPicker() string {
 
 		// The run id is a timestamp — useless for telling runs apart. What
 		// identifies a run to the operator is when it started, where it is
-		// working, and what it was asked to do.
+		// working, what it was asked to do, and how it turned out.
 		when := runStartTime(r).Format("01-02 15:04")
 		where := abbreviatePath(r.CWD)
-		// A finished run has no broker to name. Which of these is still
-		// working is the first thing you need from the list, so it gets a
-		// glyph and a colour rather than a word alone: the list is now
-		// mostly history, and a wall of identically dim rows makes the one
-		// live run — the only one you can still act on — disappear into it.
-		icon, origin, originStyle := icons.runActive, "daemon", styCyan
-		switch {
-		case r.BrokerURL == "":
-			icon, origin, originStyle = icons.runDone, "finished", styDim
-		case r.PID > 0:
-			origin, originStyle = fmt.Sprintf("pid %d", r.PID), styCyan
+
+		// Which of these is still working is the first thing you need from
+		// the list, so it gets a glyph and a colour rather than a word
+		// alone: the list is mostly history, and a wall of identically dim
+		// rows makes the one live run — the only one you can still act on —
+		// disappear into it.
+		icon, originStyle := icons.runActive, styCyan
+		if r.BrokerURL == "" {
+			icon, originStyle = icons.runDone, styGreen
+			// A finished run says how it finished. Failed tasks are the
+			// reason to open a run you would otherwise scroll past.
+			if r.Failed > 0 || r.State == string(broker.RunFailed) {
+				icon, originStyle = icons.runFailed, styRed
+			} else if r.State == string(broker.RunCanceled) {
+				icon, originStyle = icons.runCanceled, styDim
+			}
 		}
 
-		// Truncate in plain text, then style. truncate() counts bytes and
-		// rune widths, so handing it a styled string miscounts the escape
-		// sequences as content — and cutting one mid-escape drops the reset,
-		// which bleeds the style into every row below.
 		marker := "  "
 		if i == m.runCur {
 			marker = "▸ "
 		}
-		head := fmt.Sprintf("%s%s %-11s  %-28s  ", marker, icon, when, where)
+
+		// Measure as plain text, then style the pieces. truncate() counts
+		// rune widths, so a styled string miscounts its escapes as content
+		// and a cut mid-escape bleeds into every row below.
+		head := fmt.Sprintf("%s%s %-11s  %-26s  ", marker, icon, when, where)
+		outcome := m.runOutcome(r)
+
 		if i == m.runCur {
 			// A reversed row reads better without competing colours inside
 			// it, so the selection styles the whole line at once.
-			b.WriteString(stySel.Render(padRight(truncate(head+origin, m.width), m.width-1)) + "\n")
+			b.WriteString(stySel.Render(
+				padRight(truncate(head+plainOutcome(r), m.width-1), m.width-1)) + "\n")
 		} else {
-			// The glyph carries the run's state and the directory is what
-			// you actually recognise a run by; the clock is scaffolding.
 			b.WriteString(originStyle.Render(marker+icon) +
 				styDim.Render(fmt.Sprintf(" %-11s  ", when)) +
-				styBlue.Render(fmt.Sprintf("%-28s", where)) +
-				"  " + originStyle.Render(origin) + "\n")
+				styBlue.Render(fmt.Sprintf("%-26s", truncate(where, 26))) +
+				"  " + outcome + "\n")
 		}
 
 		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
 		if prompt == "" {
 			prompt = "(no prompt — " + r.RunID + ")"
 		}
+		// Indent, then cut to the pane. Cutting to m.width and *then*
+		// indenting pushed four columns past the right edge, which on a
+		// long planner prompt wrapped and swallowed the rows below it.
+		prompt = truncate("    "+prompt, m.width-1)
+
 		// A live run's prompt is what you are choosing between; a finished
 		// one's is a label on something already done.
-		promptStyle := styDim
 		if r.BrokerURL != "" {
-			promptStyle = lipgloss.NewStyle()
+			b.WriteString(prompt + "\n")
+		} else {
+			b.WriteString(styDim.Render(prompt) + "\n")
 		}
-		b.WriteString(promptStyle.Render(truncate("    "+prompt, m.width)) + "\n")
 	}
 
 	return pinFooter(strings.TrimRight(b.String(), "\n"),
@@ -1543,10 +1602,20 @@ func (m tuiModel) attachToSession(taskID string) tea.Cmd {
 	if sid == "" {
 		return nil
 	}
+	cwd := m.live.CWD
+	if cwd == "" {
+		// A run read back from disk before snapshots carried cwd has none.
+		// Claude files transcripts per directory, so resuming from the
+		// wrong one silently fails to find the session.
+		return nil
+	}
 	c := exec.Command("claude", "--resume", sid, "--fork-session")
-	// The transcript is filed under the directory the worker ran in, so
-	// resuming from anywhere else does not find it.
-	c.Dir = m.live.CWD
+	c.Dir = cwd
+	// Hand over the terminal. tea.ExecProcess suspends the TUI but does not
+	// wire up the streams, so without this the attached session starts with
+	// no stdin — it comes up and immediately has nothing to read, which
+	// looks exactly like attach being broken.
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return attachDoneMsg{err: err}
 	})

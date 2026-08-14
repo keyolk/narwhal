@@ -46,6 +46,9 @@ type Dispatcher struct {
 	// applied once rather than on every tick.
 	cursors map[string]broker.IntakeCursors
 	stop    chan struct{}
+	// done closes when the loop has returned, so Stop can wait for a tick
+	// that is mid-write.
+	done chan struct{}
 }
 
 // NewDispatcher creates a dispatcher for a session.
@@ -59,10 +62,17 @@ func NewDispatcher(sess *Session) *Dispatcher {
 
 // Start begins the loop. Call Stop to end it.
 func (d *Dispatcher) Start() {
+	d.done = make(chan struct{})
 	go d.loop()
 }
 
-// Stop ends the loop.
+// Stop ends the loop and waits for the current tick to finish.
+//
+// Waiting matters because a tick writes to disk. Returning early let a
+// half-finished tick outlive whatever set up its environment — in tests
+// that meant persisting a run to the developer's real ~/.narwhal after
+// t.Setenv had restored HOME, and three test runs ended up in the run
+// picker beside real ones.
 func (d *Dispatcher) Stop() {
 	select {
 	case <-d.stop:
@@ -70,9 +80,13 @@ func (d *Dispatcher) Stop() {
 	default:
 		close(d.stop)
 	}
+	if d.done != nil {
+		<-d.done
+	}
 }
 
 func (d *Dispatcher) loop() {
+	defer close(d.done)
 	ticker := time.NewTicker(DispatchInterval)
 	defer ticker.Stop()
 	for {

@@ -142,3 +142,42 @@ func TestPersistedRunIsReadableByShow(t *testing.T) {
 		t.Errorf("ListRuns did not include the run: %v", ids)
 	}
 }
+
+func TestStopWaitsForTheTickToFinish(t *testing.T) {
+	// A tick writes to disk, so a Stop that returns while one is running
+	// lets it outlive whatever set up its environment. In tests that meant
+	// persisting to the developer's real ~/.narwhal after t.Setenv had
+	// restored HOME — three test runs ended up in the run picker beside
+	// real ones.
+	//
+	// Asserting on the loop having stopped is the honest check: racing a
+	// tick against an environment change reproduces the symptom only
+	// sometimes, and a test that usually passes on broken code is worse
+	// than none.
+	t.Setenv("HOME", t.TempDir())
+	stubWorker(t)
+
+	sess := NewSession()
+	sess.URL = "http://127.0.0.1:1"
+	run := sess.Broker.CreateRun("r-stop", "test", t.TempDir(), "main")
+	run.CreateStandardThreads()
+	sess.LauncherFor("r-stop", run.CWD)
+	run.AddTask("a", "a", "do a", nil)
+
+	d := NewDispatcher(sess)
+	d.Start()
+	waitFor(t, "the run to be written once", func() bool {
+		_, err := store.LoadRun("r-stop")
+		return err == nil
+	})
+
+	d.Stop()
+
+	// The loop signals completion by closing done. If Stop returned first,
+	// this channel is still open and a tick may be mid-write.
+	select {
+	case <-d.done:
+	default:
+		t.Fatal("Stop returned while the dispatch loop was still running")
+	}
+}

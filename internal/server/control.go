@@ -417,6 +417,16 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A run id is a timestamp, so nothing here could notice it was being
+	// asked to do what it is already doing. It happened: a restart
+	// orphaned a run and the same request arrived four minutes later, and
+	// the two were indistinguishable in the picker.
+	//
+	// Reported, not refused. Re-running a request is usually deliberate,
+	// and a duplicate that is already finished is not news — only one
+	// still in flight, or left in flight by a restart, is worth saying.
+	duplicateOf := s.broker.DuplicateOf(req.CWD, req.Prompt)
+
 	runID := s.control.NewRunID()
 	run := s.broker.CreateRun(runID, req.Prompt, req.CWD, "main")
 	mainAgent := s.registry.Register("main", runID, true)
@@ -472,11 +482,15 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		planLog.Close()
 	}()
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	resp := map[string]any{
 		"run_id":          runID,
 		"broker_url":      s.baseURL(),
 		"planner_model":   req.PlannerModel,
 		"worker_model":    req.WorkerModel,
 		"synthesis_model": synModel,
-	})
+	}
+	if duplicateOf != "" {
+		resp["duplicate_of"] = duplicateOf
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }

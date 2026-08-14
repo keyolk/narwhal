@@ -31,7 +31,10 @@ func fanShape() []broker.TaskSnapshot {
 func navModelFor(t *testing.T, tasks []broker.TaskSnapshot) tuiModel {
 	t.Helper()
 	m := testModel(0, 0)
-	m.width, m.height = 120, 30
+	// Wide enough that a five-box row fits on one line. The pane is capped
+	// at 52 columns in box mode, so a narrower terminal wraps the row and
+	// the layout under test is not the one being described.
+	m.width, m.height = 200, 40
 	m.focus = focusTasks
 	m.boxMode = true
 	m.snap.Tasks = tasks
@@ -68,7 +71,10 @@ func TestDownGoesToTheBoxBelow(t *testing.T) {
 }
 
 func TestDownFromAnySiblingReachesTheChild(t *testing.T) {
-	// Every sibling has the same child, so every one of them must find it.
+	// Every sibling feeds the same child, and j follows the edge — which is
+	// the relationship h and l cannot express, since they already own the
+	// horizontal axis. So the outer siblings reach it too, even though the
+	// child is drawn under the middle one.
 	for _, from := range []string{"task-1", "task-2", "task-3"} {
 		m := navModelFor(t, fanShape())
 		selectTask(t, &m, from)
@@ -175,5 +181,109 @@ func TestRadioMovementIsUnaffected(t *testing.T) {
 	m = press(m, "j", "j")
 	if m.radioCur != 2 {
 		t.Fatalf("radioCur = %d, want 2", m.radioCur)
+	}
+}
+
+// wideRowShape is five boxes on one row with a single child under the
+// second — the layout that showed nearest-by-centre was not enough.
+//
+//	┌ t1 ┐ ┌ t2 ┐ ┌ t3 ┐ ┌ t4 ┐ ┌ t5 ┐
+//	         └──┐
+//	         ┌ t6 ┐
+func wideRowShape() []broker.TaskSnapshot {
+	return []broker.TaskSnapshot{
+		{ID: "t1", State: broker.TaskDispatched},
+		{ID: "t2", State: broker.TaskDispatched},
+		{ID: "t3", State: broker.TaskDispatched},
+		{ID: "t4", State: broker.TaskDispatched},
+		{ID: "t5", State: broker.TaskReady},
+		{ID: "t6", State: broker.TaskReady, Deps: []string{"t2"}},
+	}
+}
+
+func TestDownDoesNotWanderToAnUnrelatedBox(t *testing.T) {
+	// Nearest-by-centre sent every box on the row to t6, because it was the
+	// only thing on the row below and won by default. Nothing connects t1,
+	// t3, t4 or t5 to it and nothing sits under them, so the cursor stays —
+	// moving to an unrelated box teaches you the arrow keys are
+	// unpredictable.
+	m := navModelFor(t, wideRowShape())
+
+	for _, from := range []string{"t1", "t3", "t4", "t5"} {
+		selectTask(t, &m, from)
+		m.moveVertical(1)
+		if got := currentID(m); got != from {
+			t.Errorf("down from %s went to %s; nothing links or sits below it", from, got)
+		}
+	}
+}
+
+func TestDownFollowsTheEdgeToTheChild(t *testing.T) {
+	m := navModelFor(t, wideRowShape())
+	selectTask(t, &m, "t2")
+
+	m.moveVertical(1)
+	if got := currentID(m); got != "t6" {
+		t.Fatalf("down from t2 went to %s, want its child t6", got)
+	}
+}
+
+func TestUpFromALoneChildFindsItsParent(t *testing.T) {
+	m := navModelFor(t, wideRowShape())
+	selectTask(t, &m, "t6")
+
+	m.moveVertical(-1)
+	if got := currentID(m); got != "t2" {
+		t.Fatalf("up from t6 went to %s, want its parent t2", got)
+	}
+}
+
+func TestALoneChildIsDrawnUnderItsParent(t *testing.T) {
+	// Rows are centred independently, which is right for siblings and
+	// wrong for a lone child: t6 was drawn dead centre, under t3, with the
+	// edge reaching sideways to t2. The diagram was correct and unreadable,
+	// and it made "press down" land somewhere the eye did not expect.
+	m := navModelFor(t, wideRowShape())
+	positions := m.boxPositions()
+
+	var parent, child boxPos
+	for _, p := range positions {
+		switch m.taskByIndex(p.node).ID {
+		case "t2":
+			parent = p
+		case "t6":
+			child = p
+		}
+	}
+	if parent.x1 == 0 || child.x1 == 0 {
+		t.Fatal("expected both t2 and t6 to be drawn")
+	}
+	if child.x1 <= parent.x0 || child.x0 >= parent.x1 {
+		t.Fatalf("child at [%d,%d) does not sit under parent at [%d,%d)",
+			child.x0, child.x1, parent.x0, parent.x1)
+	}
+}
+
+func TestSiblingRowsStayCentred(t *testing.T) {
+	// Aligning under a parent must not disturb a row of siblings — they
+	// have no single parent to line up with, and moving them individually
+	// would let them overlap.
+	m := navModelFor(t, fanShape())
+	positions := m.boxPositions()
+
+	var first, last boxPos
+	for _, p := range positions {
+		switch m.taskByIndex(p.node).ID {
+		case "task-1":
+			first = p
+		case "task-3":
+			last = p
+		}
+	}
+	if first.x0 == 0 && last.x1 >= m.graphPaneWidth() {
+		t.Fatal("the sibling row was pushed to fill the pane")
+	}
+	if first.x0 >= last.x0 {
+		t.Fatalf("sibling order changed: task-1 at %d, task-3 at %d", first.x0, last.x0)
 	}
 }

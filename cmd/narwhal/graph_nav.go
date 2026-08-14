@@ -56,10 +56,15 @@ func posOf(positions []boxPos, node int) (boxPos, bool) {
 
 // moveVertical moves the cursor to the box above or below the current one.
 //
-// "Below" means the nearest row that starts lower down, and within that row
-// the box whose centre is closest horizontally — so moving down a fan-out
-// lands on the child under the box you were on, not on whichever sibling
-// happens to sort first.
+// Down follows a dependency edge: in a diagram that line is what "below"
+// means, and it is the one relationship h and l cannot express, since they
+// already own the horizontal axis. So j from a fan-in sibling reaches the
+// child it feeds even when the child is drawn off to one side.
+//
+// Failing an edge, it falls back to a box sharing the current one's
+// columns, so j still works in a graph with no dependencies. Failing both,
+// the cursor stays: moving to an unrelated box because it was the only
+// candidate teaches you that the arrow keys are unpredictable.
 //
 // dir is -1 for up and +1 for down.
 func (m *tuiModel) moveVertical(dir int) {
@@ -100,9 +105,84 @@ func (m *tuiModel) moveVertical(dir int) {
 		return // already at the top or bottom row
 	}
 
+	// Follow the graph's own edges first. In a diagram the vertical
+	// relationship *is* the dependency — that is the line drawn on screen —
+	// while horizontal position is what h and l already move along. An
+	// earlier version preferred whatever box overlapped the current one's
+	// columns, which is the same axis h/l covers and left j doing nothing
+	// from two thirds of a fan-in.
+	best := m.linkedNeighbour(dir, targetRow, positions)
+
+	if best < 0 {
+		// No edge to follow. Fall back to a box that shares columns, which
+		// keeps j moving in graphs with no dependencies at all — a flat row
+		// wrapped onto two lines is still something you want to walk.
+		//
+		// Overlap is required rather than nearest-by-centre: with five
+		// boxes on a row and one child under the second, nearest-by-centre
+		// sent every box on the row to that child, since it was the only
+		// thing below and won by default.
+		bestDist := 0
+		for _, p := range positions {
+			if p.top != targetRow {
+				continue
+			}
+			if p.x1 <= cur.x0 || p.x0 >= cur.x1 {
+				continue // no shared columns: not below, just elsewhere
+			}
+			d := p.center() - cur.center()
+			if d < 0 {
+				d = -d
+			}
+			if best == -1 || d < bestDist {
+				best, bestDist = p.node, d
+			}
+		}
+	}
+	if best >= 0 {
+		m.taskCur = best
+		m.clampCursors()
+	}
+}
+
+// linkedNeighbour finds a box on the target row joined to the current one
+// by a dependency edge, preferring the nearest when several qualify.
+//
+// Only edges count. A box that merely happens to sit on the row below is
+// not somewhere "down" leads — that was the original defect, where every
+// box on a five-wide row jumped to the one child beneath the second.
+func (m tuiModel) linkedNeighbour(dir, targetRow int, positions []boxPos) int {
+	cur, ok := posOf(positions, m.taskCur)
+	if !ok {
+		return -1
+	}
+	curID := m.taskByIndex(m.taskCur).ID
+
 	best, bestDist := -1, 0
 	for _, p := range positions {
 		if p.top != targetRow {
+			continue
+		}
+		other := m.taskByIndex(p.node)
+		linked := false
+		if dir > 0 {
+			// Moving down: the candidate depends on the current task.
+			for _, d := range other.Deps {
+				if d == curID {
+					linked = true
+					break
+				}
+			}
+		} else {
+			// Moving up: the current task depends on the candidate.
+			for _, d := range m.taskByIndex(m.taskCur).Deps {
+				if d == other.ID {
+					linked = true
+					break
+				}
+			}
+		}
+		if !linked {
 			continue
 		}
 		d := p.center() - cur.center()
@@ -113,10 +193,7 @@ func (m *tuiModel) moveVertical(dir int) {
 			best, bestDist = p.node, d
 		}
 	}
-	if best >= 0 {
-		m.taskCur = best
-		m.clampCursors()
-	}
+	return best
 }
 
 // moveHorizontal moves the cursor to the box left or right of the current

@@ -168,14 +168,23 @@ horizontal bar — rather than as independent edges that would overwrite each
 other, and a run that would otherwise cut through a wrapped row detours
 through the margin.
 
-The graph is two-dimensional, so navigation is too — and it follows the
-drawing, not the task list. `j` goes to the box below the one you are on,
-picking the nearest by horizontal centre when a row has several; `h` and `l`
-walk the row and wrap into the next. Moving down from a fan-out lands on the
-child under your box rather than on whichever sibling happens to sort next
-by (layer, id), which is what index arithmetic did and what made the cursor
-jump sideways. Backing out of the graph is `esc`, not `h` — a direction key
-inside a diagram should move, not exit.
+The graph is two-dimensional, so navigation is too — and each axis moves
+along what it actually means. `h` and `l` walk a row of boxes and wrap into
+the next. `j` and `k` follow the **dependency edges**: in a diagram that
+line is what "below" means, and it is the one relationship the horizontal
+keys cannot express. So `j` from any sibling of a fan-in reaches the child
+it feeds, even when the child is drawn off to one side.
+
+With no edge to follow, `j` falls back to a box sharing your columns, so it
+still works in a graph with no dependencies at all. With neither, the cursor
+stays put — moving to an unrelated box because it was the only candidate
+teaches you the arrow keys are unpredictable. Backing out of the graph is
+`esc`, not `h`: a direction key inside a diagram should move, not exit.
+
+A lone child is drawn under its parent rather than centred in the pane.
+Rows are otherwise centred independently, which is right for a row of
+siblings and wrong the moment a row holds one box — the edge still pointed
+at the right parent, but the diagram read as though it pointed elsewhere.
 
 `b` switches to a compact lane view when the graph outgrows the pane:
 
@@ -244,7 +253,7 @@ terminal's own shell-integration variables survive, and either is enough.
 | Key | Action |
 |---|---|
 | `tab` | Switch between the graph and radio panes |
-| `j` / `k` | Move the cursor; in the graph, to the box below or above (also `↓` / `↑`) |
+| `j` / `k` | Move the cursor; in the graph, along dependency edges (also `↓` / `↑`) |
 | `h` / `l` | Move between boxes along a row (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |
 | `g` / `G` | Jump to first / last |

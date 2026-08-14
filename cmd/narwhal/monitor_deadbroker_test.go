@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -153,5 +154,29 @@ func TestSwitchingRunsIsNotUndoneByARefresh(t *testing.T) {
 
 	if m.live.RunID != "r-other" {
 		t.Fatalf("the watched run changed to %s", m.live.RunID)
+	}
+}
+
+func TestATruncatedResponseFallsBackToo(t *testing.T) {
+	// A daemon killed mid-response answers 200 and then stops writing. That
+	// is the same event as the connection failing, one tick earlier, and it
+	// was the one error path that did not fall back to disk.
+	m := deadBrokerModel(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"snapshot": {"run_id": "r-de`))
+	}))
+	defer srv.Close()
+	m.live.BrokerURL = srv.URL
+
+	msg, ok := m.poll()().(snapshotMsg)
+	if !ok {
+		t.Fatalf("poll returned %T", msg)
+	}
+	if msg.snap.RunID != "r-dead" {
+		t.Fatalf("a truncated response did not fall back to disk: %+v", msg.snap)
+	}
+	if msg.err == nil {
+		t.Error("the truncated read was reported as healthy")
 	}
 }

@@ -197,7 +197,9 @@ func (m tuiModel) poll() tea.Cmd {
 			Agents   []string        `json:"agents"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			return snapshotMsg{err: err}
+			// A daemon that dies mid-response truncates the body, which is
+			// the same event as the connection failing — one tick earlier.
+			return fallback(err)
 		}
 		return snapshotMsg{snap: payload.Snapshot, agents: payload.Agents}
 	}

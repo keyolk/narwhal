@@ -352,6 +352,14 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = focusTasks
 		}
+	case "1":
+		// Jump straight to a pane. Tab cycles, which is fine with two
+		// panes and tiresome once you know where you are going — and the
+		// numbers are visible in the pane titles, so there is nothing to
+		// remember.
+		m.focus = focusTasks
+	case "2":
+		m.focus = focusRadio
 	case "j", "down":
 		if m.focus == focusTasks {
 			m.moveVertical(1)
@@ -693,8 +701,13 @@ func (m tuiModel) View() string {
 	left := m.viewTasks(leftWidth, bodyHeight)
 	var right string
 	if inspectHeight > 0 {
+		// A blank line between the two panes. Stacked flush, the inspector's
+		// last field sat directly on the Radio rule and the two read as one
+		// list with a heading in the middle of it — the rule is a boundary
+		// and needs air on the side it is dividing.
 		right = lipgloss.JoinVertical(lipgloss.Left,
-			m.viewInspector(rightWidth, inspectHeight),
+			m.viewInspector(rightWidth, inspectHeight-1),
+			"",
 			m.viewRadio(rightWidth, radioHeight))
 	} else {
 		right = m.viewRadio(rightWidth, radioHeight)
@@ -778,6 +791,39 @@ var (
 	styCyanBold  = styCyan.Bold(true)
 	styRedBold   = styRed.Bold(true)
 )
+
+// runLabel is the one line that tells a run apart from its neighbours.
+//
+// Prompts are pasted, not written: a benchmark run opens with a hundred
+// characters of <uploaded_files> and an absolute path, and twenty rows of
+// that are indistinguishable. Strip the boilerplate so the row starts at
+// the part a person wrote.
+func runLabel(r store.LiveRun) string {
+	p := strings.ReplaceAll(r.Prompt, "\n", " ")
+	p = strings.Join(strings.Fields(p), " ")
+
+	// Tool-injected preambles, in the order they nest.
+	if i := strings.Index(p, "</uploaded_files>"); i >= 0 {
+		p = strings.TrimSpace(p[i+len("</uploaded_files>"):])
+	}
+	for _, lead := range []string{
+		"I've uploaded a code repository in the directory",
+		"I have uploaded a code repository in the directory",
+	} {
+		if strings.HasPrefix(p, lead) {
+			// Drop the path too — it is the same for every run in a slice.
+			rest := strings.TrimSpace(strings.TrimPrefix(p, lead))
+			if j := strings.IndexByte(rest, ' '); j > 0 {
+				rest = strings.TrimSpace(rest[j:])
+			}
+			p = rest
+		}
+	}
+	if p == "" {
+		return "(no prompt — " + r.RunID + ")"
+	}
+	return p
+}
 
 // runOutcome renders a finished run's result, or a live run's progress.
 //
@@ -955,10 +1001,7 @@ func (m tuiModel) viewPicker() string {
 				"  " + outcome + "\n")
 		}
 
-		prompt := strings.ReplaceAll(r.Prompt, "\n", " ")
-		if prompt == "" {
-			prompt = "(no prompt — " + r.RunID + ")"
-		}
+		prompt := runLabel(r)
 		// Indent, then cut to the pane. Cutting to m.width and *then*
 		// indenting pushed four columns past the right edge, which on a
 		// long planner prompt wrapped and swallowed the rows below it.
@@ -1060,15 +1103,15 @@ func (m tuiModel) viewFooter() string {
 		// state — dim made it read as a label nobody had to notice.
 		tail = "  " + styCyan.Render("[following]")
 	}
-	keys := "tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit"
+	keys := "1/2 pane · hjkl move · enter detail · s session · a attach · esc runs · q quit"
 	if len(m.runs) > 1 {
-		keys = "tab pane · hjkl move · enter detail · s session · a attach · [ ] run · q quit"
+		keys = "1/2 pane · hjkl move · enter detail · s session · a attach · [ ] run · q quit"
 	}
 	return stats + tail + "\n" + styDim.Render(keys)
 }
 
 func (m tuiModel) viewTasks(width, height int) string {
-	title := paneTitle("Graph", m.focus == focusTasks, width)
+	title := numberedPaneTitle(1, "Graph", m.focus == focusTasks, width)
 
 	if m.boxMode {
 		return m.viewTasksBoxed(title, width, height)
@@ -1242,6 +1285,17 @@ func (m tuiModel) graphRows() []graphRow {
 //
 // The rule is one column short of the pane so a full-width line cannot
 // push into its neighbour when the panes are joined horizontally.
+// numberedPaneTitle is paneTitle with the key that jumps to it. The number
+// is only useful if it is on screen — a shortcut you have to be told about
+// is one nobody uses.
+func numberedPaneTitle(n int, label string, focused bool, width int) string {
+	key := styDim.Render(strconv.Itoa(n) + " ")
+	if focused {
+		key = styCyan.Render(strconv.Itoa(n) + " ")
+	}
+	return key + paneTitle(label, focused, width-2)
+}
+
 func paneTitle(label string, focused bool, width int) string {
 	// The focused pane is where the keys go, so it gets the colour. Bold
 	// and underline alone had to be compared against the other titles to
@@ -1262,7 +1316,7 @@ func paneTitle(label string, focused bool, width int) string {
 }
 
 func (m tuiModel) viewRadio(width, height int) string {
-	title := paneTitle(fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
+	title := numberedPaneTitle(2, fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
 		m.focus == focusRadio, width)
 
 	rows := make([]string, 0, height)

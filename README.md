@@ -121,7 +121,7 @@ watching a worker must not append to the transcript it is still writing.
 Narwhal  s1786471179534-1  ▶ active
 account routing 경로의 일관성 검증
 
-Graph ───────────────────────────────── Node ──────────────────────────────────
+1 Graph ─────────────────────────────── Node ──────────────────────────────────
         ┌──────────┐  ┌────────┐        ▶ api (api-audit)  dispatched
         │ ▶ api ×2 │  │ ✓ auth │         ◆ model haiku
         └─────┬────┘  └────┬───┘         ↓ blocks synthesis
@@ -131,14 +131,14 @@ Graph ────────────────────────�
             │ · synthesis │                14:34:28 → Bash  send worklog "..."
             └─────────────┘                14:34:31 · worklog 게시 완료.
 
-                                        Radio (4) ─────────────────────────────
+                                        2 Radio (4) ───────────────────────────
                                         03:12:00 · auth cross-path asymmetries…
                                         03:13:34 ! api URGENT: provider lock re…
                                         03:15:30 · coordinator →synthesis ⋮ tas…
                                         03:16:00 · api ⋮ claims api/router.go
 
 done 1  running 2  ready 0  failed 0  [following]
-tab pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
+1/2 pane · hjkl move · enter detail · s session · a attach · esc runs · q quit
 ```
 
 The right side follows the graph cursor. Moving between nodes used to change
@@ -274,6 +274,7 @@ terminal's own shell-integration variables survive, and either is enough.
 | Key | Action |
 |---|---|
 | `tab` | Switch between the graph and radio panes |
+| `1` / `2` | Jump straight to the graph or the radio |
 | `j` / `k` | Move the cursor; in the graph, along dependency edges (also `↓` / `↑`) |
 | `h` / `l` | Move between boxes along a row (also `←` / `→`); from the radio, switch panes |
 | `ctrl+d` / `ctrl+u` | Page down / up |

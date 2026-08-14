@@ -175,3 +175,140 @@ func TestMainViewHintsSitOnTheLastRow(t *testing.T) {
 		t.Errorf("last line is not the hints: %q", last)
 	}
 }
+
+func TestRunLabelStripsPastedBoilerplate(t *testing.T) {
+	// Prompts are pasted, not written. A benchmark run opens with a
+	// hundred characters of <uploaded_files> and an absolute path, so
+	// twenty rows of them are indistinguishable — the row has to start at
+	// the part a person wrote.
+	r := store.LiveRun{
+		RunID: "r1",
+		Prompt: "<uploaded_files> /private/tmp/claude-502/-Users-x/scratchpad/bench/repos/kitty_1.0 " +
+			"</uploaded_files> I've uploaded a code repository in the directory " +
+			"/private/tmp/claude-502/-Users-x/scratchpad/bench/repos/kitty_1.0. " +
+			"Consider the following question: how does the parser work?",
+	}
+
+	got := runLabel(r)
+	if strings.Contains(got, "uploaded_files") || strings.Contains(got, "/private/tmp") {
+		t.Fatalf("boilerplate survived: %q", got)
+	}
+	if !strings.HasPrefix(got, "Consider the following question") {
+		t.Errorf("label does not start at the written part: %q", got)
+	}
+}
+
+func TestRunLabelLeavesAnOrdinaryPromptAlone(t *testing.T) {
+	r := store.LiveRun{RunID: "r1", Prompt: "audit the auth module"}
+	if got := runLabel(r); got != "audit the auth module" {
+		t.Fatalf("label = %q", got)
+	}
+}
+
+func TestRunLabelNamesARunWithNoPrompt(t *testing.T) {
+	// A run with nothing to show still has to be distinguishable from the
+	// one below it.
+	r := store.LiveRun{RunID: "plan-1786543427573"}
+	if got := runLabel(r); !strings.Contains(got, "plan-1786543427573") {
+		t.Fatalf("label = %q, want the run id as a fallback", got)
+	}
+}
+
+func TestPickerRowsStayInsideThePane(t *testing.T) {
+	// A long prompt used to be cut to m.width and *then* indented four
+	// columns, so it ran past the right edge and wrapped, swallowing the
+	// rows below it.
+	long := strings.Repeat("word ", 200)
+	runs := []store.LiveRun{
+		{RunID: "a", Prompt: long, StartedAt: 1786600000, State: "done", Tasks: 5, Done: 5},
+		{RunID: "b", Prompt: long, StartedAt: 1786500000, State: "done", Tasks: 5, Done: 5},
+	}
+	m := newTUIModel(runs, 0, 0, true)
+	m.width, m.height = 100, 20
+	m.runCur = -1 // no selection, so no full-width reverse row
+
+	for _, line := range strings.Split(m.View(), "\n") {
+		if w := displayWidth(stripEscapes(line)); w > m.width {
+			t.Fatalf("a row is %d columns wide in a %d-column pane: %q", w, m.width, line)
+		}
+	}
+}
+
+// stripEscapes removes ANSI sequences so a line can be measured.
+func stripEscapes(s string) string {
+	var b strings.Builder
+	in := false
+	for _, r := range s {
+		switch {
+		case r == 0x1b:
+			in = true
+		case in && r == 'm':
+			in = false
+		case !in:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func TestNumberKeysSelectPanes(t *testing.T) {
+	// Tab cycles, which is fine with two panes and tiresome once you know
+	// where you are going.
+	m := testModel(2, 2)
+	m.focus = focusRadio
+
+	m = press(m, "1")
+	if m.focus != focusTasks {
+		t.Fatalf("1 did not focus the graph: %v", m.focus)
+	}
+	m = press(m, "2")
+	if m.focus != focusRadio {
+		t.Fatalf("2 did not focus the radio: %v", m.focus)
+	}
+}
+
+func TestPaneTitlesShowTheirNumber(t *testing.T) {
+	// A shortcut you have to be told about is one nobody uses.
+	forceColor(t)
+	title := numberedPaneTitle(2, "Radio (4)", false, 40)
+	if !strings.HasPrefix(stripEscapes(title), "2 Radio") {
+		t.Errorf("the title does not lead with its key: %q", stripEscapes(title))
+	}
+}
+
+func TestRadioTitleStaysBelowTheInspector(t *testing.T) {
+	// The two panes are stacked, and the Radio rule is the boundary. What
+	// can be checked here is that the boundary is where it should be —
+	// below the inspector's fields, not interleaved with them.
+	//
+	// The blank row between them cannot be asserted from the rendered
+	// output: the inspector pads itself to a fixed height, so its last
+	// rows are blank either way. It is a layout constant, visible in
+	// View() and not separable from that padding.
+	t.Setenv("HOME", t.TempDir())
+	m := testModel(0, 2)
+	m.width, m.height = 100, 30
+	m.snap.RunID = "r1"
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "a", State: broker.TaskDispatched, Model: "opus"},
+	}
+
+	lines := strings.Split(m.View(), "\n")
+	nodeAt, radioAt := -1, -1
+	for i, l := range lines {
+		p := stripEscapes(l)
+		if nodeAt < 0 && strings.Contains(p, "Node") {
+			nodeAt = i
+		}
+		if radioAt < 0 && strings.Contains(p, "Radio (") {
+			radioAt = i
+		}
+	}
+	if nodeAt < 0 || radioAt < 0 {
+		t.Fatalf("expected both panes; Node=%d Radio=%d", nodeAt, radioAt)
+	}
+	if radioAt <= nodeAt+3 {
+		t.Errorf("the Radio rule sits %d rows below Node — too close to have "+
+			"cleared the inspector's fields", radioAt-nodeAt)
+	}
+}

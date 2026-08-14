@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -55,6 +56,60 @@ func transcriptPath(cwd, sessionID string) string {
 		}
 	}
 	return filepath.Join(home, ".claude", "projects", b.String(), sessionID+".jsonl")
+}
+
+// findTranscript locates a session's transcript without knowing its
+// working directory, by searching every project directory for the file.
+//
+// Runs persisted before snapshots carried cwd have none, and neither does a
+// daemon run read back from disk written by an older binary — the whole
+// backlog on disk today. Without the directory the transcript path cannot
+// be computed and attach has nothing to resume from, even though the
+// session is right there. A session id is a UUID, so the filename is unique
+// across projects and the search cannot pick the wrong one.
+func findTranscript(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	matches, err := filepath.Glob(
+		filepath.Join(home, ".claude", "projects", "*", sessionID+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return ""
+	}
+	return matches[0]
+}
+
+// transcriptCWD reads the working directory a session ran in out of its own
+// transcript. Claude records it per line, but not on every line — the
+// header records carry none — so scan until one has it.
+func transcriptCWD(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	// Transcript lines carry whole file contents and can be far longer than
+	// the default 64K limit; a truncated line fails to parse and the scan
+	// gives up before reaching a record with a cwd.
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	for i := 0; scanner.Scan() && i < 20; i++ {
+		var rec struct {
+			CWD string `json:"cwd"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &rec) != nil {
+			continue
+		}
+		if rec.CWD != "" {
+			return rec.CWD
+		}
+	}
+	return ""
 }
 
 // readTranscript parses a session transcript into activity entries.

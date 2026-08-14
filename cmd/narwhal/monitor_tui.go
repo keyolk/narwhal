@@ -57,6 +57,12 @@ const (
 type tickMsg time.Time
 
 // snapshotMsg carries a fresh poll result.
+//
+// snap and err are not exclusive. When the broker is unreachable the poll
+// falls back to the snapshot on disk, and both are set: the snapshot is
+// real and worth showing, and the error is what tells the header to say the
+// broker is gone. Dropping either one loses something the operator needs —
+// the tasks, or the fact that they are no longer live.
 type snapshotMsg struct {
 	snap   broker.Snapshot
 	agents []string
@@ -161,22 +167,39 @@ func (m tuiModel) poll() tea.Cmd {
 	}
 
 	url := m.live.BrokerURL + "/api/v1/monitor/" + m.live.RunID
+	runID := m.live.RunID
 	client := m.client
 	return func() tea.Msg {
+		// An unreachable broker is not the end of the record. The daemon
+		// exits, is restarted, or the run is retired out of its memory, and
+		// the monitor was left with an empty snapshot and an error — no
+		// tasks to select, so attaching to a worker did nothing at all,
+		// which read as attach being broken. The snapshot on disk outlives
+		// the process that made it, so fall back to it and keep the error
+		// so the header still says the run is no longer live.
+		fallback := func(cause error) tea.Msg {
+			snap, err := store.LoadRun(runID)
+			if err != nil {
+				return snapshotMsg{err: cause}
+			}
+			return snapshotMsg{snap: snap, err: cause}
+		}
 		resp, err := client.Get(url)
 		if err != nil {
-			return snapshotMsg{err: err}
+			return fallback(err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return snapshotMsg{err: fmt.Errorf("broker returned %d", resp.StatusCode)}
+			return fallback(fmt.Errorf("broker returned %d", resp.StatusCode))
 		}
 		var payload struct {
 			Snapshot broker.Snapshot `json:"snapshot"`
 			Agents   []string        `json:"agents"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			return snapshotMsg{err: err}
+			// A daemon that dies mid-response truncates the body, which is
+			// the same event as the connection failing — one tick earlier.
+			return fallback(err)
 		}
 		return snapshotMsg{snap: payload.Snapshot, agents: payload.Agents}
 	}
@@ -210,6 +233,21 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 		return sorted[i].RunID > sorted[j].RunID
 	})
 	m.runs = sorted
+
+	// Take the refreshed entry for the run being watched. m.live was only
+	// ever set when a run was opened, so a run whose broker went away — the
+	// daemon exited, or retired the run out of its memory — kept its dead
+	// URL forever: every poll failed, the snapshot stayed empty, and with
+	// no tasks on screen there was nothing to attach to. Rediscovery
+	// already knows the run is now served from disk; this is what tells the
+	// model. Independent of the cursor: the watched run is watched whether
+	// or not the picker is open over it.
+	for _, r := range m.runs {
+		if r.RunID == m.live.RunID {
+			m.live = r
+			break
+		}
+	}
 
 	for i, r := range m.runs {
 		if r.RunID == anchor {
@@ -266,11 +304,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case snapshotMsg:
-		if msg.err != nil {
-			m.err = msg.err
+		// An error with no snapshot leaves what is on screen alone: a
+		// blank view is worse than a stale one, and the header says the
+		// broker is unreachable either way. An error *with* a snapshot is
+		// the disk fallback — apply it and keep the error.
+		m.err = msg.err
+		if msg.snap.RunID == "" && msg.err != nil {
 			return m, nil
 		}
-		m.err = nil
 		// The task cursor is an index into a list sorted by id, so a task
 		// added mid-run — split-request, or the planner still creating
 		// tasks — can sort above the selection and shift it. Remember what
@@ -409,10 +450,12 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// worker has written; a puts you inside the session itself, which
 		// for a running worker is the only place anything is visible.
 		if t, ok := m.selectedTask(); ok {
-			if cmd := m.attachToSession(t.ID); cmd != nil {
-				return m, cmd
+			cmd, err := m.attachToSession(t.ID)
+			if err != nil {
+				m.err = err
+				return m, nil
 			}
-			m.err = fmt.Errorf("no recorded session for %s — the run predates session pinning, or the task has not started", t.ID)
+			return m, cmd
 		}
 	case "f":
 		// Re-arm tail following after manual navigation.
@@ -511,10 +554,12 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// captured log is empty, and where wanting the live session next
 		// is most likely.
 		if t, ok := m.selectedTask(); ok {
-			if cmd := m.attachToSession(t.ID); cmd != nil {
-				return m, cmd
+			cmd, err := m.attachToSession(t.ID)
+			if err != nil {
+				m.err = err
+				return m, nil
 			}
-			m.err = fmt.Errorf("no recorded session for %s — the run predates session pinning, or the task has not started", t.ID)
+			return m, cmd
 		}
 	case "n":
 		// Walk to the next item without leaving the detail view.
@@ -836,9 +881,9 @@ func runLabel(r store.LiveRun) string {
 // whether it worked — which is the question you had before opening
 // anything.
 func (m tuiModel) runOutcome(r store.LiveRun) string {
-	if r.BrokerURL != "" {
-		if r.PID > 0 {
-			return styCyan.Render(fmt.Sprintf("pid %d", r.PID))
+	if runIsWorking(r) {
+		if r.Running > 0 {
+			return styCyan.Render(fmt.Sprintf("running %d", r.Running))
 		}
 		return styCyan.Render("running")
 	}
@@ -855,13 +900,40 @@ func (m tuiModel) runOutcome(r store.LiveRun) string {
 	return strings.Join(parts, "  ")
 }
 
+// runIsWorking reports whether a run still has work in flight.
+//
+// Having a broker is not the same as having work. The daemon holds one for
+// every run it has ever hosted, so testing BrokerURL called a run whose
+// tasks had all completed "running" — the picker said running while the
+// graph beside it showed four ticks.
+//
+// The run's own state is the answer where there is one; a batch run
+// advertised through the registry file has none, and there its broker
+// really does die with the process.
+func runIsWorking(r store.LiveRun) bool {
+	switch r.State {
+	case string(broker.RunDone), string(broker.RunFailed), string(broker.RunCanceled):
+		return false
+	case string(broker.RunActive):
+		// "active" is not proof of work. A run persisted before the daemon
+		// learned to retire settled runs kept that state forever, and a
+		// snapshot written mid-flight keeps it too — so believe the tasks
+		// over the label when every one of them is terminal.
+		if r.Tasks > 0 && r.Done+r.Failed >= r.Tasks {
+			return false
+		}
+		return true
+	}
+	return r.BrokerURL != ""
+}
+
 // plainOutcome is runOutcome without styling, for measuring and for the
 // selected row — which reverses the whole line and must not carry escapes
 // inside it.
 func plainOutcome(r store.LiveRun) string {
-	if r.BrokerURL != "" {
-		if r.PID > 0 {
-			return fmt.Sprintf("pid %d", r.PID)
+	if runIsWorking(r) {
+		if r.Running > 0 {
+			return fmt.Sprintf("running %d", r.Running)
 		}
 		return "running"
 	}
@@ -886,7 +958,7 @@ func plainOutcome(r store.LiveRun) string {
 func (m tuiModel) runCountLabel() string {
 	live := 0
 	for _, r := range m.runs {
-		if r.BrokerURL != "" {
+		if runIsWorking(r) {
 			live++
 		}
 	}
@@ -981,7 +1053,7 @@ func (m tuiModel) viewPicker() string {
 		// rows makes the one live run — the only one you can still act on —
 		// disappear into it.
 		icon, originStyle := icons.runActive, styCyan
-		if r.BrokerURL == "" {
+		if !runIsWorking(r) {
 			icon, originStyle = icons.runDone, styGreen
 			// A finished run says how it finished. Failed tasks are the
 			// reason to open a run you would otherwise scroll past.
@@ -1023,7 +1095,7 @@ func (m tuiModel) viewPicker() string {
 
 		// A live run's prompt is what you are choosing between; a finished
 		// one's is a label on something already done.
-		if r.BrokerURL != "" {
+		if runIsWorking(r) {
 			b.WriteString(prompt + "\n")
 		} else {
 			b.WriteString(styDim.Render(prompt) + "\n")
@@ -1646,8 +1718,22 @@ func (m tuiModel) sessionLogPath(taskID string) string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
+	return filepath.Join(home, ".narwhal", "sessions", m.runID(),
 		"agents", "worker-"+taskID, "claude-output.txt")
+}
+
+// runID identifies the run being watched, preferring the discovered entry
+// over the snapshot.
+//
+// These are normally the same, but a snapshot that failed to load leaves
+// m.snap zeroed while m.live still knows which run it is — and the paths
+// under ~/.narwhal/sessions are keyed by run id, so falling back to the
+// empty one points them at a directory that does not exist.
+func (m tuiModel) runID() string {
+	if m.live.RunID != "" {
+		return m.live.RunID
+	}
+	return m.snap.RunID
 }
 
 // sessionIDPath returns where the launcher records a worker's Claude
@@ -1657,7 +1743,7 @@ func (m tuiModel) sessionIDPath(taskID string) string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".narwhal", "sessions", m.snap.RunID,
+	return filepath.Join(home, ".narwhal", "sessions", m.runID(),
 		"agents", "worker-"+taskID, "claude-session-id")
 }
 
@@ -1679,6 +1765,23 @@ func (m tuiModel) workerSessionID(taskID string) string {
 // attachDoneMsg reports back when an attached session exits.
 type attachDoneMsg struct{ err error }
 
+// workerCWD resolves the directory a worker's session ran in.
+//
+// The run normally carries it, but a run persisted before snapshots
+// recorded cwd — which is every run on disk written by an older binary —
+// has none, and Claude files transcripts per directory, so resuming from
+// the wrong one silently finds nothing. The transcript records the
+// directory it ran in, so ask it.
+func (m tuiModel) workerCWD(sessionID string) string {
+	if m.live.CWD != "" {
+		return m.live.CWD
+	}
+	if m.snap.CWD != "" {
+		return m.snap.CWD
+	}
+	return transcriptCWD(findTranscript(sessionID))
+}
+
 // attachToSession suspends the monitor and opens the worker's Claude
 // session, restoring the TUI when it exits.
 //
@@ -1688,17 +1791,18 @@ type attachDoneMsg struct{ err error }
 // continuously. --fork-session leaves the worker's own conversation
 // untouched — attaching is for watching, and sharing the session id would
 // have the monitor and the worker appending to one transcript.
-func (m tuiModel) attachToSession(taskID string) tea.Cmd {
+//
+// The error names which of the two things was missing. Reporting both as
+// "no recorded session" is what made a run with four perfectly good session
+// ids look like it had never pinned any.
+func (m tuiModel) attachToSession(taskID string) (tea.Cmd, error) {
 	sid := m.workerSessionID(taskID)
 	if sid == "" {
-		return nil
+		return nil, fmt.Errorf("no recorded session for %s — the run predates session pinning, or the task has not started", taskID)
 	}
-	cwd := m.live.CWD
+	cwd := m.workerCWD(sid)
 	if cwd == "" {
-		// A run read back from disk before snapshots carried cwd has none.
-		// Claude files transcripts per directory, so resuming from the
-		// wrong one silently fails to find the session.
-		return nil
+		return nil, fmt.Errorf("no transcript on disk for %s (session %s) — nothing to resume from", taskID, sid)
 	}
 	c := exec.Command("claude", "--resume", sid, "--fork-session")
 	c.Dir = cwd
@@ -1709,7 +1813,7 @@ func (m tuiModel) attachToSession(taskID string) tea.Cmd {
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return attachDoneMsg{err: err}
-	})
+	}), nil
 }
 
 // workerOutputLines reads a worker's whole session log, newest last.

@@ -60,6 +60,20 @@ func NewDispatcher(sess *Session) *Dispatcher {
 	}
 }
 
+// AdoptRunning seeds the running set with workers that survived a restart.
+//
+// Without this the first tick sees a dispatched task with nothing tracked
+// against it, calls that a failed dispatch, and launches a second worker
+// on a task that is already being worked — turning a recovery into the
+// duplicate it was meant to prevent.
+func (d *Dispatcher) AdoptRunning(running map[string]string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for key, agentID := range running {
+		d.running[key] = agentID
+	}
+}
+
 // Start begins the loop. Call Stop to end it.
 func (d *Dispatcher) Start() {
 	d.done = make(chan struct{})

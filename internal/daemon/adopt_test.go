@@ -167,8 +167,19 @@ func TestATaskWithNeitherIsCalledAbandoned(t *testing.T) {
 	if len(running) != 0 {
 		t.Errorf("a dead worker was tracked as running: %v", running)
 	}
-	if s := sess.Broker.GetRun("r1").GetTask("a").CurrentState(); s == broker.TaskDispatched {
+	// Terminal, not ready. FailDispatch would return it to ready and the
+	// next tick would launch a fresh worker — an adopted run can be hours
+	// old and its work already redone, so a restart must not quietly spend
+	// money re-running it.
+	s := sess.Broker.GetRun("r1").GetTask("a").CurrentState()
+	if s == broker.TaskDispatched {
 		t.Error("an abandoned task was left dispatched behind a worker that is gone")
+	}
+	if s == broker.TaskReady {
+		t.Error("an abandoned task was queued for a silent re-run on the next tick")
+	}
+	if s != broker.TaskFailed {
+		t.Errorf("an abandoned task is %s, want a terminal state", s)
 	}
 }
 

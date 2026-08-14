@@ -151,10 +151,14 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 		}
 
 		// No result and no process. The task is genuinely unfinished, and
-		// saying so is better than either silently retrying it or leaving
-		// it dispatched forever with nothing behind it.
+		// it stops here rather than being retried: an adopted run can be
+		// hours old, its abandoned task may already have been redone in a
+		// later run, and relaunching it on a restart spends real money on
+		// work nobody asked for again. FailDispatch is the wrong tool —
+		// it returns a task to ready, which is how a cancelled run kept
+		// relaunching itself.
 		if ts.State == broker.TaskDispatched {
-			task.FailDispatch("worker lost to a daemon restart", run)
+			task.CancelDispatch("worker lost to a daemon restart")
 		}
 		res.Abandoned++
 		res.Tasks = append(res.Tasks, AdoptOutcome{ts.ID, "abandoned"})

@@ -787,6 +787,15 @@ func (t *Task) StartDispatch(id, agentID string) *Dispatch {
 
 // CompleteDispatch marks the latest dispatch done and the task completed,
 // then recomputes dependents' readiness.
+//
+// Completing also gives up the task's file claims. A task that has
+// declared its outcome has no further writes to protect, and until this
+// the claims outlived it: the only thing that released them was reap,
+// which fires when the worker *process* exits. A `--print` worker lives on
+// after task-done — writing its final message, being drained — so a peer
+// asking for one of those paths in that window was told to negotiate with
+// a task that had already finished. Across the runs on disk there are 33
+// claims against 5 releases; what covered the gap was luck of timing.
 func (t *Task) CompleteDispatch(output string, r *Run) {
 	t.mu.Lock()
 	if len(t.Dispatches) > 0 {
@@ -795,6 +804,7 @@ func (t *Task) CompleteDispatch(output string, r *Run) {
 	}
 	t.State = TaskCompleted
 	t.mu.Unlock()
+	r.ReleaseTaskFiles(t.ID)
 	r.mu.Lock()
 	for _, other := range r.Tasks {
 		other.recomputeReady(r)
@@ -821,6 +831,10 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 	if failedCount >= MaxDispatchFailures {
 		t.State = TaskFailed
 		t.mu.Unlock()
+		// A task the breaker has given up on will not write again, so its
+		// claims must not outlive it either. Retries keep theirs: the same
+		// task is about to run again and wants the same paths.
+		r.ReleaseTaskFiles(t.ID)
 		return
 	}
 	t.State = TaskReady

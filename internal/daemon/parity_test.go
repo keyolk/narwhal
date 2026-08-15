@@ -79,13 +79,19 @@ type graphOutcome struct {
 	// that the claim was seen and applied at all — on the interactive path
 	// it used to be ignored entirely.
 	claimed map[string]bool
+	// runState is the run's own terminal state. Comparing only task
+	// states let a whole class through: a run whose every task failed was
+	// recorded as "done" on the interactive path and "failed" on the
+	// batch one, and every task state matched, so this test passed.
+	runState broker.RunState
 }
 
 func outcomeOf(run *broker.Run) graphOutcome {
 	out := graphOutcome{
-		states:  map[string]broker.TaskState{},
-		models:  map[string]string{},
-		claimed: map[string]bool{},
+		states:   map[string]broker.TaskState{},
+		models:   map[string]string{},
+		claimed:  map[string]bool{},
+		runState: run.CurrentState(),
 	}
 	for _, t := range run.SnapshotTasks() {
 		out.states[t.ID] = t.State
@@ -125,6 +131,10 @@ func (g graphOutcome) diff(other graphOutcome) []string {
 			out = append(out, "task "+id+" model: batch="+g.models[id]+
 				" daemon="+other.models[id])
 		}
+	}
+	if g.runState != other.runState {
+		out = append(out, "run state: batch="+string(g.runState)+
+			" daemon="+string(other.runState))
 	}
 	for p := range g.claimed {
 		if !other.claimed[p] {
@@ -217,6 +227,61 @@ func parityScenarios() []parityScenario {
 				run.AddTask("synthesis", "synthesis", "integrate", []string{"investigate"})
 			},
 			work: func(run *broker.Run, taskID string) {
+				run.GetTask(taskID).CompleteDispatch("done", run)
+			},
+		},
+		{
+			// A run whose work all failed must not be recorded as a
+			// success. The interactive path said "done" unconditionally,
+			// and every task state matched the batch path — so nothing
+			// here noticed until a real run on disk read 0/2 and "done".
+			name: "every task failing makes the run failed",
+			build: func(run *broker.Run) {
+				run.AddTask("a", "a", "do a", nil)
+				run.AddTask("b", "b", "do b", nil)
+			},
+			work: func(run *broker.Run, taskID string) {
+				t := run.GetTask(taskID)
+				// Burn the retry budget so the breaker trips.
+				for i := 0; i < broker.MaxDispatchFailures; i++ {
+					t.FailDispatch("boom", run)
+				}
+			},
+		},
+		{
+			// One failure among successes is still a failed run: the
+			// answer the user asked for is incomplete either way.
+			name: "one failed task among successes fails the run",
+			build: func(run *broker.Run) {
+				run.AddTask("ok", "ok", "do ok", nil)
+				run.AddTask("bad", "bad", "do bad", nil)
+			},
+			work: func(run *broker.Run, taskID string) {
+				t := run.GetTask(taskID)
+				if taskID == "bad" {
+					for i := 0; i < broker.MaxDispatchFailures; i++ {
+						t.FailDispatch("boom", run)
+					}
+					return
+				}
+				t.CompleteDispatch("done", run)
+			},
+		},
+		{
+			// A completed task must give up its claims. Only reap did,
+			// and reap fires when the process exits — a --print worker
+			// lives on after task-done, so a peer asking for the path in
+			// that window was told to negotiate with a finished task.
+			name: "a completed task releases the files it claimed",
+			build: func(run *broker.Run) {
+				run.AddTask("a", "a", "do a", nil)
+			},
+			work: func(run *broker.Run, taskID string) {
+				run.PostMessage(broker.WorklogThread, "worker-"+taskID, nil,
+					broker.PriorityNormal,
+					broker.FormatFileClaimRequest(broker.FileClaimPrefix, taskID,
+						[]string{"src/shared.go"}))
+				time.Sleep(60 * time.Millisecond) // let intake apply it
 				run.GetTask(taskID).CompleteDispatch("done", run)
 			},
 		},

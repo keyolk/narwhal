@@ -281,3 +281,63 @@ func TestRegisterWakeSkipsUnmentionedAgent(t *testing.T) {
 		t.Fatal("watcher was not woken by broadcast message")
 	}
 }
+
+func TestCompletingATaskGivesUpItsFiles(t *testing.T) {
+	// Only reap released claims, and reap fires when the worker *process*
+	// exits. A --print worker lives on after task-done — writing its last
+	// message, being drained — so a peer asking for one of those paths in
+	// that window was told to negotiate with a task that had finished.
+	// The runs on disk hold 33 claims against 5 releases; timing covered
+	// the gap.
+	b := New()
+	run := b.CreateRun("r1", "p", "/tmp", "main")
+	a := run.AddTask("a", "a", "x", nil)
+	run.AddTask("b", "b", "y", nil)
+
+	run.ClaimFiles("a", []string{"src/main.go"})
+	a.CompleteDispatch("done", run)
+
+	if conflicts := run.ClaimFiles("b", []string{"src/main.go"}); len(conflicts) > 0 {
+		t.Errorf("a completed task still holds src/main.go: %v", conflicts)
+	}
+}
+
+func TestATaskTheBreakerGaveUpOnGivesUpItsFiles(t *testing.T) {
+	b := New()
+	run := b.CreateRun("r1", "p", "/tmp", "main")
+	a := run.AddTask("a", "a", "x", nil)
+	run.AddTask("b", "b", "y", nil)
+	run.ClaimFiles("a", []string{"src/main.go"})
+
+	for i := 0; i < MaxDispatchFailures; i++ {
+		a.StartDispatch("d", "worker-a")
+		a.FailDispatch("boom", run)
+	}
+	if a.CurrentState() != TaskFailed {
+		t.Fatalf("setup: task a is %s", a.CurrentState())
+	}
+
+	if conflicts := run.ClaimFiles("b", []string{"src/main.go"}); len(conflicts) > 0 {
+		t.Errorf("a failed task still holds src/main.go: %v", conflicts)
+	}
+}
+
+func TestARetryKeepsItsClaims(t *testing.T) {
+	// A retry is the same task about to run again, wanting the same
+	// paths. Releasing between attempts would let a peer take them.
+	b := New()
+	run := b.CreateRun("r1", "p", "/tmp", "main")
+	a := run.AddTask("a", "a", "x", nil)
+	run.AddTask("b", "b", "y", nil)
+	run.ClaimFiles("a", []string{"src/main.go"})
+
+	a.StartDispatch("d1", "worker-a")
+	a.FailDispatch("transient", run)
+	if a.CurrentState() != TaskReady {
+		t.Fatalf("setup: expected a retry, task a is %s", a.CurrentState())
+	}
+
+	if conflicts := run.ClaimFiles("b", []string{"src/main.go"}); len(conflicts) == 0 {
+		t.Error("a task awaiting retry gave up the files it is about to write")
+	}
+}

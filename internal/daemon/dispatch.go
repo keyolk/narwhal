@@ -200,7 +200,26 @@ func (d *Dispatcher) retireIfSettled(runID string, run *broker.Run, active []str
 		// Nothing else sets this on the interactive path, so an
 		// interactive run stayed "active" forever — including in the
 		// monitor header and in every persisted snapshot.
-		run.SetState(broker.RunDone)
+		//
+		// Which terminal state mirrors the batch coordinator: any failed
+		// task makes the run failed. It used to say done unconditionally,
+		// so a run whose every task failed was recorded as a success —
+		// s1786665438376-1 on disk is exactly that, 0/2 and "done".
+		//
+		// The coordinator also fails a run with unreached tasks, and that
+		// clause is deliberately not copied. It means "the batch timeout
+		// expired with work outstanding", and there is no such deadline
+		// here: an interactive run with an unreached task is idle, not
+		// failed, and retireIfSettled has already returned above in that
+		// case.
+		state := broker.RunDone
+		for _, t := range tasks {
+			if t.State == broker.TaskFailed {
+				state = broker.RunFailed
+				break
+			}
+		}
+		run.SetState(state)
 		_ = d.persistRun(runID, run)
 	}
 	d.sess.DropLauncher(runID)

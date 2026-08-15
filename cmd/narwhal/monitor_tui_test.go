@@ -51,18 +51,28 @@ func press(m tuiModel, keys ...string) tuiModel {
 	return m
 }
 
-func TestTabSwitchesFocus(t *testing.T) {
+func TestTabCyclesEveryPane(t *testing.T) {
+	// The node pane had no focus of its own, so it could not be scrolled
+	// and its content was whatever three lines happened to fit.
 	m := testModel(3, 3)
 	if m.focus != focusRadio {
 		t.Fatalf("initial focus = %v, want radio", m.focus)
 	}
-	m = press(m, "tab")
-	if m.focus != focusTasks {
-		t.Fatalf("after tab focus = %v, want tasks", m.focus)
+	for i, want := range []focusPane{focusTasks, focusNode, focusRadio} {
+		m = press(m, "tab")
+		if m.focus != want {
+			t.Fatalf("tab %d focused %v, want %v", i+1, m.focus, want)
+		}
 	}
-	m = press(m, "tab")
+}
+
+func TestShiftTabGoesBack(t *testing.T) {
+	m := testModel(3, 3)
+	m.focus = focusTasks
+
+	m = press(m, "shift+tab")
 	if m.focus != focusRadio {
-		t.Fatalf("after second tab focus = %v, want radio", m.focus)
+		t.Fatalf("shift+tab from the first pane went to %v, want the last", m.focus)
 	}
 }
 

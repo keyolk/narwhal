@@ -23,7 +23,7 @@ import (
 )
 
 func (m tuiModel) viewInspector(width, height int) string {
-	title := paneTitle("Node", m.focus == focusTasks, width)
+	title := numberedPaneTitle(2, "Node", m.focus == focusNode, width)
 
 	t, ok := m.selectedTask()
 	if !ok {
@@ -35,8 +35,8 @@ func (m tuiModel) viewInspector(width, height int) string {
 	rows = append(rows, m.inspectorHeadline(t, width))
 	rows = append(rows, m.inspectorFields(t, width)...)
 
-	// Whatever is left goes to recent activity, which is the part that
-	// changes while you watch.
+	// Whatever is left goes to the activity feed, which is the part that
+	// changes while you watch and the reason to give this pane room.
 	if used := len(rows); used < height {
 		rows = append(rows, m.inspectorActivity(t, width, height-used)...)
 	}
@@ -141,30 +141,94 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 	return out
 }
 
-// inspectorActivity is the tail of what the worker has been doing, which is
-// the only part of the pane that moves on its own.
+// inspectorActivity renders what the worker is doing, as much of it as the
+// pane has room for.
+//
+// This is the pane's substance. It used to be a three-line tail labelled
+// "recent", which is enough to see that a worker is alive and never enough
+// to see what it is doing — the whole reason for opening the monitor. The
+// pane now scrolls through the entire transcript, so the same view answers
+// both "is it moving" and "what did it find" without leaving for a
+// full-screen detail and losing your place.
 func (m tuiModel) inspectorActivity(t broker.TaskSnapshot, width, budget int) []string {
 	if budget < 2 {
 		return nil
 	}
-	label := styDim.Render(fmt.Sprintf(" %s recent", icons.fieldActivity))
 
-	lines := m.workerActivityTail(t.ID, width-1)
+	lines := m.nodeActivityLines(t.ID, width-1)
 	if len(lines) == 0 {
 		if t.Dispatches == 0 {
 			return nil
 		}
-		return []string{label, styDim.Render("   (no output yet)")}
+		return []string{m.activityLabel(0, 0, 0), styDim.Render("   (no output yet)")}
 	}
-	// Keep the newest, since the tail is what "recent" means.
-	if len(lines) > budget-1 {
-		lines = lines[len(lines)-(budget-1):]
+
+	avail := budget - 1
+	start := m.nodeScroll
+	if start == nodeScrollTail || start > len(lines)-avail {
+		// The tail: show the newest, which is what you want of a worker
+		// still writing.
+		start = len(lines) - avail
 	}
-	out := []string{label}
-	for _, l := range lines {
+	if start < 0 {
+		start = 0
+	}
+	end := start + avail
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	out := []string{m.activityLabel(start, end, len(lines))}
+	for _, l := range lines[start:end] {
 		out = append(out, " "+l)
 	}
 	return out
+}
+
+// activityLabel says how much of the activity is on screen, so a pane
+// showing a window into 200 lines does not look like the whole story.
+func (m tuiModel) activityLabel(start, end, total int) string {
+	label := fmt.Sprintf(" %s activity", icons.fieldActivity)
+	if total == 0 {
+		return styDim.Render(label)
+	}
+	pos := fmt.Sprintf("  %d-%d/%d", start+1, end, total)
+	if m.nodeScroll == nodeScrollTail {
+		pos += " ⌄"
+	}
+	return styDim.Render(label + pos)
+}
+
+// nodeActivityLines is the worker's full activity, rendered to width.
+func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
+	if entries := m.workerActivity(taskID); len(entries) > 0 {
+		return renderTranscript(entries, width)
+	}
+	return m.workerOutputLines(taskID)
+}
+
+// nodeLineCount is how many activity lines the selected node has, for
+// clamping the scroll offset.
+func (m tuiModel) nodeLineCount() int {
+	t, ok := m.selectedTask()
+	if !ok {
+		return 0
+	}
+	return len(m.nodeActivityLines(t.ID, m.nodePaneWidth()))
+}
+
+// nodePaneWidth is the width the node pane renders at. Scrolling has to
+// agree with rendering about how many lines there are, and the count
+// depends on where the text wraps.
+func (m tuiModel) nodePaneWidth() int {
+	if m.zoom == focusNode {
+		return m.width - 1
+	}
+	w := m.width - m.graphPaneWidth() - 1
+	if w < 20 {
+		w = 20
+	}
+	return w - 1
 }
 
 // pendingDeps returns the task's dependencies that have not finished, in

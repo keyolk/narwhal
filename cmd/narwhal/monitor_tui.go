@@ -34,12 +34,25 @@ import (
 	"github.com/keyolk/narwhal/internal/store"
 )
 
+// focusPane is which pane the keys go to.
+//
+// The node pane used to have no focus of its own — it followed the graph
+// cursor and could not be scrolled, so a worker's activity was whatever
+// three lines happened to fit. It is now a pane like the others, which is
+// what lets it hold something worth reading.
 type focusPane int
 
 const (
 	focusTasks focusPane = iota
+	focusNode
 	focusRadio
 )
+
+// panes is the cycle order, left to right and top to bottom on screen.
+var panes = []focusPane{focusTasks, focusNode, focusRadio}
+
+func (f focusPane) next() focusPane { return panes[(int(f)+1)%len(panes)] }
+func (f focusPane) prev() focusPane { return panes[(int(f)+len(panes)-1)%len(panes)] }
 
 // detailMode says what the detail pane is showing, or that it is closed.
 type detailMode int
@@ -106,6 +119,20 @@ type tuiModel struct {
 	// gutter. Boxes read better as a diagram; lanes fit more on screen.
 	boxMode bool
 
+	// zoom is the pane filling the whole body, or -1 for the normal split.
+	// Reading a long assignment or a busy channel means wanting one pane
+	// to be the screen for a moment, and going through a separate detail
+	// view to get it loses the place you were in.
+	zoom focusPane
+	// widthDelta and heightDelta are the user's adjustments to the pane
+	// split, in columns and rows. Kept as deltas rather than absolute
+	// sizes so the layout still adapts when the terminal is resized.
+	widthDelta  int
+	heightDelta int
+	// nodeScroll is how far the node pane has been scrolled through the
+	// worker's activity, or nodeScrollTail to stay on the newest.
+	nodeScroll int
+
 	width  int
 	height int
 	quit   bool
@@ -118,7 +145,9 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		interval:   interval,
 		client:     &http.Client{Timeout: 5 * time.Second},
 		focus:      focusRadio,
+		zoom:       -1,
 		followTail: true,
+		nodeScroll: nodeScrollTail,
 		boxMode:    true,
 		runs:       runs,
 		runCur:     cur,
@@ -388,38 +417,81 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case "tab":
-		if m.focus == focusTasks {
-			m.focus = focusRadio
-		} else {
-			m.focus = focusTasks
-		}
+		m.focus = m.focus.next()
+		m.followZoom()
+	case "shift+tab":
+		m.focus = m.focus.prev()
+		m.followZoom()
 	case "1":
-		// Jump straight to a pane. Tab cycles, which is fine with two
-		// panes and tiresome once you know where you are going — and the
-		// numbers are visible in the pane titles, so there is nothing to
-		// remember.
+		// Jump straight to a pane. Tab cycles, which is fine for a step
+		// sideways and tiresome once you know where you are going — and
+		// the numbers are visible in the pane titles, so there is nothing
+		// to remember.
 		m.focus = focusTasks
+		m.followZoom()
 	case "2":
+		m.focus = focusNode
+		m.followZoom()
+	case "3":
 		m.focus = focusRadio
-	case "j", "down":
-		if m.focus == focusTasks {
-			m.moveVertical(1)
+		m.followZoom()
+	case "z":
+		// Zoom the focused pane to the whole body, tmux-style. A second
+		// press restores the split.
+		if m.zoom == m.focus {
+			m.zoom = -1
 		} else {
+			m.zoom = m.focus
+		}
+	case ">":
+		m.widthDelta += 4
+	case "<":
+		m.widthDelta -= 4
+	case "+", "=":
+		m.heightDelta += 2
+	case "-", "_":
+		m.heightDelta -= 2
+	case "j", "down":
+		switch m.focus {
+		case focusTasks:
+			m.moveVertical(1)
+		case focusNode:
+			m.scrollNode(1)
+		default:
 			m.moveCursor(1)
 		}
 	case "k", "up":
-		if m.focus == focusTasks {
+		switch m.focus {
+		case focusTasks:
 			m.moveVertical(-1)
-		} else {
+		case focusNode:
+			m.scrollNode(-1)
+		default:
 			m.moveCursor(-1)
 		}
 	case "g", "home":
+		if m.focus == focusNode {
+			m.nodeScroll = 0
+			break
+		}
 		m.jumpTo(0)
 	case "G", "end":
+		if m.focus == focusNode {
+			m.nodeScroll = nodeScrollTail
+			break
+		}
 		m.jumpToEnd()
 	case "ctrl+d", "pgdown":
+		if m.focus == focusNode {
+			m.scrollNode(10)
+			break
+		}
 		m.moveCursor(10)
 	case "ctrl+u", "pgup":
+		if m.focus == focusNode {
+			m.scrollNode(-10)
+			break
+		}
 		m.moveCursor(-10)
 	case "enter":
 		// Detail shows whichever pane you opened it from.
@@ -596,6 +668,41 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// nodeScrollTail parks the node pane at the newest activity and keeps it
+// there as the worker writes. A worker being watched is usually one you
+// want the latest of, and a fixed offset would drift away from it.
+const nodeScrollTail = -1
+
+// followZoom keeps a zoomed pane and the focus together. Moving focus
+// while zoomed and leaving the old pane on screen would put the keys
+// somewhere invisible, which reads as the keyboard having stopped working.
+func (m *tuiModel) followZoom() {
+	if m.zoom >= 0 {
+		m.zoom = m.focus
+	}
+}
+
+// scrollNode moves through the node pane's activity, releasing the tail on
+// the way up and re-arming it at the bottom.
+func (m *tuiModel) scrollNode(delta int) {
+	if m.nodeScroll == nodeScrollTail {
+		if delta > 0 {
+			return // already at the newest
+		}
+		// Leaving the tail: start from where the tail was showing, which
+		// is the end, so an upward step goes back one line rather than
+		// jumping to the top.
+		m.nodeScroll = m.nodeLineCount()
+	}
+	m.nodeScroll += delta
+	if m.nodeScroll < 0 {
+		m.nodeScroll = 0
+	}
+	if n := m.nodeLineCount(); m.nodeScroll >= n {
+		m.nodeScroll = nodeScrollTail
+	}
+}
+
 func (m *tuiModel) moveCursor(delta int) {
 	switch m.focus {
 	case focusTasks:
@@ -610,7 +717,7 @@ func (m *tuiModel) moveCursor(delta int) {
 func (m *tuiModel) jumpTo(i int) {
 	switch m.focus {
 	case focusTasks:
-		m.taskCur = i
+		m.selectNode(i)
 	case focusRadio:
 		m.radioCur = i
 		m.followTail = false
@@ -621,7 +728,7 @@ func (m *tuiModel) jumpTo(i int) {
 func (m *tuiModel) jumpToEnd() {
 	switch m.focus {
 	case focusTasks:
-		m.taskCur = len(m.snap.Tasks) - 1
+		m.selectNode(len(m.snap.Tasks) - 1)
 	case focusRadio:
 		m.radioCur = len(m.snap.Messages) - 1
 	}
@@ -678,6 +785,21 @@ func (m *tuiModel) restoreTaskCursor(id string) {
 	}
 }
 
+// selectNode moves the graph cursor and rewinds the node pane to the
+// newest activity.
+//
+// The scroll offset belongs to the node you were reading — carrying it to
+// the next one lands you in the middle of a different worker's transcript,
+// at a position that means nothing there.
+func (m *tuiModel) selectNode(i int) {
+	if i == m.taskCur {
+		return
+	}
+	m.taskCur = i
+	m.nodeScroll = nodeScrollTail
+	m.clampCursors()
+}
+
 func (m *tuiModel) clampCursors() {
 	if m.taskCur < 0 {
 		m.taskCur = 0
@@ -730,6 +852,21 @@ func (m tuiModel) View() string {
 	}
 
 	leftWidth := m.graphPaneWidth()
+	inspectHeight := m.inspectorHeight(bodyHeight)
+
+	// A zoomed pane is the body. Reading a long assignment or a busy
+	// channel means wanting one pane to be the screen for a moment, and
+	// the sizes come from the same two functions navigation uses so the
+	// cursor still lands where it looks like it should.
+	switch m.zoom {
+	case focusTasks:
+		return pinFooter(header+"\n"+m.viewTasks(m.width, bodyHeight), footer, m.height)
+	case focusNode:
+		return pinFooter(header+"\n"+m.viewInspector(m.width, bodyHeight), footer, m.height)
+	case focusRadio:
+		return pinFooter(header+"\n"+m.viewRadio(m.width, bodyHeight), footer, m.height)
+	}
+
 	rightWidth := m.width - leftWidth - 1
 	if rightWidth < 20 {
 		rightWidth = 20
@@ -742,7 +879,6 @@ func (m tuiModel) View() string {
 	// the whole channel rather than being filtered to the selected node:
 	// a channel is the thing everyone is talking on, and messages nobody
 	// @-mentions (PLAN_DONE, broadcasts) belong to no node at all.
-	inspectHeight := m.inspectorHeight(bodyHeight)
 	radioHeight := bodyHeight - inspectHeight
 	if radioHeight < 3 {
 		radioHeight, inspectHeight = bodyHeight, 0
@@ -771,15 +907,38 @@ func (m tuiModel) View() string {
 }
 
 // inspectorHeight splits the right pane between the node inspector and the
-// radio. The inspector is a fixed summary — a handful of fields plus a few
-// activity lines — so it takes what it needs and the radio, which grows
-// without bound, takes the rest. On a short terminal it is dropped entirely
-// rather than squeezing the radio to nothing.
+// radio. The inspector holds a fixed summary plus as much worker activity
+// as fits, and the radio, which grows without bound, takes the rest. On a
+// short terminal it is dropped entirely rather than squeezing the radio to
+// nothing.
+//
+// Zoom and the user's own adjustment both resolve here rather than in
+// View, for the same reason graphPaneWidth is shared: two places computing
+// a size disagree eventually, and the disagreement shows up as a cursor
+// that moves somewhere the user cannot see.
 func (m tuiModel) inspectorHeight(bodyHeight int) int {
+	switch m.zoom {
+	case focusNode:
+		return bodyHeight
+	case focusRadio, focusTasks:
+		return 0
+	}
 	if len(m.snap.Tasks) == 0 || bodyHeight < 14 {
 		return 0
 	}
-	const want = 9
+	// Split the body rather than taking a fixed nine rows. Nine was sized
+	// for a pane that showed three lines of "recent"; now that it holds
+	// the worker's activity it deserves a share of the screen, and a fixed
+	// height means a taller terminal only ever grows the radio.
+	want := bodyHeight*2/5 + m.heightDelta
+	// Enough for a title, a headline and a line of content; beyond that
+	// the radio must keep a readable remainder.
+	if want < 4 {
+		want = 4
+	}
+	if want > bodyHeight-5 {
+		want = bodyHeight - 5
+	}
 	if bodyHeight-want < 5 {
 		return 0
 	}
@@ -791,19 +950,38 @@ func (m tuiModel) inspectorHeight(bodyHeight int) int {
 // boxes share a row, and the layout depends on how wide the pane is. If the
 // two disagreed, `l` would step to a box that is not on screen where the
 // user sees it.
+//
+// Zoom resolves here for that reason. A zoomed graph is drawn at the full
+// width, so navigation has to be computed at the full width as well — the
+// rows a box shares change when the pane gets wider.
 func (m tuiModel) graphPaneWidth() int {
+	switch m.zoom {
+	case focusTasks:
+		return m.width
+	case focusNode, focusRadio:
+		return 0
+	}
 	// Boxes need room for two borders plus a readable label, so the graph
 	// pane gets a wider floor in box mode than the lane gutter needs.
-	w := m.width / 3
+	w := m.width/3 + m.widthDelta
 	minLeft, maxLeft := 24, 44
 	if m.boxMode {
 		minLeft, maxLeft = 30, 52
+	}
+	// The user's adjustment widens the ceiling — the cap exists so the
+	// graph does not eat the screen by default, not to stop someone who
+	// asked for it. The right side still keeps a usable minimum.
+	if max := m.width - 24; maxLeft < max {
+		maxLeft = max
 	}
 	if w < minLeft {
 		w = minLeft
 	}
 	if w > maxLeft {
 		w = maxLeft
+	}
+	if w > m.width-2 {
+		w = m.width - 2
 	}
 	return w
 }
@@ -1265,11 +1443,37 @@ func (m tuiModel) viewFooter() string {
 		// state — dim made it read as a label nobody had to notice.
 		tail = "  " + styCyan.Render("[following]")
 	}
-	keys := "1/2 pane · hjkl move · enter detail · s session · a attach · esc runs · q quit"
-	if len(m.runs) > 1 {
-		keys = "1/2 pane · hjkl move · enter detail · s session · a attach · [ ] run · q quit"
+	return stats + tail + "\n" + styDim.Render(m.footerKeys())
+}
+
+// footerKeys lists the keys that do something where the cursor is.
+//
+// One fixed line could not grow to cover three panes, zoom and resize
+// without becoming a wall nobody reads. What each pane offers differs —
+// the graph navigates, the node scrolls — so the hints follow the focus
+// and stay one line.
+func (m tuiModel) footerKeys() string {
+	parts := []string{"1/2/3 pane"}
+	switch m.focus {
+	case focusTasks:
+		parts = append(parts, "hjkl move", "b lanes", "< > width")
+	case focusNode:
+		parts = append(parts, "jk scroll", "+ - height")
+	case focusRadio:
+		parts = append(parts, "jk move", "f follow")
 	}
-	return stats + tail + "\n" + styDim.Render(keys)
+	zoomKey := "z zoom"
+	if m.zoom >= 0 {
+		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
+	}
+	parts = append(parts, zoomKey, "enter detail", "s session", "a attach")
+	if len(m.runs) > 1 {
+		parts = append(parts, "[ ] run")
+	} else {
+		parts = append(parts, "esc runs")
+	}
+	parts = append(parts, "q quit")
+	return strings.Join(parts, " · ")
 }
 
 func (m tuiModel) viewTasks(width, height int) string {
@@ -1478,7 +1682,7 @@ func paneTitle(label string, focused bool, width int) string {
 }
 
 func (m tuiModel) viewRadio(width, height int) string {
-	title := numberedPaneTitle(2, fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
+	title := numberedPaneTitle(3, fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
 		m.focus == focusRadio, width)
 
 	rows := make([]string, 0, height)

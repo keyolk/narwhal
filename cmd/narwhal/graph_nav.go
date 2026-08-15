@@ -140,8 +140,7 @@ func (m *tuiModel) moveVertical(dir int) {
 		}
 	}
 	if best >= 0 {
-		m.taskCur = best
-		m.clampCursors()
+		m.selectNode(best)
 	}
 }
 
@@ -241,8 +240,7 @@ func (m *tuiModel) moveHorizontal(dir int) {
 		}
 	}
 	if best >= 0 {
-		m.taskCur = best
-		m.clampCursors()
+		m.selectNode(best)
 		return
 	}
 
@@ -263,6 +261,5 @@ func (m *tuiModel) moveHorizontal(dir int) {
 	if next < 0 || next >= len(order) {
 		return
 	}
-	m.taskCur = order[next]
-	m.clampCursors()
+	m.selectNode(order[next])
 }

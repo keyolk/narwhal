@@ -255,18 +255,23 @@ func stripEscapes(s string) string {
 }
 
 func TestNumberKeysSelectPanes(t *testing.T) {
-	// Tab cycles, which is fine with two panes and tiresome once you know
-	// where you are going.
+	// Tab cycles, which is fine for a step sideways and tiresome once you
+	// know where you are going — more so with three panes than two.
 	m := testModel(2, 2)
 	m.focus = focusRadio
 
-	m = press(m, "1")
-	if m.focus != focusTasks {
-		t.Fatalf("1 did not focus the graph: %v", m.focus)
-	}
-	m = press(m, "2")
-	if m.focus != focusRadio {
-		t.Fatalf("2 did not focus the radio: %v", m.focus)
+	for _, tc := range []struct {
+		key  string
+		want focusPane
+	}{
+		{"1", focusTasks},
+		{"2", focusNode},
+		{"3", focusRadio},
+	} {
+		m = press(m, tc.key)
+		if m.focus != tc.want {
+			t.Fatalf("%s focused %v, want %v", tc.key, m.focus, tc.want)
+		}
 	}
 }
 

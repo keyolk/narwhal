@@ -685,22 +685,66 @@ func (m *tuiModel) followZoom() {
 // scrollNode moves through the node pane's activity, releasing the tail on
 // the way up and re-arming it at the bottom.
 func (m *tuiModel) scrollNode(delta int) {
+	total := m.nodeLineCount()
+	avail := m.nodeActivityRows()
+
 	if m.nodeScroll == nodeScrollTail {
 		if delta > 0 {
 			return // already at the newest
 		}
-		// Leaving the tail: start from where the tail was showing, which
-		// is the end, so an upward step goes back one line rather than
-		// jumping to the top.
-		m.nodeScroll = m.nodeLineCount()
+		// Leaving the tail means taking over the window it was showing,
+		// so the first step moves by one line. Resolving it to the line
+		// count instead — the window's *end* — spent a step for every row
+		// on screen before anything moved: eight presses scrolled two
+		// lines on a 14-row pane.
+		start, _ := activityWindow(nodeScrollTail, avail, total)
+		m.nodeScroll = start
 	}
 	m.nodeScroll += delta
 	if m.nodeScroll < 0 {
 		m.nodeScroll = 0
 	}
-	if n := m.nodeLineCount(); m.nodeScroll >= n {
+	// Past the last full window is the tail, which then keeps following
+	// the worker instead of pinning to a line number it has outgrown.
+	if m.nodeScroll >= total-avail {
 		m.nodeScroll = nodeScrollTail
 	}
+}
+
+// nodeActivityRows is how many activity lines the node pane shows.
+//
+// Scrolling and rendering have to agree on the window, or a step moves the
+// offset without moving the screen. Derived the same way View derives it,
+// for the same reason graphPaneWidth is shared with navigation.
+func (m tuiModel) nodeActivityRows() int {
+	body := m.height - nodeChromeRows
+	if body < 1 {
+		body = 1
+	}
+	h := m.inspectorHeight(body)
+	if h == 0 {
+		return 1
+	}
+	// The pane spends rows on its title, headline and fields before the
+	// feed starts; the label above the feed takes one more.
+	rows := h - m.nodeFieldRows() - 1
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// nodeChromeRows is the header and footer the body sits between.
+const nodeChromeRows = 3
+
+// nodeFieldRows is how many rows the summary above the feed occupies.
+func (m tuiModel) nodeFieldRows() int {
+	t, ok := m.selectedTask()
+	if !ok {
+		return 2
+	}
+	// Title plus headline, then whichever fields have something to say.
+	return 2 + len(m.inspectorFields(t, m.nodePaneWidth()))
 }
 
 func (m *tuiModel) moveCursor(delta int) {

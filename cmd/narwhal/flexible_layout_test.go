@@ -296,3 +296,70 @@ func TestMovingToAnotherNodeRewindsTheActivity(t *testing.T) {
 			m.nodeScroll)
 	}
 }
+
+func TestEachPressScrollsOneLine(t *testing.T) {
+	// Leaving the tail resolved the offset to the line count — the
+	// window's END, not its start — so every press inside the visible
+	// window moved the number without moving the screen. On a 14-row pane
+	// against 708 lines, eight presses scrolled two lines.
+	m := flexModel(t)
+	m.focus = focusNode
+	m.taskCur = 0
+	giveNodeActivity(t, &m, "task-1", 200)
+
+	rows := m.nodeActivityRows()
+	if rows < 3 {
+		t.Fatalf("setup: the pane shows %d activity rows", rows)
+	}
+	total := m.nodeLineCount()
+	firstStart, _ := activityWindow(nodeScrollTail, rows, total)
+
+	const presses = 5
+	for i := 0; i < presses; i++ {
+		m = press(m, "k")
+	}
+	start, _ := activityWindow(m.nodeScroll, rows, total)
+
+	if got := firstStart - start; got != presses {
+		t.Errorf("%d presses moved the window %d lines, want %d", presses, got, presses)
+	}
+}
+
+func TestScrollingReachesTheStart(t *testing.T) {
+	// The end of the same defect: if presses are being eaten, the top of
+	// a long feed is a lot further away than it looks.
+	m := flexModel(t)
+	m.focus = focusNode
+	m.taskCur = 0
+	giveNodeActivity(t, &m, "task-1", 60)
+
+	total := m.nodeLineCount()
+	for i := 0; i < total+10; i++ {
+		m = press(m, "k")
+	}
+	if m.nodeScroll != 0 {
+		t.Errorf("scrolling up past the start parked at %d", m.nodeScroll)
+	}
+}
+
+func TestScrollingBackDownReturnsToTheTail(t *testing.T) {
+	// And re-arms following, so the pane keeps up with a live worker
+	// again rather than pinning to a line number it has outgrown.
+	m := flexModel(t)
+	m.focus = focusNode
+	m.taskCur = 0
+	giveNodeActivity(t, &m, "task-1", 60)
+
+	for i := 0; i < 10; i++ {
+		m = press(m, "k")
+	}
+	if m.nodeScroll == nodeScrollTail {
+		t.Fatal("setup: still following")
+	}
+	for i := 0; i < 40; i++ {
+		m = press(m, "j")
+	}
+	if m.nodeScroll != nodeScrollTail {
+		t.Errorf("scrolling back down parked at %d instead of following", m.nodeScroll)
+	}
+}

@@ -215,6 +215,11 @@ func (s *Server) handleControlDrain(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RunID string `json:"run_id"`
 		After int64  `json:"after"`
+		// WaitMs turns the read into a long poll. Without it the only way
+		// to follow a run was to call again and again: the transcripts
+		// show 92 drains across 5 runs, most of them returning what the
+		// caller had already seen.
+		WaitMs int `json:"wait_ms"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -225,13 +230,48 @@ func (s *Server) handleControlDrain(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
 		return
 	}
+
 	msgs := run.MessagesSince(req.After)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"run_id":   req.RunID,
-		"cursor":   lastSeq(msgs),
+	waited := false
+	if len(msgs) == 0 && req.WaitMs > 0 {
+		// Cap the wait: an MCP client is holding a tool call open, and a
+		// caller that asked for an hour has made a mistake it cannot see.
+		wait := time.Duration(req.WaitMs) * time.Millisecond
+		if wait > maxDrainWait {
+			wait = maxDrainWait
+		}
+		ch, remove := run.RegisterWatch("main")
+		select {
+		case <-ch:
+			msgs = run.MessagesSince(req.After)
+		case <-time.After(wait):
+			waited = true
+		case <-r.Context().Done():
+			// The client gave up; do not hold the run's watch list.
+			remove()
+			return
+		}
+		remove()
+	}
+
+	out := map[string]any{
+		"run_id": req.RunID,
+		// Never backwards: the tool tells its caller to pass this back,
+		// and lastSeq is 0 for an empty read — so a quiet moment reset
+		// the caller to the start and it re-read the whole channel.
+		"cursor":   advanceCursor(req.After, msgs),
 		"messages": msgs,
-	})
+	}
+	if waited {
+		out["timeout"] = true
+	}
+	writeJSON(w, http.StatusOK, out)
 }
+
+// maxDrainWait bounds a long-poll drain. Long enough that following a run
+// costs one call a minute rather than a call a second; short enough that a
+// held-open tool call still returns on its own.
+const maxDrainWait = 60 * time.Second
 
 // handleControlStatus reports run and worker state for one run, or a
 // summary of every run when run_id is omitted.

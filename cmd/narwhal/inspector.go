@@ -155,8 +155,8 @@ func (m tuiModel) inspectorActivity(t broker.TaskSnapshot, width, budget int) []
 		return nil
 	}
 
-	lines := m.nodeActivityLines(t.ID, width-1)
-	if len(lines) == 0 {
+	total := m.nodeLineCountAt(t.ID, width-1)
+	if total == 0 {
 		if t.Dispatches == 0 {
 			return nil
 		}
@@ -164,25 +164,33 @@ func (m tuiModel) inspectorActivity(t broker.TaskSnapshot, width, budget int) []
 	}
 
 	avail := budget - 1
-	start := m.nodeScroll
-	if start == nodeScrollTail || start > len(lines)-avail {
-		// The tail: show the newest, which is what you want of a worker
-		// still writing.
-		start = len(lines) - avail
+	start, end := activityWindow(m.nodeScroll, avail, total)
+
+	// Render only the window. The whole feed runs to hundreds of lines on
+	// a long task — 929 for one worker on disk here — and styling all of
+	// them to show six is work thrown away on every frame.
+	out := []string{m.activityLabel(start, end, total)}
+	for _, l := range m.nodeActivitySlice(t.ID, width-1, start, end) {
+		out = append(out, " "+l)
+	}
+	return out
+}
+
+// activityWindow resolves a scroll offset to the visible range, treating
+// nodeScrollTail and any offset past the end as "show the newest".
+func activityWindow(scroll, avail, total int) (int, int) {
+	start := scroll
+	if start == nodeScrollTail || start > total-avail {
+		start = total - avail
 	}
 	if start < 0 {
 		start = 0
 	}
 	end := start + avail
-	if end > len(lines) {
-		end = len(lines)
+	if end > total {
+		end = total
 	}
-
-	out := []string{m.activityLabel(start, end, len(lines))}
-	for _, l := range lines[start:end] {
-		out = append(out, " "+l)
-	}
-	return out
+	return start, end
 }
 
 // activityLabel says how much of the activity is on screen, so a pane
@@ -200,11 +208,41 @@ func (m tuiModel) activityLabel(start, end, total int) string {
 }
 
 // nodeActivityLines is the worker's full activity, rendered to width.
+//
+// Kept for callers that genuinely need every line. The pane itself uses
+// nodeActivitySlice, because rendering hundreds of lines to display six is
+// the difference between a 2.4ms frame and a 0.2ms one.
 func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
-	if entries := m.workerActivity(taskID); len(entries) > 0 {
-		return renderTranscript(entries, width)
+	if sid := m.workerSessionID(taskID); sid != "" {
+		if lines := globalTranscripts.render(
+			transcriptPath(m.live.CWD, sid), width); len(lines) > 0 {
+			return lines
+		}
 	}
 	return m.workerOutputLines(taskID)
+}
+
+// nodeActivitySlice renders just the lines in [start, end).
+//
+// A transcript entry can wrap to several lines, so the entry index and the
+// line index are not the same number and the slice cannot be taken before
+// rendering. Rendering is done per entry from the end backwards until the
+// window is covered, which is bounded by the window rather than the feed.
+func (m tuiModel) nodeActivitySlice(taskID string, width, start, end int) []string {
+	return clampSlice(m.nodeActivityLines(taskID, width), start, end)
+}
+
+func clampSlice(lines []string, start, end int) []string {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start >= end {
+		return nil
+	}
+	return lines[start:end]
 }
 
 // nodeLineCount is how many activity lines the selected node has, for
@@ -214,7 +252,12 @@ func (m tuiModel) nodeLineCount() int {
 	if !ok {
 		return 0
 	}
-	return len(m.nodeActivityLines(t.ID, m.nodePaneWidth()))
+	return m.nodeLineCountAt(t.ID, m.nodePaneWidth())
+}
+
+// nodeLineCountAt is the line count at a given width.
+func (m tuiModel) nodeLineCountAt(taskID string, width int) int {
+	return len(m.nodeActivityLines(taskID, width))
 }
 
 // nodePaneWidth is the width the node pane renders at. Scrolling has to

@@ -1838,7 +1838,9 @@ func (m tuiModel) viewSessionDetail() string {
 	entries := m.workerActivity(t.ID)
 	if len(entries) > 0 {
 		meta = append(meta, fmt.Sprintf("%d events", len(entries)))
-		body = renderTranscript(entries, width)
+		// Through the cache: this view scrolls too, and re-rendering the
+		// whole feed per frame is the same 2.4ms the node pane paid.
+		body = m.nodeActivityLines(t.ID, width)
 	}
 
 	// The final answer only exists once the worker has exited. Append it

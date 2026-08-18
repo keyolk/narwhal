@@ -14,8 +14,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,16 +124,32 @@ func transcriptCWD(path string) string {
 // being appended to while we read it, so the last line is routinely a
 // partial write.
 func readTranscript(path string) []transcriptEntry {
-	if path == "" {
-		return nil
+	return globalTranscripts.read(path)
+}
+
+// parseTranscriptFrom reads from offset to the end and returns the entries
+// it found plus how many bytes it consumed.
+//
+// Consumed stops at the last newline rather than at EOF. The file is being
+// appended to while we read it, so the tail is routinely a partial write —
+// counting it as read would drop that entry forever once the rest arrived,
+// which is worse than the old full re-read it replaces.
+func parseTranscriptFrom(r io.ReadSeeker, offset int64) ([]transcriptEntry, int64) {
+	if _, err := r.Seek(offset, io.SeekStart); err != nil {
+		return nil, 0
 	}
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(r)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
+	cut := bytes.LastIndexByte(data, '\n')
+	if cut < 0 {
+		return nil, 0
+	}
+	complete := data[:cut+1]
 
 	var out []transcriptEntry
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(string(complete), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -151,7 +169,7 @@ func readTranscript(path string) []transcriptEntry {
 		at, _ := time.Parse(time.RFC3339, rec.Timestamp)
 		out = append(out, parseContent(rec.Message.Content, at)...)
 	}
-	return out
+	return out, int64(len(complete))
 }
 
 // parseContent turns one message's content into entries. Content is either

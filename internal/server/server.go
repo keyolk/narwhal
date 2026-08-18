@@ -289,7 +289,7 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, agent *brok
 	if len(msgs) > 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"agent_id": agent.ID,
-			"cursor":   lastSeq(msgs),
+			"cursor":   advanceCursor(req.After, msgs),
 			"messages": msgs,
 		})
 		return
@@ -301,10 +301,14 @@ func (s *Server) handleWatch(w http.ResponseWriter, r *http.Request, agent *brok
 
 	select {
 	case <-ch:
+		// A wake does not guarantee a message for THIS agent: the channel
+		// wakes every watcher and MessagesMentioning then filters. An
+		// empty result here would have reported cursor 0 and sent the
+		// watcher back to the start of the channel.
 		msgs := run.MessagesMentioning(req.After, agent.ID)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"agent_id": agent.ID,
-			"cursor":   lastSeq(msgs),
+			"cursor":   advanceCursor(req.After, msgs),
 			"messages": msgs,
 		})
 	case <-time.After(timeout):
@@ -336,12 +340,33 @@ func (s *Server) handleDrain(w http.ResponseWriter, r *http.Request, agent *brok
 	// a nonexistent agent. Mention-based filtering belongs on the watch
 	// (notification) path, not on the manual read path.
 	msgs := run.MessagesSince(req.After)
+	// The cursor has to hold when there is nothing new. lastSeq returns 0
+	// for an empty read, and the tool tells its caller to pass the cursor
+	// back — so a quiet moment reset the caller to the start of the
+	// channel and it re-read everything on the next call. In the
+	// transcripts that is 92 drains against 5 runs, each one re-reading a
+	// channel it had already seen.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"agent_id": agent.ID,
 		"after":    req.After,
-		"cursor":   lastSeq(msgs),
+		"cursor":   advanceCursor(req.After, msgs),
 		"messages": msgs,
 	})
+}
+
+// advanceCursor returns the cursor to hand back: the newest message read,
+// or the caller's own cursor when there was nothing new.
+//
+// Never going backwards is the whole contract. Both drain and watch tell
+// the caller to pass the returned cursor to the next call, and lastSeq
+// returns 0 for an empty read — so a quiet moment reset the caller to the
+// start of the channel and it re-read everything. The transcripts show 92
+// drains across 5 runs doing exactly that.
+func advanceCursor(after int64, msgs []*broker.Message) int64 {
+	if next := lastSeq(msgs); next > after {
+		return next
+	}
+	return after
 }
 
 // lastSeq returns the highest Seq among msgs, or 0 if empty.

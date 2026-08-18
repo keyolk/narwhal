@@ -21,13 +21,13 @@ func toolDefinitions() []map[string]any {
 	return []map[string]any{
 		{
 			"name": "narwhal_plan",
-			"description": "Decompose a request into a task DAG using a planner " +
-				"agent, then let the daemon dispatch workers in parallel. The " +
-				"planner decides how to split the work; you observe progress via " +
-				"narwhal_status and narwhal_drain. Use this instead of " +
-				"narwhal_spawn when the request has genuinely independent parts " +
-				"worth decomposing — for work you can finish yourself in a few " +
-				"steps, do it directly.",
+			"description": "Hand the WHOLE request to a planner agent, which decides " +
+				"how to split it and creates the tasks itself. You do not write the " +
+				"worker briefs — that is the difference from narwhal_spawn, where you " +
+				"write each one. Choose this when you do not yet know the right split, " +
+				"or the split depends on reading the code first; choose narwhal_spawn " +
+				"when you already know what the parts are. Either way, do not use " +
+				"workers for something you can finish yourself in a few steps.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -61,11 +61,12 @@ func toolDefinitions() []map[string]any {
 		},
 		{
 			"name": "narwhal_spawn",
-			"description": "Launch one or more headless Claude Code workers on independent " +
-				"sub-tasks. Each worker gets its own radio identity and can share findings " +
+			"description": "Launch headless Claude Code workers on sub-tasks YOU define, " +
+				"one brief per worker. Each gets its own radio identity and shares findings " +
 				"with peers while it works. Returns the run id and per-worker dispatch state. " +
-				"Use this when a request has genuinely independent parts worth investigating " +
-				"in parallel — not for work you can finish yourself in a few steps.",
+				"Choose this when you already know how the work splits; use narwhal_plan when " +
+				"a planner agent should work the split out first. Not for work you can finish " +
+				"yourself in a few steps.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -114,7 +115,9 @@ func toolDefinitions() []map[string]any {
 			"description": "Fetch radio messages posted since a cursor. Workers broadcast " +
 				"findings here as they work, so draining mid-run shows you what they have " +
 				"learned before they finish. Pass the returned cursor to the next call to " +
-				"avoid re-reading messages.",
+				"avoid re-reading messages. Set wait_ms to block until something arrives " +
+				"instead of polling — following a run should cost one call per finding, " +
+				"not one per check.",
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -122,6 +125,12 @@ func toolDefinitions() []map[string]any {
 					"after": map[string]any{
 						"type":        "integer",
 						"description": "Cursor from a previous drain. Omit or 0 to read from the start.",
+					},
+					"wait_ms": map[string]any{
+						"type": "integer",
+						"description": "Block up to this many milliseconds for a new message " +
+							"(max 60000). Omit for an immediate read. The reply carries " +
+							"\"timeout\": true when the wait expired with nothing new.",
 					},
 				},
 				"required": []string{"run_id"},

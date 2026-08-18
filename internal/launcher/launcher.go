@@ -112,7 +112,11 @@ curl -s -X POST %s/send \
 `, base),
 		"drain": fmt.Sprintf(`#!/bin/bash
 # usage: drain [afterSeq]
-# Non-blocking check for new radio messages mentioning this agent.
+# Non-blocking read of the whole channel since afterSeq. Unlike watch, this
+# is NOT filtered to messages mentioning you — a peer's broadcast finding is
+# the main thing worth draining for, and the server stopped filtering here
+# after a message whose mentions slot held a priority went missing.
+# Pass back the "cursor" from the response to read only what is new.
 set -euo pipefail
 AFTER="${1:-0}"
 curl -s -X POST %s/drain \

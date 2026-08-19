@@ -604,7 +604,12 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 	for i, bar := range bars {
 		end := cy - 1
 		if i+1 < len(bars) {
-			end = bars[i+1] - 1
+			// Join on the next bar's own row, not the line above it.
+			// bars[i+1] is one line below that row's boxes, so bar-1 is
+			// always the bottom border of a wrapped box — the return leg
+			// of a detour ran along it, overwriting the border and the
+			// tee where that row's parent dropped into its own bar.
+			end = bars[i+1]
 		}
 		if bar+1 > end {
 			continue
@@ -625,6 +630,13 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 		c.hline(detour, cx, end)
 		c.set(detour, bar, cornerAt(detour, cx, true))
 		c.set(detour, end, cornerAt(detour, cx, false))
+		// The detour now rejoins on the next bar's own row rather than the
+		// line above it, so the child's column already carries a drop
+		// there. Arriving edge plus continuing drop is a tee, not the
+		// crossing that overwriting the cell would leave.
+		if i+1 < len(bars) {
+			c.set(cx, end, joinTee(detour, cx))
+		}
 	}
 }
 
@@ -641,18 +653,40 @@ func columnClear(c *canvas, x, y1, y2 int) bool {
 	return true
 }
 
-// freeColumn finds a column outside the boxes that a detour can use,
-// searching outward from the margins. Returns -1 when the canvas is full.
+// freeColumn finds a column a detour can use, preferring the one nearest
+// the column it is leaving. Returns -1 when the canvas is full.
+//
+// It used to scan from x=0 and take the first clear column, which is the
+// left margin whenever the margin is free — so a detour around a wrapped
+// box ran all the way out to the edge, down past the box, and back in
+// underneath it, enclosing it on three sides. A root drawn inside that
+// bracket reads as a child of the row above it, which is a different graph
+// than the one being displayed.
+//
+// Searching outward from the origin finds the gap between two boxes first,
+// so the detour steps around what is in its way instead of around
+// everything.
 func freeColumn(c *canvas, y1, y2, avoid int) int {
-	for x := 0; x < c.w; x++ {
-		if x == avoid {
-			continue
-		}
-		if columnClear(c, x, y1, y2) {
-			return x
+	for d := 1; d < c.w; d++ {
+		for _, x := range [2]int{avoid - d, avoid + d} {
+			if x < 0 || x >= c.w {
+				continue
+			}
+			if columnClear(c, x, y1, y2) {
+				return x
+			}
 		}
 	}
 	return -1
+}
+
+// joinTee is the glyph where a detour rejoins the child's column: the drop
+// continues downward and the detour arrives from one side.
+func joinTee(detour, main int) rune {
+	if detour > main {
+		return []rune(jTeeRight)[0] // ├ the detour arrives from the right
+	}
+	return []rune(jTeeLeft)[0] // ┤ and from the left
 }
 
 // cornerAt returns the elbow for a detour turn. entering says whether the
@@ -740,6 +774,14 @@ func routeFanOut(c *canvas, parent placedBox, children []placedBox) {
 
 // barJunction is the glyph where a child's drop meets the shared bar.
 func barJunction(x, lo, hi int) rune {
+	// A bar with no width is not a bar: the single parent on this row taps
+	// the same column the child does, so the edge simply runs straight
+	// down. Falling into the `case lo` arm drew a corner turning right
+	// towards nothing — the lone ┌ hanging above the child in a wrapped
+	// layout.
+	if lo == hi {
+		return []rune(boxVert)[0]
+	}
 	switch x {
 	case lo:
 		return []rune(jElbowNW)[0] // ┌ bar turns down at its left end
@@ -752,6 +794,10 @@ func barJunction(x, lo, hi int) rune {
 
 // sourceJunction is the glyph where the parent's drop meets the bar.
 func sourceJunction(x, lo, hi int) rune {
+	// Same degenerate case, from the parent's side.
+	if lo == hi {
+		return []rune(boxVert)[0]
+	}
 	switch x {
 	case lo:
 		return []rune(jElbowSW)[0] // └ arriving from above at the left end

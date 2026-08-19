@@ -356,6 +356,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.radioCur = len(m.snap.Messages) - 1
 		}
 		m.clampCursors()
+		// A poll can move the cursor to a different node — the selected
+		// task was removed, or restoreTaskCursor could not find it and
+		// clampCursors pulled the index into range. Both assign taskCur
+		// directly rather than going through selectNode, so the node
+		// pane's scroll offset stayed where the last node left it: the
+		// pane opens on another worker's feed at a line number borrowed
+		// from somewhere else.
+		//
+		// Compared by id, not by index. Every poll shifts indices when the
+		// graph grows, and rewinding on those would make the pane
+		// unreadable while a worker is running.
+		if now, ok := m.selectedTask(); hadSelection && (!ok || now.ID != selected.ID) {
+			m.nodeScroll = nodeScrollTail
+		}
 		return m, nil
 
 	case attachDoneMsg:

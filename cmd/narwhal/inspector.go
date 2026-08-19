@@ -132,6 +132,18 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 			fmt.Sprintf("%d of %d", t.Dispatches, broker.MaxDispatchFailures), tryStyle)
 	}
 
+	if t.Outcome != "" {
+		// What the task concluded. On a finished node this is the answer
+		// the whole dispatch existed to produce; on a failed one it is the
+		// reason. It reads on one line here and in full behind `enter` —
+		// the outcomes on disk run to a few kilobytes.
+		style := styGreen
+		if t.State == broker.TaskFailed {
+			style = styRedBold
+		}
+		add(icons.fieldOutcome, "outcome", firstLine(t.Outcome), style)
+	}
+
 	if files := m.filesHeldBy(t.ID); len(files) > 0 {
 		// A held path is a claim against every peer, so it reads as
 		// structure rather than as a note.
@@ -334,4 +346,14 @@ func (m tuiModel) filesHeldBy(taskID string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// firstLine collapses a multi-line outcome to its opening line, for the
+// one-row field. The rest stays available in the detail view.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i]) + " …"
+	}
+	return s
 }

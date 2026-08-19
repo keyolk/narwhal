@@ -1889,7 +1889,17 @@ func (m tuiModel) viewSessionDetail() string {
 
 	// The final answer only exists once the worker has exited. Append it
 	// rather than showing it instead: it is the end of the same story.
-	if final := m.workerOutputLines(t.ID); len(final) > 0 {
+	//
+	// Two sources say it, and they outlive each other. claude-output.txt is
+	// this machine's stdout capture — richer, but gone if the session
+	// directory was cleaned or the run was adopted from elsewhere. The
+	// snapshot outcome is what the worker declared at task-done and now
+	// survives persistence, so it is the one still there after a restart.
+	final := m.workerOutputLines(t.ID)
+	if len(final) == 0 && t.Outcome != "" {
+		final = strings.Split(t.Outcome, "\n")
+	}
+	if len(final) > 0 {
 		if len(body) > 0 {
 			body = append(body, "")
 		}

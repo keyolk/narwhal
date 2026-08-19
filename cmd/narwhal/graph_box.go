@@ -30,6 +30,7 @@
 package main
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -566,15 +567,13 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 	// connection from one bar down to the next, and from the last bar into
 	// the child — running it to the child from every bar would draw through
 	// the boxes on the rows in between.
-	bars := make([]int, 0, len(rowOrder))
+	bars := make([]barRun, 0, len(rowOrder))
 	for _, ry := range rowOrder {
 		group := byRow[ry]
 		bar := ry + group[0].h // one line below the row's bottom border
 		if bar >= cy {
 			bar = cy - 1
 		}
-		bars = append(bars, bar)
-
 		lo, hi := cx, cx
 		for _, p := range group {
 			x := p.tap()
@@ -590,10 +589,22 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 			c.set(p.tap(), ry+p.h-1, []rune(jTeeDown)[0])
 		}
 		c.hline(lo, hi, bar)
+		taps := make([]int, 0, len(group))
 		for _, p := range group {
 			c.set(p.tap(), bar, sourceJunction(p.tap(), lo, hi))
+			taps = append(taps, p.tap())
 		}
-		c.set(cx, bar, barJunction(cx, lo, hi))
+		// The child's column, unless a parent already taps it. Writing
+		// barJunction unconditionally overwrote the tee that parent's drop
+		// had just put here, taking the upward arm with it: the parent's
+		// ┬ in its bottom border pointed at a ┬ that did not point back,
+		// so the box read as unconnected to the bar it feeds.
+		if slices.Contains(taps, cx) {
+			c.set(cx, bar, crossOrTee(cx, lo, hi))
+		} else {
+			c.set(cx, bar, barJunction(cx, lo, hi))
+		}
+		bars = append(bars, barRun{row: bar, lo: lo, hi: hi, taps: taps})
 	}
 
 	// Stitch the bars together. The connection runs down the child's column,
@@ -601,7 +612,8 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 	// wraps onto extra rows, and those boxes sit directly below the first
 	// bar. Where the column is occupied the run is routed down the margin
 	// instead, outside every box.
-	for i, bar := range bars {
+	for i, run := range bars {
+		bar := run.row
 		end := cy - 1
 		if i+1 < len(bars) {
 			// Join on the next bar's own row, not the line above it.
@@ -609,7 +621,7 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 			// always the bottom border of a wrapped box — the return leg
 			// of a detour ran along it, overwriting the border and the
 			// tee where that row's parent dropped into its own bar.
-			end = bars[i+1]
+			end = bars[i+1].row
 		}
 		if bar+1 > end {
 			continue
@@ -628,7 +640,7 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 		c.hline(cx, detour, bar)
 		c.vline(detour, bar+1, end)
 		c.hline(detour, cx, end)
-		c.set(detour, bar, cornerAt(detour, cx, true))
+		c.set(detour, bar, leaveGlyph(detour, cx, run))
 		c.set(detour, end, cornerAt(detour, cx, false))
 		// The detour now rejoins on the next bar's own row rather than the
 		// line above it, so the child's column already carries a drop
@@ -667,12 +679,37 @@ func columnClear(c *canvas, x, y1, y2 int) bool {
 // so the detour steps around what is in its way instead of around
 // everything.
 func freeColumn(c *canvas, y1, y2, avoid int) int {
+	// Two passes. A detour laid flush against a box's border puts two
+	// verticals side by side, and at that point the wall and the wire are
+	// the same thing to look at — the reason the wrapped layout still read
+	// as broken after the route itself was correct. So prefer a column
+	// with a clear cell on either side, and only take a flush one when
+	// there is nothing better.
+	if x := nearestClearColumn(c, y1, y2, avoid, 1); x >= 0 {
+		return x
+	}
+	return nearestClearColumn(c, y1, y2, avoid, 0)
+}
+
+// nearestClearColumn finds the column closest to avoid that is clear, along
+// with pad columns of clearance on each side.
+func nearestClearColumn(c *canvas, y1, y2, avoid, pad int) int {
 	for d := 1; d < c.w; d++ {
 		for _, x := range [2]int{avoid - d, avoid + d} {
 			if x < 0 || x >= c.w {
 				continue
 			}
-			if columnClear(c, x, y1, y2) {
+			ok := true
+			for k := -pad; k <= pad && ok; k++ {
+				n := x + k
+				if n < 0 || n >= c.w {
+					continue
+				}
+				if !columnClear(c, n, y1, y2) {
+					ok = false
+				}
+			}
+			if ok {
 				return x
 			}
 		}
@@ -687,6 +724,60 @@ func joinTee(detour, main int) rune {
 		return []rune(jTeeRight)[0] // ├ the detour arrives from the right
 	}
 	return []rune(jTeeLeft)[0] // ┤ and from the left
+}
+
+// crossOrTee is the glyph where a parent's drop and the child's drop share
+// a column: the edge arrives from above and leaves below, and the bar
+// continues to one or both sides.
+func crossOrTee(x, lo, hi int) rune {
+	switch x {
+	case lo:
+		return []rune(jTeeRight)[0] // ├ the bar only runs right
+	case hi:
+		return []rune(jTeeLeft)[0] // ┤ only left
+	default:
+		return []rune(jCross)[0] // ┼ through in both
+	}
+}
+
+// barRun is one row's shared bar: where it sits and what it spans. The
+// detour that leaves it needs to know, because the glyph at the departure
+// point depends on what else is already at that cell.
+type barRun struct {
+	row    int
+	lo, hi int
+	taps   []int
+}
+
+// leaveGlyph is the character where a detour leaves its bar.
+//
+// cornerAt assumed the detour departs from outside the bar — true when it
+// runs to the margin, which is what it always did before the search
+// started from the column it is leaving. A nearby detour departs from
+// *inside* the span, and drawing an elbow there broke the bar in two: the
+// ┐┘ pair that read as two separate lines diverging rather than one bar
+// with a drop.
+//
+// Decided from the bar's own geometry rather than by reading the canvas.
+// Box borders use the same runes as edges, so sniffing neighbouring cells
+// invents connections that are not there.
+func leaveGlyph(detour, main int, run barRun) rune {
+	for _, tap := range run.taps {
+		if tap != detour {
+			continue
+		}
+		// A parent drops in here, so the cell already has an arm going up.
+		// Up plus down plus the side the bar continues on.
+		if detour > main {
+			return []rune(jTeeLeft)[0] // ┤ bar continues to the left
+		}
+		return []rune(jTeeRight)[0] // ├ and to the right
+	}
+	if detour > run.lo && detour < run.hi {
+		// Inside the span: the bar runs through and the detour drops out.
+		return []rune(jTeeDown)[0] // ┬
+	}
+	return cornerAt(detour, main, true)
 }
 
 // cornerAt returns the elbow for a detour turn. entering says whether the

@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -42,6 +43,8 @@ func main() {
 		planCmd(os.Args[2:])
 	case "show":
 		showCmd(os.Args[2:])
+	case "export":
+		exportCmd(os.Args[2:])
 	case "monitor":
 		monitorCmd(os.Args[2:])
 	case "daemon":
@@ -159,6 +162,35 @@ func runCmd(args []string) {
 	_ = enc.Encode(out)
 }
 
+// exportCmd renders the run history as markdown.
+//
+// The search index over this machine's notes takes directories of markdown
+// files, so that is how a past run becomes findable — a file in the shape
+// the indexer already reads, rather than another process to talk to. Add
+// the output directory as a collection and past runs join the same corpus
+// as the wiki and the operational notes.
+func exportCmd(args []string) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	dir := fs.String("dir", defaultExportDir(), "directory to write markdown into")
+	fs.Parse(args)
+
+	n, err := store.ExportRuns(*dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: export: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("exported %d runs to %s\n", n, *dir)
+}
+
+// defaultExportDir keeps the markdown beside the JSON it is rendered from.
+func defaultExportDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "narwhal-exports"
+	}
+	return filepath.Join(home, ".narwhal", "exports")
+}
+
 func showCmd(args []string) {
 	if len(args) < 1 {
 		// No run-id: list recent runs.
@@ -229,6 +261,10 @@ Usage:
 
   narwhal show  [run-id]
                 List finished runs, or print one run's full snapshot.
+
+  narwhal export [--dir DIR]
+                Write every persisted run to DIR as markdown, one file per
+                run, for a search index to pick up. Re-run to refresh.
 
   narwhal daemon <start|stop|status>
                 Long-lived broker for interactive use. Started on demand by

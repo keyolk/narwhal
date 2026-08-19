@@ -94,3 +94,39 @@ func TestSaveRunPermissions(t *testing.T) {
 		t.Fatalf("perm = %o, want 0600", info.Mode().Perm())
 	}
 }
+
+// The outcome is why a completed task mattered, and disk is where a
+// restarted daemon has to find it. It was absent from TaskSnapshot, so
+// every one of the 36 run files already on disk records what each task was
+// asked and nothing about what it answered.
+func TestTheOutcomeSurvivesDisk(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	b := broker.New()
+	r := b.CreateRun("r-outcome", "p", "/tmp", "main")
+	task := r.AddTask("task-1", "n", "a", nil)
+	task.SetModel("opus")
+	task.StartDispatch("d1", "worker-task-1")
+	task.CompleteDispatch("4 of 7 SANs are covered", r)
+
+	if err := SaveRun(r.Snapshot()); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+	loaded, err := LoadRun("r-outcome")
+	if err != nil {
+		t.Fatalf("LoadRun: %v", err)
+	}
+	if got := loaded.Tasks[0].Outcome; got != "4 of 7 SANs are covered" {
+		t.Errorf("disk lost the outcome: %q", got)
+	}
+	if got := loaded.Tasks[0].Model; got != "opus" {
+		t.Errorf("disk lost the model: %q", got)
+	}
+
+	// And the restored run answers the same, so an adopted run's monitor
+	// shows what its finished tasks concluded.
+	again := broker.RestoreRun(loaded).Snapshot()
+	if got := again.Tasks[0].Outcome; got != "4 of 7 SANs are covered" {
+		t.Errorf("restore lost the outcome: %q", got)
+	}
+}

@@ -646,6 +646,33 @@ func (r *Run) CurrentState() RunState {
 	return r.State
 }
 
+// snapshot is the single way a TaskSnapshot is built.
+//
+// There were two, and they drifted: Snapshot fed the API, the monitor and
+// every persisted run file while quietly omitting Model, so 0 of 143 tasks
+// across 36 stored runs recorded which tier they ran on — including the ones
+// MODEL_ESCALATE had moved. Adding a field to the struct must not require
+// remembering a second site.
+//
+// Takes the task's read lock.
+func (t *Task) snapshot() TaskSnapshot {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	ts := TaskSnapshot{
+		ID:         t.ID,
+		Name:       t.Name,
+		Assignment: t.Assignment,
+		Deps:       append([]string(nil), t.Deps...),
+		State:      t.State,
+		Dispatches: len(t.Dispatches),
+		Model:      t.Model,
+	}
+	if n := len(t.Dispatches); n > 0 {
+		ts.Outcome = t.Dispatches[n-1].Output
+	}
+	return ts
+}
+
 // SnapshotTasks returns a stable view of every task's id and state, for
 // callers that need to classify the graph without holding locks.
 func (r *Run) SnapshotTasks() []TaskSnapshot {
@@ -653,17 +680,7 @@ func (r *Run) SnapshotTasks() []TaskSnapshot {
 	defer r.mu.RUnlock()
 	out := make([]TaskSnapshot, 0, len(r.Tasks))
 	for _, t := range r.Tasks {
-		t.mu.RLock()
-		out = append(out, TaskSnapshot{
-			ID:         t.ID,
-			Name:       t.Name,
-			Assignment: t.Assignment,
-			Deps:       append([]string(nil), t.Deps...),
-			State:      t.State,
-			Dispatches: len(t.Dispatches),
-			Model:      t.Model,
-		})
-		t.mu.RUnlock()
+		out = append(out, t.snapshot())
 	}
 	return out
 }
@@ -979,6 +996,11 @@ type TaskSnapshot struct {
 	State      TaskState `json:"state"`
 	Dispatches int       `json:"dispatches"`
 	Model      string    `json:"model,omitempty"`
+	// Outcome is what the last dispatch concluded — the worker's answer at
+	// task-done, or the reason a failed dispatch gave. It is the run's
+	// product, so it belongs in every view of the graph rather than only on
+	// the in-memory dispatch, where it was written and never read.
+	Outcome string `json:"outcome,omitempty"`
 }
 
 type ThreadSnapshot struct {
@@ -999,16 +1021,7 @@ func (r *Run) Snapshot() Snapshot {
 		StartedAt: r.CreatedAt.Unix(),
 	}
 	for _, t := range r.Tasks {
-		t.mu.RLock()
-		s.Tasks = append(s.Tasks, TaskSnapshot{
-			ID:         t.ID,
-			Name:       t.Name,
-			Assignment: t.Assignment,
-			Deps:       append([]string(nil), t.Deps...),
-			State:      t.State,
-			Dispatches: len(t.Dispatches),
-		})
-		t.mu.RUnlock()
+		s.Tasks = append(s.Tasks, t.snapshot())
 	}
 	for _, th := range r.Threads {
 		th.mu.RLock()

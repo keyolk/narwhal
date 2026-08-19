@@ -67,6 +67,10 @@ func RestoreRun(s Snapshot) *Run {
 				case TaskDispatched:
 					d.Status = DispatchRunning
 				}
+				// The snapshot records one outcome: the last dispatch's.
+				// Earlier attempts' reasons were never stored, so they stay
+				// empty rather than being copied onto every attempt.
+				d.Output = ts.Outcome
 			}
 			t.Dispatches = append(t.Dispatches, d)
 		}

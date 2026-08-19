@@ -42,6 +42,7 @@ type iconSet struct {
 	fieldDispatch string
 	fieldActivity string
 	fieldFiles    string
+	fieldOutcome  string
 }
 
 // nerdIcons uses Nerd Font private-use codepoints.
@@ -68,6 +69,7 @@ var nerdIcons = iconSet{
 	fieldDispatch: "\uf01e",     // nf-fa-repeat
 	fieldActivity: "\uf120",     // nf-fa-terminal
 	fieldFiles:    "\uf016",     // nf-fa-file
+	fieldOutcome:  "\uf00c",     // nf-fa-check
 
 }
 
@@ -96,6 +98,7 @@ var unicodeIcons = iconSet{
 	fieldDispatch: "\u21bb",
 	fieldActivity: "\u00bb",
 	fieldFiles:    "\u25a4",
+	fieldOutcome:  "\u2261",
 }
 
 // icons is the active set, resolved once at startup.

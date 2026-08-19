@@ -43,13 +43,13 @@ func TestTheExportCarriesWhatMakesARunFindable(t *testing.T) {
 
 	// The things someone would search for.
 	for _, want := range []string{
-		"audit the gateway TLS coverage",        // the prompt
-		"4 of 7 SANs are covered",               // what a task concluded
-		"worker exited without calling",         // and why one failed
-		"the apne2 gateway advertises a host",   // what was said on the radio
-		"check every gateway host",              // the assignment
-		"s123-1",                                // the run id
-		"/tmp/repo",                             // where it happened
+		"audit the gateway TLS coverage",      // the prompt
+		"4 of 7 SANs are covered",             // what a task concluded
+		"worker exited without calling",       // and why one failed
+		"the apne2 gateway advertises a host", // what was said on the radio
+		"check every gateway host",            // the assignment
+		"s123-1",                              // the run id
+		"/tmp/repo",                           // where it happened
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the export does not mention %q:\n%s", want, md)

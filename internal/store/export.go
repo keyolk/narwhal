@@ -55,6 +55,14 @@ func ExportMarkdown(s broker.Snapshot) string {
 	tasks := append([]broker.TaskSnapshot(nil), s.Tasks...)
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
 
+	// The run's own answer, first. A synthesis task read every peer's
+	// findings before writing its outcome — 26 of the 40 runs on disk have
+	// one — so the distilled version of the run already exists and only
+	// needs to be put where a reader and a search snippet will meet it.
+	if f := synthesisOutcome(tasks); f != "" {
+		fmt.Fprintf(&b, "## Findings\n\n%s\n\n", f)
+	}
+
 	if len(tasks) > 0 {
 		b.WriteString("## Tasks\n\n")
 		for _, t := range tasks {
@@ -68,6 +76,9 @@ func ExportMarkdown(s broker.Snapshot) string {
 		b.WriteString("## Radio\n\n")
 		for _, m := range s.Messages {
 			if m == nil || strings.TrimSpace(m.Content) == "" {
+				continue
+			}
+			if isProtocol(m.Content) {
 				continue
 			}
 			fmt.Fprintf(&b, "**%s** (%s): %s\n\n",
@@ -108,13 +119,67 @@ func writeTask(b *strings.Builder, t broker.TaskSnapshot) {
 	}
 }
 
+// synthesisOutcome is the answer from the task whose job was to write
+// one, if the run had such a task and it finished.
+func synthesisOutcome(tasks []broker.TaskSnapshot) string {
+	for _, t := range tasks {
+		if t.State != broker.TaskCompleted {
+			continue
+		}
+		if !strings.Contains(strings.ToLower(t.Name), "synth") {
+			continue
+		}
+		if o := strings.TrimSpace(t.Outcome); o != "" {
+			return o
+		}
+	}
+	return ""
+}
+
+// isProtocol reports whether a radio message is the workers coordinating
+// rather than something one of them said.
+//
+// The radio carries both. A split request's body is a whole assignment —
+// one on disk is 5,304 bytes — and across the corpus 60 such lines put 9 KB
+// of pipe-delimited protocol into the index as if a person had written it.
+//
+// Matched on the message's shape, not its thread: the most valuable thing
+// found in this history was posted to worklog, which also carries every
+// file claim.
+func isProtocol(content string) bool {
+	if _, _, _, _, ok := broker.ParseSplitRequest(content); ok {
+		return true
+	}
+	if _, _, _, ok := broker.ParseFileClaimRequest(content); ok {
+		return true
+	}
+	if _, _, _, ok := broker.ParseDepEdgeRequest(content); ok {
+		return true
+	}
+	return strings.HasPrefix(strings.TrimSpace(content), broker.ModelEscalatePrefix)
+}
+
+// substantial reports whether a rendered run is worth putting in a corpus
+// shared with hand-written notes.
+//
+// Measured rather than guessed: rendered sizes on disk step from 719 bytes
+// to 1,198 with nothing between, and everything below that line is a probe
+// or a run that died before doing anything. BM25 rewards a small document
+// holding the query terms, so those crowd out real work — two 250-byte
+// probes came back first and second for "narwhal 워커 outcome", above every
+// run that had actually investigated something.
+func substantial(md string) bool {
+	const floor = 1000
+	return len(md) >= floor
+}
+
 // ExportRuns writes every persisted run into dir as <run-id>.md and
 // returns how many were written.
 //
 // Rewrites in place rather than appending: a run that is still going gains
 // tasks and radio traffic, so the exporter is meant to be re-run and must
 // converge on one file per run rather than accumulating copies.
-func ExportRuns(dir string) (int, error) {
+func ExportRuns(dir string, all bool) (int, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, fmt.Errorf("create export dir: %w", err)
 	}
@@ -122,7 +187,7 @@ func ExportRuns(dir string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("list runs: %w", err)
 	}
-	written := 0
+	written, skipped := 0, 0
 	for _, id := range ids {
 		snap, err := LoadRun(id)
 		if err != nil {
@@ -131,11 +196,23 @@ func ExportRuns(dir string) (int, error) {
 			fmt.Fprintf(os.Stderr, "export: skip %s: %v\n", id, err)
 			continue
 		}
+		md := ExportMarkdown(snap)
+		if !all && !substantial(md) {
+			skipped++
+			continue
+		}
 		path := filepath.Join(dir, id+".md")
-		if err := os.WriteFile(path, []byte(ExportMarkdown(snap)), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte(md), 0o600); err != nil {
 			return written, fmt.Errorf("write %s: %w", path, err)
 		}
 		written++
+	}
+	// Say what was left out. A corpus that silently drops records reads as
+	// complete when it is not.
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr,
+			"export: skipped %d runs with nothing substantial to index "+
+				"(use --all to include them)\n", skipped)
 	}
 	return written, nil
 }

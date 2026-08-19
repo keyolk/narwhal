@@ -141,6 +141,11 @@ func (d *Dispatcher) tick() {
 		// is interactive, so the documented half of the worker protocol did
 		// not work where it was actually used.
 		d.intake(runID, run)
+		// Before reaping: a worker that could not reach the broker wrote
+		// its answer to disk and the task is still dispatched. reap would
+		// see an exited process with no completion and call it a failed
+		// dispatch, throwing away work that was done and recorded.
+		harvestOrphanedOutcomes(runID, run)
 		d.reap(runID, run, l.ActiveWorkers())
 		d.dispatchReady(runID, run)
 		// Persist after the graph has settled for this tick, so a crash

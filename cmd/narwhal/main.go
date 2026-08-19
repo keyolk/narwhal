@@ -172,9 +172,10 @@ func runCmd(args []string) {
 func exportCmd(args []string) {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
 	dir := fs.String("dir", defaultExportDir(), "directory to write markdown into")
+	all := fs.Bool("all", false, "include runs with nothing substantial to index")
 	fs.Parse(args)
 
-	n, err := store.ExportRuns(*dir)
+	n, err := store.ExportRuns(*dir, *all)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: export: %v\n", err)
 		os.Exit(1)

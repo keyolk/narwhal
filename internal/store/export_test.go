@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,8 +33,17 @@ func exportFixture(t *testing.T) broker.Snapshot {
 	t2.StartDispatch("d2", "worker-task-2")
 	t2.FailDispatch("worker exited without calling task-done", r)
 
+	// Enough radio for the run to clear the substance floor, the way a
+	// real investigation does — the fixture is otherwise smaller than any
+	// run on disk that produced something.
 	r.PostMessage("worklog", "worker-task-1", nil, broker.PriorityUrgent,
 		"the apne2 gateway advertises a host it has no cert for")
+	for i := 0; i < 6; i++ {
+		r.PostMessage("worklog", "worker-task-1", nil, broker.PriorityNormal,
+			fmt.Sprintf("gateway %d serves the wildcard but not the apex, and "+
+				"the chain is stapled in the wrong order so the leaf slot "+
+				"holds the root CA", i))
+	}
 	return r.Snapshot()
 }
 
@@ -79,7 +89,7 @@ func TestExportRunWritesOneFilePerRun(t *testing.T) {
 	}
 
 	dir := filepath.Join(os.Getenv("HOME"), ".narwhal", "exports")
-	n, err := ExportRuns(dir)
+	n, err := ExportRuns(dir, false)
 	if err != nil {
 		t.Fatalf("ExportRuns: %v", err)
 	}
@@ -104,10 +114,10 @@ func TestExportingTwiceDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("SaveRun: %v", err)
 	}
 	dir := filepath.Join(os.Getenv("HOME"), ".narwhal", "exports")
-	if _, err := ExportRuns(dir); err != nil {
+	if _, err := ExportRuns(dir, false); err != nil {
 		t.Fatalf("first export: %v", err)
 	}
-	if _, err := ExportRuns(dir); err != nil {
+	if _, err := ExportRuns(dir, false); err != nil {
 		t.Fatalf("second export: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
@@ -123,15 +133,40 @@ func TestExportingTwiceDoesNotDuplicate(t *testing.T) {
 	}
 }
 
-func TestARunWithNothingToSayIsStillExported(t *testing.T) {
-	// A run that failed before any task finished is exactly the kind of
-	// thing worth finding later. It must not panic on the empty fields.
+func TestARunWithNothingToSayIsNotExported(t *testing.T) {
+	// The corpus is shared with the wiki and the operational notes, so
+	// what goes in has to earn its place. A run that produced nothing —
+	// one task, no radio, a two-line answer — is noise there, and BM25
+	// rewards a tiny document that happens to hold the query terms: two
+	// 250-byte probe runs came back first and second for "narwhal 워커
+	// outcome", above every real run.
+	t.Setenv("HOME", t.TempDir())
 	b := broker.New()
-	r := b.CreateRun("s999-1", "", "", "main")
-	r.AddTask("task-1", "n", "", nil)
-	md := ExportMarkdown(r.Snapshot())
-	if !strings.Contains(md, "s999-1") {
-		t.Errorf("a bare run exported nothing identifying:\n%s", md)
+	r := b.CreateRun("s999-1", "probe", "/tmp", "main")
+	task := r.AddTask("task-1", "n", "reply with a token", nil)
+	task.StartDispatch("d1", "worker-task-1")
+	task.CompleteDispatch("PROBE_OK", r)
+	if err := SaveRun(r.Snapshot()); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	dir := filepath.Join(os.Getenv("HOME"), ".narwhal", "exports")
+	n, err := ExportRuns(dir, false)
+	if err != nil {
+		t.Fatalf("ExportRuns: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("exported %d runs, want none", n)
+	}
+
+	// But it is still a record, so --all reaches it.
+	if n, err := ExportRuns(dir, true); err != nil || n != 1 {
+		t.Errorf("ExportRuns(all) = %d, %v; want 1, nil", n, err)
+	}
+	// Rendering itself never refuses: the gate is about what is worth
+	// indexing, not about whether a run can be shown.
+	if md := ExportMarkdown(r.Snapshot()); !strings.Contains(md, "s999-1") {
+		t.Error("a bare run rendered nothing identifying")
 	}
 }
 
@@ -219,5 +254,60 @@ func TestRunsAskingAboutDifferentThingsGetDifferentTitles(t *testing.T) {
 	}
 	if !strings.Contains(a, "reflow") {
 		t.Errorf("the title does not carry the question: %q", a)
+	}
+}
+
+func TestProtocolTrafficIsNotIndexedAsConversation(t *testing.T) {
+	// The radio carries the workers' own coordination alongside what they
+	// said to each other: file claims, dep edges, and split requests whose
+	// body is a whole assignment. One SPLIT_REQUEST on disk is 5,304 bytes
+	// — 60 such lines across the corpus, 9 KB of pipe-delimited protocol
+	// indexed as if someone had written it.
+	b := broker.New()
+	r := b.CreateRun("s5-1", "p", "/tmp", "main")
+	r.CreateStandardThreads()
+	r.PostMessage("worklog", "worker-1", nil, broker.PriorityUrgent,
+		"the apne2 gateway advertises a host it has no cert for")
+	r.PostMessage("planning", "worker-1", nil, broker.PriorityNormal,
+		broker.FormatSplitRequest("task-9", "fix", "a | b | c", []string{"task-1"}))
+	r.PostMessage("worklog", "worker-1", nil, broker.PriorityNormal,
+		broker.FormatFileClaimRequest(broker.FileClaimPrefix, "task-1",
+			[]string{"/tmp/x.go"}))
+
+	md := ExportMarkdown(r.Snapshot())
+	if !strings.Contains(md, "advertises a host it has no cert") {
+		t.Error("the finding a worker posted did not survive")
+	}
+	for _, proto := range []string{"SPLIT_REQUEST", "FILE_CLAIM"} {
+		if strings.Contains(md, proto) {
+			t.Errorf("%s was exported as conversation:\n%s", proto, md)
+		}
+	}
+}
+
+func TestTheSynthesisAnswerLeadsTheDocument(t *testing.T) {
+	// 26 of the 40 runs on disk have a synthesis task, and its outcome is
+	// the run's own summary of itself — written by a worker that had read
+	// every peer's findings. Distilling the run again would be a second
+	// opinion about a summary that already exists; putting it first is
+	// free, and it is what a reader and a snippet both want.
+	b := broker.New()
+	r := b.CreateRun("s6-1", "audit the gateways", "/tmp", "main")
+	r.CreateStandardThreads()
+	inv := r.AddTask("task-1", "investigate", "look at every host", nil)
+	inv.StartDispatch("d1", "worker-task-1")
+	inv.CompleteDispatch("checked 7 gateways", r)
+	syn := r.AddTask("task-2", "synthesis", "write it up", []string{"task-1"})
+	syn.StartDispatch("d2", "worker-task-2")
+	syn.CompleteDispatch("4 of 7 gateways serve a cert without the SAN", r)
+
+	md := ExportMarkdown(r.Snapshot())
+	findings := strings.Index(md, "4 of 7 gateways serve a cert")
+	tasks := strings.Index(md, "## Tasks")
+	if findings < 0 {
+		t.Fatalf("the synthesis answer is missing:\n%s", md)
+	}
+	if tasks >= 0 && findings > tasks {
+		t.Errorf("the synthesis answer appears below the task list:\n%s", md)
 	}
 }

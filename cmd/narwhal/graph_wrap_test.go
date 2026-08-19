@@ -146,3 +146,126 @@ func TestTheWideLayoutStillPutsThreeRootsSideBySide(t *testing.T) {
 		t.Errorf("task-4 is on row %d, not below its parents on %d", r4, r1)
 	}
 }
+
+// junctionArms is which directions each junction rune claims to continue
+// in: left, right, up, down.
+var junctionArms = map[rune][4]bool{
+	'┌': {false, true, false, true},
+	'┐': {true, false, false, true},
+	'└': {false, true, true, false},
+	'┘': {true, false, true, false},
+	'├': {false, true, true, true},
+	'┤': {true, false, true, true},
+	'┬': {true, true, false, true},
+	'┴': {true, true, true, false},
+	'┼': {true, true, true, true},
+}
+
+func TestEveryJunctionContinuesInTheDirectionsItClaims(t *testing.T) {
+	// The general form of the dangling ┌. A junction that draws an arm
+	// with nothing at the end of it is a line that stops in mid-air, and
+	// two junctions back to back where one line should be — the ┐┘ pair
+	// that made one bar read as two diverging lines — is the same defect
+	// seen from the other side.
+	//
+	// Box borders are excluded: their corners are the same runes, and
+	// their arms end at the box rather than continuing.
+	m := wrapModel(t)
+	for _, width := range []int{46, 40, 36, 34, 30} {
+		lines := strings.Split(stripEscapes(m.viewTasks(width, 30)), "\n")
+		boxRow := map[int]bool{}
+		for y, l := range lines {
+			if strings.ContainsAny(l, "─") && strings.Contains(l, "┌") &&
+				strings.Contains(l, "┐") {
+				boxRow[y] = true // a box's top border
+			}
+			if strings.Contains(l, "└") && strings.Contains(l, "┘") &&
+				!strings.Contains(l, "│") {
+				boxRow[y] = true // and its bottom
+			}
+		}
+		for y, l := range lines {
+			if boxRow[y] {
+				continue
+			}
+			runes := []rune(l)
+			for x, r := range runes {
+				arms, ok := junctionArms[r]
+				if !ok {
+					continue
+				}
+				ink := func(dx, dy int) bool {
+					ny, nx := y+dy, x+dx
+					if ny < 0 || ny >= len(lines) {
+						return false
+					}
+					row := []rune(lines[ny])
+					return nx >= 0 && nx < len(row) && row[nx] != ' '
+				}
+				for i, dir := range [4][2]int{{-1, 0}, {1, 0}, {0, -1}, {0, 1}} {
+					if arms[i] && !ink(dir[0], dir[1]) {
+						t.Errorf("width=%d: %q at row %d col %d has an arm "+
+							"going nowhere:\n%s", width, string(r), y, x,
+							strings.Join(lines, "\n"))
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestADetourIsNotDrawnFlushAgainstABox(t *testing.T) {
+	// A vertical run laid against a box border puts two verticals side by
+	// side, and at that point the wall and the wire look the same.
+	m := wrapModel(t)
+	for _, width := range []int{46, 40, 36, 34, 30} {
+		lines := strings.Split(stripEscapes(m.viewTasks(width, 30)), "\n")
+		for y, l := range lines {
+			runes := []rune(l)
+			for x := 0; x+1 < len(runes); x++ {
+				if runes[x] == '│' && runes[x+1] == '│' {
+					t.Errorf("width=%d: two verticals side by side at row %d "+
+						"col %d:\n%s", width, y, x, strings.Join(lines, "\n"))
+				}
+			}
+		}
+	}
+}
+
+func TestAParentsDropReachesItsBar(t *testing.T) {
+	// The other direction: a junction can have every arm it draws land on
+	// ink and still be wrong, by *omitting* one. Where a detour leaves the
+	// bar at the same column a parent drops into it, an elbow erases the
+	// upward arm — task-2's drop stops one row short and reads as
+	// unconnected, even though every line that is drawn goes somewhere.
+	//
+	// Anchored on the box: the tee in a box's bottom border is a parent
+	// dropping out, so whatever is directly beneath it has to claim an arm
+	// going back up.
+	m := wrapModel(t)
+	for _, width := range []int{46, 40, 36, 34, 30} {
+		lines := strings.Split(stripEscapes(m.viewTasks(width, 30)), "\n")
+		for y, l := range lines {
+			// A box's bottom border: corners at both ends, no label.
+			if !strings.Contains(l, "└") || !strings.Contains(l, "┘") {
+				continue
+			}
+			for x, r := range []rune(l) {
+				if r != '┬' || y+1 >= len(lines) {
+					continue
+				}
+				below := []rune(lines[y+1])
+				if x >= len(below) || below[x] == ' ' {
+					t.Errorf("width=%d: the drop out of a box at row %d col %d "+
+						"goes nowhere:\n%s", width, y, x, strings.Join(lines, "\n"))
+					continue
+				}
+				if arms, ok := junctionArms[below[x]]; ok && !arms[2] {
+					t.Errorf("width=%d: %q under a box's drop at row %d col %d "+
+						"does not connect upward:\n%s", width,
+						string(below[x]), y, x, strings.Join(lines, "\n"))
+				}
+			}
+		}
+	}
+}

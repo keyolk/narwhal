@@ -27,6 +27,12 @@ func RunsDir() string {
 // with 0600 permissions so agent tokens and message contents stay private.
 func SaveRun(s broker.Snapshot) error {
 	dir := RunsDir()
+	// A test that forgot to isolate HOME would otherwise write here
+	// silently, and the snapshot shows up in `narwhal show` and the
+	// monitor's picker beside real runs. See guard.go.
+	if err := checkTestIsolation(dir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create runs dir: %w", err)
 	}

@@ -32,7 +32,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[]}'
+     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku"}'
 
    - id: unique task id (task-1, task-2, ...)
    - name: short human-readable name
@@ -57,7 +57,11 @@ Your job is to decompose the user's request into a task DAG.
        until then
    Set the synthesis task's "model" to "opus" — it integrates peer findings
    with fidelity, which needs frontier intelligence. Investigation tasks
-   should use a cheaper model (haiku) since they are narrow.
+   should use a cheaper model (haiku) since they are narrow:
+
+   curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
+     -H "Content-Type: application/json" \
+     -d '{"id":"synthesis","name":"synthesis","assignment":"...","deps":["task-1","task-2"],"model":"opus"}'
 
 4. After creating ALL tasks, signal completion by sending a message:
 
@@ -73,5 +77,5 @@ Your job is to decompose the user's request into a task DAG.
 - Do NOT analyze the codebase yourself. You are a PLANNER, not a worker.
 - Keep assignments specific: mention file paths, functions, or subsystems.
 - If the request is simple enough for one worker, create exactly one task.
-- Do NOT create more than 5 tasks.`, runID, brokerURL, brokerURL, mainToken, prompt, runID)
+- Do NOT create more than 5 tasks.`, runID, brokerURL, brokerURL, mainToken, prompt, runID, runID)
 }

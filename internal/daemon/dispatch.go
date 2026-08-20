@@ -265,9 +265,21 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 		if runOf(key) != runID {
 			continue
 		}
-		if !live[agentID] {
-			exited = append(exited, key)
+		if live[agentID] {
+			continue
 		}
+		// Not in the launcher's list is not the same as gone. l.workers
+		// holds processes this launcher spawned, so a worker adopted from
+		// a previous daemon can never appear there — reaping on that alone
+		// would fail the dispatch of a worker that is alive and working,
+		// and the next tick would launch a second one on the same task.
+		//
+		// Adoption decided liveness from the pid on disk. Reap consults the
+		// same evidence, so the two agree about what "still running" means.
+		if workerAlive(runID, taskOf(key)) {
+			continue
+		}
+		exited = append(exited, key)
 	}
 	for _, key := range exited {
 		delete(d.running, key)
@@ -349,7 +361,7 @@ func (d *Dispatcher) dispatchReady(runID string, run *broker.Run) {
 		if slots <= 0 {
 			return
 		}
-		key := runID + "\x00" + task.ID
+		key := runKey(runID, task.ID)
 
 		d.mu.Lock()
 		_, busy := d.running[key]
@@ -375,9 +387,20 @@ func (d *Dispatcher) dispatchReady(runID string, run *broker.Run) {
 	}
 }
 
-// runOf and taskOf split the composite key used in the running map. A
-// composite key keeps one map for all runs while allowing two runs to have
-// tasks with the same id.
+// runKey builds the composite key used in the running map. A composite key
+// keeps one map for all runs while allowing two runs to have tasks with the
+// same id.
+//
+// It exists because there were two spellings. The dispatcher joined with a
+// NUL and adoption joined with a slash, so an adopted worker was filed
+// under a key runOf/taskOf could not split — it matched no run and no task,
+// and was therefore never reaped. A worker adopted and then dying left its
+// task dispatched for the life of the daemon.
+func runKey(runID, taskID string) string {
+	return runID + "\x00" + taskID
+}
+
+// runOf and taskOf split the composite key used in the running map.
 func runOf(key string) string {
 	for i := 0; i < len(key); i++ {
 		if key[i] == 0 {

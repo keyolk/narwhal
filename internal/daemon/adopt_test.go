@@ -143,7 +143,11 @@ func TestALiveWorkerIsNotRedispatched(t *testing.T) {
 	if len(results) != 1 || results[0].Running != 1 {
 		t.Fatalf("a live worker was not recognised: %+v", results)
 	}
-	if got := running["r1/a"]; got != "worker-a" {
+	// Keyed the way the dispatcher keys its running map. It used to be
+	// "r1/a" here and NUL-joined there, so the entry matched no run and no
+	// task and the adopted worker was never reaped — a defect this
+	// assertion held in place.
+	if got := running[runKey("r1", "a")]; got != "worker-a" {
 		t.Fatalf("the dispatcher was not told about the live worker: %q", got)
 	}
 	if s := sess.Broker.GetRun("r1").GetTask("a").CurrentState(); s != broker.TaskDispatched {
@@ -282,7 +286,7 @@ func TestTheDispatcherHonoursAdoptedWorkers(t *testing.T) {
 	d.AdoptRunning(running)
 
 	d.mu.Lock()
-	tracked := d.running["r1/a"]
+	tracked := d.running[runKey("r1", "a")]
 	d.mu.Unlock()
 	if tracked != "worker-a" {
 		t.Fatalf("the dispatcher does not know about the adopted worker: %q", tracked)

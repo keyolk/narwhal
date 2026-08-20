@@ -369,6 +369,31 @@ func advanceCursor(after int64, msgs []*broker.Message) int64 {
 	return after
 }
 
+// peerMessages drops what the worker has no reason to fold in: the
+// coordinator's own WAITING notice, which the gate itself posted moments
+// earlier, and the worker's own messages.
+//
+// Without this the gate can 202 on nothing but its own announcement — it
+// posts WAITING, that bumps the sequence inside the window it is about to
+// inspect, and the worker is sent back to fold in a message telling it
+// that it is waiting.
+func peerMessages(msgs []*broker.Message, taskID string) []*broker.Message {
+	out := make([]*broker.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		if m.Sender == "coordinator" && strings.HasPrefix(m.Content, "WAITING|") {
+			continue
+		}
+		if m.Sender == "worker-"+taskID {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // lastSeq returns the highest Seq among msgs, or 0 if empty.
 func lastSeq(msgs []*broker.Message) int64 {
 	var max int64
@@ -414,6 +439,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			// during the wait. Without it a second call would be handed
 			// the same messages again and the task would never complete.
 			Final bool `json:"final"`
+			// After is how far the worker has read the radio. The 202
+			// hands back what it has NOT read; without its cursor the
+			// server can only guess, and guessing is what was wrong.
+			After int64 `json:"after"`
 		}
 		_ = decodeBody(r, &req)
 
@@ -437,7 +466,25 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		if pending := run.PendingDeps(taskID); len(pending) > 0 {
 			// Everything the worker has already seen. Messages that land
 			// during the wait are the ones it could not have folded in.
-			seen := lastSeq(run.MessagesSince(0))
+			// This used to be lastSeq(run.MessagesSince(0)) — the
+			// server's global last seq at gate entry, which is not the
+			// same thing at all. A peer message posted before task-done
+			// but after the worker's last drain was already "seen" by
+			// that measure, so the 202 excluded by construction the very
+			// messages it exists to deliver. On run s1786665646933-1 the
+			// finding was seq 2, the worker had drained to seq 1, and the
+			// 202 handed back seq 4: the coordinator's own WAITING message
+			// and nothing else. That worker recovered only because it
+			// independently re-drained from its own cursor.
+			//
+			// The worker knows where it has read to, so it sends it. A
+			// caller that omits it gets the old behaviour rather than the
+			// whole channel — replaying everything would make the fold-in
+			// loop non-terminating.
+			seen := req.After
+			if seen <= 0 {
+				seen = lastSeq(run.MessagesSince(0))
+			}
 
 			run.PostMessage(broker.WorklogThread, "coordinator",
 				[]string{task.ID}, broker.PriorityNormal,
@@ -469,7 +516,7 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			// wait and ask for one more call. The worker is alive and in
 			// the middle of a tool call, which is the only moment it can
 			// act on this.
-			if arrived := run.MessagesSince(seen); len(arrived) > 0 && !req.Final {
+			if arrived := peerMessages(run.MessagesSince(seen), task.ID); len(arrived) > 0 && !req.Final {
 				writeJSON(w, http.StatusAccepted, map[string]any{
 					"task_id":      task.ID,
 					"state":        string(task.CurrentState()),

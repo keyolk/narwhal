@@ -144,7 +144,7 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 			// the dispatcher tracks it as busy — otherwise the next tick
 			// calls it a failed dispatch and launches a second worker on
 			// a task that is already being worked.
-			dispatched[snap.RunID+"/"+ts.ID] = "worker-" + ts.ID
+			dispatched[runKey(snap.RunID, ts.ID)] = "worker-" + ts.ID
 			res.Running++
 			res.Tasks = append(res.Tasks, AdoptOutcome{ts.ID, "running"})
 			continue

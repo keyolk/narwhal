@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -129,7 +130,11 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 			continue
 		}
 
-		if outcome, ok := readOutcome(snap.RunID, ts.ID); ok {
+		// The same predicate the per-tick sweep uses. These two paths
+		// read the same file with different guards — adoption accepted
+		// pending and ready as well — so whether a run recovered depended
+		// on which one happened to run rather than on what was on disk.
+		if outcome, ok := readOutcome(snap.RunID, ts.ID); ok && harvestable(ts.State) {
 			// The work is done and was written down; only the delivery
 			// failed. Completing it here is the reconciliation the
 			// task-done script promised the worker.
@@ -169,9 +174,23 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 // readOutcome returns what a worker recorded locally when it could not
 // reach the broker, if anything.
 func readOutcome(runID, taskID string) (string, bool) {
+	outcome, _, ok := readOutcomeStamped(runID, taskID)
+	return outcome, ok
+}
+
+// readOutcomeStamped is readOutcome plus when the file was written.
+//
+// The file is named after the task, not the attempt that wrote it, so it
+// cannot say which dispatch it belongs to. A worker that failed after
+// writing one leaves it behind, and the next attempt inherits it: recovery
+// would complete a dispatch that is still working using the answer of the
+// worker before it. The modification time is the identity the filename
+// lacks — an outcome older than the dispatch now running belongs to an
+// earlier one.
+func readOutcomeStamped(runID, taskID string) (string, time.Time, bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", false
+		return "", time.Time{}, false
 	}
 	// The file lives in the agent's own directory, and the agent for a
 	// task is named after it.
@@ -179,16 +198,20 @@ func readOutcome(runID, taskID string) (string, bool) {
 		"agents", "worker-"+taskID, "outcome-"+taskID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", false
+		return "", time.Time{}, false
 	}
 	// The script writes the same JSON body it would have posted.
 	var body struct {
 		Outcome string `json:"outcome"`
 	}
 	if json.Unmarshal(data, &body) != nil || strings.TrimSpace(body.Outcome) == "" {
-		return "", false
+		return "", time.Time{}, false
 	}
-	return body.Outcome, true
+	var written time.Time
+	if fi, err := os.Stat(path); err == nil {
+		written = fi.ModTime()
+	}
+	return body.Outcome, written, true
 }
 
 // workerAlive reports whether a task's worker process is still running.

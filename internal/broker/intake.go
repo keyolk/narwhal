@@ -66,6 +66,14 @@ func (r *Run) IntakeSplitRequests(cursor int64) int64 {
 // relationship, is about to write a file, or finds its area too hard, and
 // posts to worklog rather than planning.
 func (r *Run) IntakeGraphRequests(cursor int64) int64 {
+	// The run remembers how far it has been read, and that memory survives
+	// a restart. The caller's cursor lives in the dispatcher's process, so
+	// a new daemon passes 0 and would otherwise replay the whole channel:
+	// file claims re-asserted for tasks that finished long ago, dep edges
+	// appended a second time. Take whichever is further along.
+	if own := r.IntakeCursor(); own > cursor {
+		cursor = own
+	}
 	msgs := r.MessagesSince(cursor)
 	for _, m := range msgs {
 		if action, taskID, deps, ok := ParseDepEdgeRequest(m.Content); ok {
@@ -81,8 +89,9 @@ func (r *Run) IntakeGraphRequests(cursor int64) int64 {
 		}
 	}
 	if len(msgs) > 0 {
-		return msgs[len(msgs)-1].Seq
+		cursor = msgs[len(msgs)-1].Seq
 	}
+	r.SetIntakeCursor(cursor)
 	return cursor
 }
 

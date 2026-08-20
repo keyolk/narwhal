@@ -70,6 +70,23 @@ func RestoreRun(s Snapshot) *Run {
 	if r.State == "" {
 		r.State = RunActive
 	}
+	// How far the radio had been applied to the graph. Without it the next
+	// tick reads the channel from zero and re-applies every request on it.
+	//
+	// A snapshot with no cursor is not a run that has read nothing: every
+	// file on disk predates the field, and their messages are already
+	// reflected in the task states being restored alongside them. Replaying
+	// against a graph that has moved on is what re-asserted 110 claims for
+	// tasks that had already finished. So an absent cursor means "already
+	// applied", and the channel is treated as read to its end.
+	r.intakeCursor = s.IntakeCursor
+	if r.intakeCursor == 0 && len(s.Messages) > 0 {
+		for _, m := range s.Messages {
+			if m != nil && m.Seq > r.intakeCursor {
+				r.intakeCursor = m.Seq
+			}
+		}
+	}
 
 	for _, ts := range s.Tasks {
 		t := &Task{

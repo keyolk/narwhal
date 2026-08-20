@@ -307,6 +307,12 @@ type Run struct {
 	msgMu       sync.Mutex  // guards messages slice and watcher signaling
 	watchers    []watchSink // active long-poll sessions waiting for new messages
 
+	// intakeCursor is how far the radio has been applied to the graph.
+	// It lived only in the dispatcher's memory, so every daemon start read
+	// the channel from zero and re-applied everything on it. Guarded by
+	// r.mu.
+	intakeCursor int64
+
 	// fileClaims maps a path to the task that claimed it. Guarded by
 	// claimMu rather than mu so a claim check never contends with graph
 	// traversal.
@@ -350,6 +356,24 @@ func (r *Run) ReleaseFiles(taskID string, paths []string) {
 }
 
 // FileOwner returns the task holding a path, or "" if unclaimed.
+// IntakeCursor is how far the radio has been applied to the graph.
+func (r *Run) IntakeCursor() int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.intakeCursor
+}
+
+// SetIntakeCursor records how far intake has read. It never goes
+// backwards: a caller that has read less than the run already has must not
+// cause the channel to be replayed.
+func (r *Run) SetIntakeCursor(c int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c > r.intakeCursor {
+		r.intakeCursor = c
+	}
+}
+
 func (r *Run) FileOwner(path string) string {
 	r.claimMu.RLock()
 	defer r.claimMu.RUnlock()
@@ -803,7 +827,22 @@ func (t *Task) recomputeReady(r *Run) {
 // called by the coordinator's next tick.
 func (t *Task) AddDep(deps []string, r *Run) {
 	t.mu.Lock()
-	t.Deps = append(t.Deps, deps...)
+	// Deduplicated: two workers both noticing the same missing edge is an
+	// ordinary race, not an error, and a doubled edge is counted twice by
+	// PendingDeps and drawn twice by the graph layout. A bare append also
+	// meant that replaying the radio — which a restart used to do — left
+	// the edge once per replay.
+	have := make(map[string]bool, len(t.Deps))
+	for _, d := range t.Deps {
+		have[d] = true
+	}
+	for _, d := range deps {
+		if d == "" || have[d] {
+			continue
+		}
+		have[d] = true
+		t.Deps = append(t.Deps, d)
+	}
 	t.mu.Unlock()
 }
 
@@ -1023,11 +1062,18 @@ type Snapshot struct {
 	// They were missing, which meant a snapshot read back from disk could
 	// not say where the run happened or when — the two things that tell
 	// runs apart in a list, since a run id is only a timestamp.
-	CWD       string           `json:"cwd,omitempty"`
-	StartedAt int64            `json:"started_at,omitempty"`
-	Tasks     []TaskSnapshot   `json:"tasks"`
-	Threads   []ThreadSnapshot `json:"threads"`
-	Messages  []*Message       `json:"messages"`
+	CWD       string `json:"cwd,omitempty"`
+	StartedAt int64  `json:"started_at,omitempty"`
+	// IntakeCursor is how far the radio has been applied to the graph.
+	// Without it a restart replays every graph-mutating request on the
+	// channel: file claims are re-asserted for tasks that have finished,
+	// and dep edges are appended a second time. The claim is durable
+	// because it is a radio message; the release is not, because it only
+	// mutates memory — so replay can only ever add.
+	IntakeCursor int64            `json:"intake_cursor,omitempty"`
+	Tasks        []TaskSnapshot   `json:"tasks"`
+	Threads      []ThreadSnapshot `json:"threads"`
+	Messages     []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1056,11 +1102,12 @@ func (r *Run) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s := Snapshot{
-		RunID:     r.ID,
-		Prompt:    r.Prompt,
-		State:     r.State,
-		CWD:       r.CWD,
-		StartedAt: r.CreatedAt.Unix(),
+		IntakeCursor: r.intakeCursor,
+		RunID:        r.ID,
+		Prompt:       r.Prompt,
+		State:        r.State,
+		CWD:          r.CWD,
+		StartedAt:    r.CreatedAt.Unix(),
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

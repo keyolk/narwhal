@@ -140,7 +140,7 @@ curl -s -X POST %s/watch \
 curl -s %s/state
 `, base),
 		"task-done": fmt.Sprintf(`#!/bin/bash
-# usage: task-done <taskId> <outcome> [final]
+# usage: task-done <taskId> <outcome> [final] [after]
 # Mark a task as completed with the given outcome text.
 #
 # If the task has dependencies that are still running, this call BLOCKS
@@ -159,8 +159,14 @@ curl -s %s/state
 # No --max-time: the wait is bounded by the server, and a client-side
 # timeout would defeat the whole point.
 set -uo pipefail
-TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"
-BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final"}))' "$OUTCOME" "$FINAL")
+TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"; AFTER="${4:-0}"
+# AFTER is how far you have read the radio — the cursor drain handed back.
+# The server uses it to decide what to put in a 202, so pass it and the
+# 202 carries what you have not seen. Omit it and the server falls back to
+# its own last sequence, which is what it used to guess with: a peer
+# message posted after your last drain but before this call was counted as
+# already-seen and left out of the very list meant to deliver it.
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final","after":int(sys.argv[3])}))' "$OUTCOME" "$FINAL" "$AFTER")
 OUTFILE="%s/outcome-$TASK.json"
 
 # The broker can be gone: it is a separate long-lived process, and
@@ -196,7 +202,7 @@ if [ "$CODE" = "202" ]; then
   echo "NOT COMPLETE YET. Your peers finished while this call waited, and the" >&2
   echo "messages above arrived after you wrote your outcome. Fold them into" >&2
   echo "your answer and run:" >&2
-  echo "  bash $0 $TASK \"<updated answer>\" final" >&2
+  echo "  bash $0 $TASK \"<updated answer>\" final $AFTER" >&2
   exit 4
 fi
 if [ "$CODE" = "409" ]; then

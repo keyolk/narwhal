@@ -773,6 +773,17 @@ func (t *Task) CurrentModel() string {
 	return t.Model
 }
 
+// DispatchStartedAt is when the current dispatch began, or the zero time
+// if the task has never been dispatched.
+func (t *Task) DispatchStartedAt() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.Dispatches) == 0 {
+		return time.Time{}
+	}
+	return t.Dispatches[len(t.Dispatches)-1].StartedAt
+}
+
 // DispatchCount returns how many dispatch attempts this task has had.
 func (t *Task) DispatchCount() int {
 	t.mu.RLock()

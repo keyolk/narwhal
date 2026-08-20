@@ -8,7 +8,10 @@
 // scripts, reporting to a port that no longer answers.
 package broker
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // RestoreRun rebuilds a Run from a snapshot, preserving task states.
 //
@@ -21,6 +24,36 @@ import "time"
 // identities nothing can authenticate. What the snapshot preserves is the
 // count, so the retry budget a task has already spent is not refunded by a
 // restart.
+// validDeps drops dependencies that cannot name a task.
+//
+// #25 taught ParseSplitRequest to refuse these, because a SPLIT_REQUEST
+// whose assignment contained pipes had its prose parsed as a dependency
+// list. That fix is intake-only, and a snapshot written before it rebuilds
+// the bad deps verbatim on every daemon start: s1786800188852-1 task-5
+// carries six deps that are shell-pipeline fragments, and has been
+// re-adopted at every start since 2026-08-16.
+//
+// The deadlock is silent because two functions answer the same question
+// differently. PendingDeps skips a dep it cannot find, so the task reports
+// nothing blocking it; recomputeReady returns early on the same dep, so it
+// never becomes ready. Nothing is blocked and nothing runs.
+//
+// A dep on a task that does not exist YET is a different thing and is
+// kept — a split can name its dependency before creating it. Only names
+// that could never be a task id are dropped.
+func validDeps(deps []string) []string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deps))
+	for _, d := range deps {
+		if validTaskID(strings.TrimSpace(d)) {
+			out = append(out, strings.TrimSpace(d))
+		}
+	}
+	return out
+}
+
 func RestoreRun(s Snapshot) *Run {
 	r := &Run{
 		ID:        s.RunID,
@@ -44,7 +77,7 @@ func RestoreRun(s Snapshot) *Run {
 			RunID:      s.RunID,
 			Name:       ts.Name,
 			Assignment: ts.Assignment,
-			Deps:       append([]string(nil), ts.Deps...),
+			Deps:       validDeps(ts.Deps),
 			State:      ts.State,
 			Model:      ts.Model,
 			CreatedAt:  r.CreatedAt,
@@ -84,6 +117,18 @@ func RestoreRun(s Snapshot) *Run {
 			})
 		}
 		r.Tasks[ts.ID] = t
+	}
+
+	// Bring pending tasks whose deps are all satisfied up to ready.
+	//
+	// recomputeReady is otherwise only reached from AddTask and
+	// CompleteDispatch, so a task whose last dep completed before the
+	// crash had no future event left to promote it: the dispatcher saw a
+	// pending task, PendingDeps reported nothing blocking it, and it sat
+	// there for the life of the daemon. The frontier the snapshot records
+	// has to be resumed, not merely reloaded.
+	for _, t := range r.Tasks {
+		t.recomputeReady(r)
 	}
 
 	// The radio is the run's memory of what its workers told each other. A

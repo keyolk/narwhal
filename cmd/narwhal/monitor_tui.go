@@ -964,6 +964,27 @@ func (m tuiModel) View() string {
 	return pinFooter(header+"\n"+body, footer, m.height)
 }
 
+// inspectorContentHeight is how many rows the node pane actually has to
+// show: its fixed fields plus the worker's activity, capped so a very long
+// feed does not claim the whole body.
+func (m tuiModel) inspectorContentHeight() int {
+	t, ok := m.selectedTask()
+	if !ok {
+		return 0
+	}
+	// Title, headline, and the field rows the pane emits, plus the
+	// activity heading. Counted rather than guessed: the fields only
+	// appear when they have something to say.
+	fixed := 3 + len(m.inspectorFields(t, m.nodePaneWidth()))
+	activity := m.nodeLineCountAt(t.ID, m.nodePaneWidth())
+	if activity == 0 {
+		// The "(no output yet)" line, and one row of slack so the pane
+		// does not sit flush against the rule below it.
+		activity = 2
+	}
+	return fixed + activity
+}
+
 // inspectorHeight splits the right pane between the node inspector and the
 // radio. The inspector holds a fixed summary plus as much worker activity
 // as fits, and the radio, which grows without bound, takes the rest. On a
@@ -988,7 +1009,24 @@ func (m tuiModel) inspectorHeight(bodyHeight int) int {
 	// for a pane that showed three lines of "recent"; now that it holds
 	// the worker's activity it deserves a share of the screen, and a fixed
 	// height means a taller terminal only ever grows the radio.
-	want := bodyHeight*2/5 + m.heightDelta
+	want := bodyHeight * 2 / 5
+
+	// But not more than it can fill. Two fifths of a 63-row body is 25
+	// rows, and a node whose worker has not written anything yet uses five
+	// of them — the pane padded the other twenty and pushed the Radio rule
+	// a third of the way down the screen with nothing above it. That empty
+	// band is what makes the layout read as unfinished.
+	//
+	// The fields are a handful of lines; the activity feed is the part
+	// that grows. Ask for what there is to show plus a little slack, and
+	// let the radio have the rest.
+	if fits := m.inspectorContentHeight(); fits > 0 && want > fits {
+		want = fits
+	}
+	// The user's own adjustment applies on top, so + and - move the pane
+	// from wherever the content put it rather than from a share of the
+	// screen it was never going to fill.
+	want += m.heightDelta
 	// Enough for a title, a headline and a line of content; beyond that
 	// the radio must keep a readable remainder.
 	if want < 4 {
@@ -1553,7 +1591,7 @@ func (m tuiModel) viewTasks(width, height int) string {
 	if len(rows) == 0 {
 		out = append(out, styDim.Render("(no tasks yet)"))
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+	return padRows(out, width, height)
 }
 
 // viewTasksBoxed renders the box view. Scrolling works in rendered lines
@@ -1589,7 +1627,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		}
 		out = append(out, m.styleBoxLine(r, truncate(r.text, width), selected))
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
+	return padRows(out, width, height)
 }
 
 // styleBoxLine colors one rendered line. Each box on the line gets its own
@@ -1739,6 +1777,27 @@ func paneTitle(label string, focused bool, width int) string {
 	return styled + " " + styDim.Render(strings.Repeat("─", rule))
 }
 
+// padRows renders rows into a pane of exactly height lines.
+//
+// A pane is told a height and is expected to occupy it. The inspector
+// already padded, because the Radio rule beneath it would otherwise slide
+// as the graph cursor moved; the graph and the radio did not, so on a tall
+// terminal with a short channel the right-hand column ended halfway down
+// and its rule floated with nothing under it. The two columns are joined
+// with JoinHorizontal, which aligns to the taller one, so a short pane
+// also means the two columns describe different regions of the screen.
+func padRows(rows []string, width, height int) string {
+	if height > 0 {
+		if len(rows) > height {
+			rows = rows[:height]
+		}
+		for len(rows) < height {
+			rows = append(rows, "")
+		}
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+}
+
 func (m tuiModel) viewRadio(width, height int) string {
 	title := numberedPaneTitle(3, fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
 		m.focus == focusRadio, width)
@@ -1756,7 +1815,7 @@ func (m tuiModel) viewRadio(width, height int) string {
 	if len(msgs) == 0 {
 		rows = append(rows, styDim.Render("(no messages yet)"))
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+	return padRows(rows, width, height)
 }
 
 // radioRow renders one message line, fitted to width.

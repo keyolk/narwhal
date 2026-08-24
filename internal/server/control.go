@@ -485,7 +485,12 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	// Build the planner instructions and launch the planner agent, mirroring
 	// what narwhal plan does in-process. The planner talks to the broker
 	// HTTP API to create tasks with deps.
-	planInstructions := BuildPlanInstructions(runID, s.baseURL(), mainAgent.Token, req.Prompt)
+	// Show the planner how similar requests were decomposed on this
+	// repository before. Every run's graph has been persisted since the
+	// beginning and nothing read it back at plan time, so each plan
+	// started from the prompt alone.
+	planInstructions := PlanInstructionsFor(
+		runID, s.baseURL(), mainAgent.Token, req.Prompt, req.CWD)
 	planTimeout := time.Duration(req.PlanTimeoutSecs) * time.Second
 	if planTimeout == 0 {
 		planTimeout = 5 * time.Minute

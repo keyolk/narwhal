@@ -56,7 +56,12 @@ Your job is to decompose the user's request into a task DAG.
      - starts a background watcher on the radio immediately
      - drains the radio repeatedly, accumulating peer findings as they arrive
      - does NOT investigate the codebase itself — peers are doing that, and
-       duplicating their work is how a synthesis runs out of turn
+       duplicating their work is how a synthesis runs out of turn. The one
+       exception is the headline itself: before publishing a number, verify
+       it against the definition in the request. Peers with disjoint scopes
+       fail the same way at the same time, and nothing else in the run is
+       positioned to notice. A spot-check of two or three reported items is
+       enough — it is cheap, and it is not the investigation
      - calls task-done when it has written what it can; the call blocks
        until every peer has finished, which is what keeps the worker alive
        until then
@@ -66,7 +71,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"synthesis","name":"synthesis","assignment":"...","deps":["task-1","task-2"],"model":"opus"}'
+     -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio. Before publishing the headline number, confirm two or three of the reported items really meet the definition in the request, and report what that check found.","deps":["task-1","task-2"],"model":"opus"}'
 
 4. After creating ALL tasks, signal completion by sending a message:
 

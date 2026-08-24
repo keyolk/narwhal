@@ -80,3 +80,51 @@ func TestAnUnrelatedRunElsewhereIsNotOffered(t *testing.T) {
 		t.Errorf("an unrelated run was offered: %+v", got)
 	}
 }
+
+// #39's digest tells the planner to avoid decompositions that failed or
+// blocked. That instruction is wrong for every run already on disk: nine
+// of the ten runs carrying a failure signal predate the harness fixes in
+// #24 and #32–#36, and s1787127043469-1's outcome blames a worker that
+// did exactly what it was asked. Those failures are facts about the
+// harness of that week, not about how the request was decomposed.
+//
+// An unstamped run is exactly that population — the field did not exist
+// yet — so its failures must not be offered as something to avoid.
+func TestAnUnstampedFailureIsNotOfferedAsSomethingToAvoid(t *testing.T) {
+	old := broker.Snapshot{
+		RunID: "s900-1", Prompt: "final e2e split claim gate", CWD: "/repo",
+		State: broker.RunDone,
+		Tasks: []broker.TaskSnapshot{
+			{ID: "investigate", State: broker.TaskFailed, Dispatches: 3},
+			{ID: "synthesis", Deps: []string{"investigate"},
+				State: broker.TaskFailed, Dispatches: 3},
+		},
+	}
+	got := HistoryDigest([]broker.Snapshot{old})
+	// With nothing stamped, the digest must not carry an avoid-what-failed
+	// instruction at all — there is no run here whose failure is
+	// attributable to its decomposition.
+	if strings.Contains(got, "avoid") {
+		t.Errorf("an unstamped failure is presented as a decomposition to avoid:\n%s", got)
+	}
+	if !strings.Contains(got, "untagged") {
+		t.Errorf("the digest does not mark the run as predating the current harness:\n%s", got)
+	}
+}
+
+// A failure from a build that recorded itself is attributable, so the
+// planner should be told to avoid it without qualification.
+func TestAStampedFailureIsAttributed(t *testing.T) {
+	recent := broker.Snapshot{
+		RunID: "s901-1", Prompt: "audit the broker", CWD: "/repo",
+		State: broker.RunFailed, HarnessVersion: "abc1234",
+		Tasks: []broker.TaskSnapshot{
+			{ID: "task-1", Deps: []string{"task-2"}, State: broker.TaskBlocked},
+			{ID: "task-2", Deps: []string{"task-1"}, State: broker.TaskBlocked},
+		},
+	}
+	got := HistoryDigest([]broker.Snapshot{recent})
+	if !strings.Contains(got, "abc1234") {
+		t.Error("a stamped run does not say which build produced it")
+	}
+}

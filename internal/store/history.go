@@ -35,17 +35,44 @@ func HistoryDigest(runs []broker.Snapshot) string {
 	// verbatim — including the ones that deadlocked. The states and
 	// outcomes below are what let it tell those apart.
 	b.WriteString("How similar requests were decomposed before, and how each task ended.\n" +
-		"Reuse structures that finished; avoid ones that failed or blocked. This is\n" +
-		"evidence, not a template — decompose the request you were actually given.\n\n")
+		"Reuse structures that finished. This is evidence, not a template —\n" +
+		"decompose the request you were actually given.\n\n")
+	// A failure is only evidence about a decomposition if the harness that
+	// ran it is the one running now. Nine of the ten runs on disk carrying
+	// a failure signal predate the fixes in #24 and #32-#36, and one of
+	// them blames a worker that did exactly what it was asked. Telling a
+	// planner to avoid those shapes would teach it around bugs that are
+	// already fixed. Only stamped runs get that instruction.
+	if anyStamped(runs) {
+		b.WriteString("Runs tagged with a build id ran on a comparable harness: a task that\n" +
+			"failed or blocked there is a fact about the decomposition, so avoid\n" +
+			"that shape. Untagged runs predate the current harness — read their\n" +
+			"structure, but not their failures.\n\n")
+	}
 	for _, s := range runs {
 		writeRunDigest(&b, s)
 	}
 	return b.String()
 }
 
+// anyStamped reports whether any run shown was produced by a build that
+// recorded itself, which is what makes its failures attributable.
+func anyStamped(runs []broker.Snapshot) bool {
+	for _, s := range runs {
+		if s.HarnessVersion != "" {
+			return true
+		}
+	}
+	return false
+}
+
 func writeRunDigest(b *strings.Builder, s broker.Snapshot) {
 	fmt.Fprintf(b, "### %s — %s\n\n", s.RunID, headline(s.Prompt))
-	fmt.Fprintf(b, "Run state: %s\n\n", s.State)
+	if s.HarnessVersion != "" {
+		fmt.Fprintf(b, "Run state: %s (build %s)\n\n", s.State, s.HarnessVersion)
+	} else {
+		fmt.Fprintf(b, "Run state: %s (untagged — older harness)\n\n", s.State)
+	}
 
 	tasks := append([]broker.TaskSnapshot(nil), s.Tasks...)
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })

@@ -4,7 +4,12 @@
 // endpoint, so both paths produce identical DAGs.
 package server
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/store"
+)
 
 // BuildPlanInstructions returns the planner's system-prompt fragment.
 // runID identifies the run, brokerURL is the API base, mainToken is the
@@ -78,4 +83,35 @@ Your job is to decompose the user's request into a task DAG.
 - Keep assignments specific: mention file paths, functions, or subsystems.
 - If the request is simple enough for one worker, create exactly one task.
 - Do NOT create more than 5 tasks.`, runID, brokerURL, brokerURL, mainToken, prompt, runID, runID)
+}
+
+// BuildPlanInstructionsWithHistory is BuildPlanInstructions plus a digest of
+// how similar requests were decomposed before.
+//
+// The digest is appended to the rendered result rather than interpolated
+// into the format string: a past prompt is arbitrary user text and can
+// carry percent verbs, and #37 was an argument-order bug in exactly this
+// Sprintf. With no past runs the output is byte-identical to the plain
+// form, so the section can never appear as an empty heading.
+func BuildPlanInstructionsWithHistory(runID, brokerURL, mainToken, prompt, cwd string, past []broker.Snapshot) string {
+	return BuildPlanInstructions(runID, brokerURL, mainToken, prompt) +
+		store.HistoryDigest(past)
+}
+
+// PlanHistoryLimit is how many past runs a planner is shown. Two: enough to
+// contrast a decomposition that worked with one that did not, few enough
+// that the digest stays a hint rather than the bulk of the prompt.
+const PlanHistoryLimit = 2
+
+// PlanInstructionsFor is what both plan paths call. It reads the store for
+// past decompositions of similar requests in the same working directory and
+// builds the fragment around them.
+//
+// One entry point on purpose. The CLI used to hold its own copy of the
+// fragment behind an identical-looking name, the copies drifted, and #37's
+// fix reached only the daemon. A lookup done at each call site would be the
+// same mistake with different code.
+func PlanInstructionsFor(runID, brokerURL, mainToken, prompt, cwd string) string {
+	past := store.RecentRunsFor(cwd, prompt, PlanHistoryLimit)
+	return BuildPlanInstructionsWithHistory(runID, brokerURL, mainToken, prompt, cwd, past)
 }

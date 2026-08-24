@@ -1081,10 +1081,16 @@ type Snapshot struct {
 	// and dep edges are appended a second time. The claim is durable
 	// because it is a radio message; the release is not, because it only
 	// mutates memory — so replay can only ever add.
-	IntakeCursor int64            `json:"intake_cursor,omitempty"`
-	Tasks        []TaskSnapshot   `json:"tasks"`
-	Threads      []ThreadSnapshot `json:"threads"`
-	Messages     []*Message       `json:"messages"`
+	IntakeCursor int64 `json:"intake_cursor,omitempty"`
+	// HarnessVersion is the build of narwhal that produced this run.
+	// Absent on every run written before the field existed, and absent is
+	// meaningful: it marks a run whose failures cannot be attributed to
+	// the decomposition, because the harness of that week was itself
+	// producing them. See harness_version.go.
+	HarnessVersion string           `json:"harness_version,omitempty"`
+	Tasks          []TaskSnapshot   `json:"tasks"`
+	Threads        []ThreadSnapshot `json:"threads"`
+	Messages       []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1113,12 +1119,13 @@ func (r *Run) Snapshot() Snapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	s := Snapshot{
-		IntakeCursor: r.intakeCursor,
-		RunID:        r.ID,
-		Prompt:       r.Prompt,
-		State:        r.State,
-		CWD:          r.CWD,
-		StartedAt:    r.CreatedAt.Unix(),
+		IntakeCursor:   r.intakeCursor,
+		RunID:          r.ID,
+		Prompt:         r.Prompt,
+		State:          r.State,
+		CWD:            r.CWD,
+		StartedAt:      r.CreatedAt.Unix(),
+		HarnessVersion: HarnessVersion(),
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

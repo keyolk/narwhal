@@ -31,6 +31,17 @@ import (
 var version = "dev"
 
 func main() {
+	// Every snapshot taken by this process records which build produced
+	// it. Done once here rather than at each place a run is created: one
+	// setter is what keeps the two plan paths from drifting again (#39).
+	//
+	// "dev" is deliberately not recorded. An unstamped build cannot say
+	// which code it is, and a field that claims "dev" reads as a known
+	// answer where absent correctly reads as unknown.
+	if version != "dev" {
+		broker.SetHarnessVersion(version)
+	}
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)

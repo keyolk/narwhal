@@ -58,7 +58,7 @@ func TestCancelRetiresUnfinishedTasks(t *testing.T) {
 		switch snap.State {
 		case broker.TaskCompleted, broker.TaskFailed:
 		default:
-			run.GetTask(snap.ID).CancelDispatch("run canceled")
+			run.GetTask(snap.ID).CancelDispatch("run canceled", run)
 		}
 	}
 
@@ -84,7 +84,7 @@ func TestCancelDispatchDoesNotReopenTheTask(t *testing.T) {
 	task := run.AddTask("a", "a", "x", nil)
 	task.StartDispatch("d1", "worker-a")
 
-	task.CancelDispatch("run canceled")
+	task.CancelDispatch("run canceled", run)
 
 	if got := task.CurrentState(); got != broker.TaskFailed {
 		t.Fatalf("state = %s, want failed and staying there", got)

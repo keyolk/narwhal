@@ -404,7 +404,7 @@ func (s *Server) handleControlCancel(w http.ResponseWriter, r *http.Request) {
 			case broker.TaskCompleted, broker.TaskFailed:
 			default:
 				if task := run.GetTask(snap.ID); task != nil {
-					task.CancelDispatch("run canceled")
+					task.CancelDispatch("run canceled", run)
 				}
 			}
 		}

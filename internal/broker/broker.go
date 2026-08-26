@@ -318,6 +318,10 @@ type Run struct {
 	// traversal.
 	fileClaims map[string]string
 	claimMu    sync.RWMutex
+
+	// usageProbe measures a task's cost when it stops running. Nil in
+	// tests that do not care about accounting. Guarded by mu.
+	usageProbe UsageProbe
 }
 
 // ClaimFiles records ownership of paths for a task. Paths already held by
@@ -478,6 +482,10 @@ type Task struct {
 	// tasks on haiku. See bench/run_hybrid.sh and the Cursor economics note
 	// in README.md.
 	Model string
+	// Usage is what this task actually cost, filled in when it reaches a
+	// terminal state. Nil until then, and nil forever for a task whose
+	// worker left no transcript — see usage_probe.go.
+	Usage *Usage
 }
 
 // Dispatch is one attempt to execute a Task. A retry mints a new Dispatch;
@@ -523,11 +531,37 @@ type Message struct {
 type Broker struct {
 	mu   sync.RWMutex
 	runs map[string]*Run
+	// usageProbe is handed to every run this broker creates, so cost
+	// accounting is a property of the broker rather than something each
+	// of the five call sites of CreateRun has to remember. Nil by
+	// default: a broker in a test measures nothing.
+	usageProbe UsageProbe
 }
 
 // New returns a fresh empty Broker.
 func New() *Broker {
 	return &Broker{runs: make(map[string]*Run)}
+}
+
+// SetUsageProbe installs the probe every run created or restored by this
+// broker will use to measure its tasks.
+//
+// On the broker rather than on each run, for the reason #36 established
+// about graph-mutating intake: a rule that has to be repeated at five
+// call sites is a rule that silently does not apply at the sixth. Both
+// the batch coordinator and the daemon create runs, and accounting that
+// covered only one of them would report interactive runs as free.
+func (b *Broker) SetUsageProbe(p UsageProbe) {
+	b.mu.Lock()
+	b.usageProbe = p
+	b.mu.Unlock()
+}
+
+// UsageProbe returns the broker's probe, or nil.
+func (b *Broker) UsageProbe() UsageProbe {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.usageProbe
 }
 
 // CreateRun initializes a new Run with no tasks or threads.
@@ -543,6 +577,7 @@ func (b *Broker) CreateRun(id, prompt, cwd, coordinator string) *Run {
 		Threads:     make(map[string]*Thread),
 	}
 	b.mu.Lock()
+	r.usageProbe = b.usageProbe
 	b.runs[id] = r
 	b.mu.Unlock()
 	return r
@@ -736,6 +771,15 @@ func (t *Task) snapshot() TaskSnapshot {
 	if n := len(t.Dispatches); n > 0 {
 		ts.Outcome = t.Dispatches[n-1].Output
 	}
+	if t.Usage != nil {
+		// Copied rather than aliased: the snapshot outlives the lock and
+		// is handed to callers that persist it, and a pointer shared with
+		// a live task would let a later measurement rewrite a file that
+		// was already written.
+		u := *t.Usage
+		u.ServedModels = append([]string(nil), t.Usage.ServedModels...)
+		ts.Usage = &u
+	}
 	return ts
 }
 
@@ -913,6 +957,7 @@ func (t *Task) CompleteDispatch(output string, r *Run) {
 	}
 	t.State = TaskCompleted
 	t.mu.Unlock()
+	r.measureTask(t.ID)
 	r.ReleaseTaskFiles(t.ID)
 	r.mu.Lock()
 	for _, other := range r.Tasks {
@@ -940,6 +985,11 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 	if failedCount >= MaxDispatchFailures {
 		t.State = TaskFailed
 		t.mu.Unlock()
+		// A failed task spent tokens on every attempt the breaker allowed,
+		// so it is measured like any other terminal task. Accounting that
+		// only covered success would report the expensive half of a run —
+		// three dispatches that each ran and lost — as free.
+		r.measureTask(t.ID)
 		// A task the breaker has given up on will not write again, so its
 		// claims must not outlive it either. Retries keep theirs: the same
 		// task is about to run again and wants the same paths.
@@ -957,9 +1007,12 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 // returns the task to ready so it can be retried. A task whose worker was
 // killed because the user cancelled the run must not be retried — becoming
 // ready again is exactly how a cancelled run kept relaunching.
-func (t *Task) CancelDispatch(reason string) {
+// It takes the Run so a cancelled task is measured like any other
+// terminal one. A cancelled worker ran, and often ran for a long time
+// before someone stopped it; leaving it unmeasured would make abandoning
+// a run look like the cheap option in the accounting.
+func (t *Task) CancelDispatch(reason string, r *Run) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if len(t.Dispatches) > 0 {
 		d := t.Dispatches[len(t.Dispatches)-1]
 		if d.Status == DispatchRunning {
@@ -969,6 +1022,10 @@ func (t *Task) CancelDispatch(reason string) {
 	}
 	if t.State != TaskCompleted {
 		t.State = TaskFailed
+	}
+	t.mu.Unlock()
+	if r != nil {
+		r.measureTask(t.ID)
 	}
 }
 
@@ -1106,6 +1163,42 @@ type TaskSnapshot struct {
 	// product, so it belongs in every view of the graph rather than only on
 	// the in-memory dispatch, where it was written and never read.
 	Outcome string `json:"outcome,omitempty"`
+	// Usage is what this task's worker actually consumed, harvested from
+	// its Claude transcript when the task reached a terminal state.
+	//
+	// It is a broker.Usage rather than a usage.Tally so that the snapshot
+	// stays a plain data type with no dependency on how a tally is
+	// produced: the transcript is one source, and a worker that never ran
+	// under Claude Code would be another.
+	//
+	// Model here is what served the task, which is not necessarily what
+	// Model above asked for. That gap is the reason to record this at all
+	// — of the 13 tasks on disk that named a tier explicitly, 5 were
+	// served by the other model, because ccproxy routes on account and
+	// quota rather than on the tier narwhal requested.
+	Usage *Usage `json:"usage,omitempty"`
+}
+
+// Usage is one task's measured cost.
+//
+// A pointer on TaskSnapshot, because absent and zero are different
+// answers: a task that was never dispatched consumed nothing and has no
+// transcript, while a task whose transcript could not be read is a gap in
+// the accounting that should not read as free.
+type Usage struct {
+	// ServedModel is the model the transcript says ran, in full — the
+	// dated id, not the tier — since that is what distinguishes a
+	// fallback from the model that was asked for.
+	ServedModel string `json:"served_model,omitempty"`
+	// ServedModels lists every model that served the task when more than
+	// one did, most-used first.
+	ServedModels []string `json:"served_models,omitempty"`
+
+	InputTokens         int64 `json:"input_tokens,omitempty"`
+	OutputTokens        int64 `json:"output_tokens,omitempty"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
+	CacheReadTokens     int64 `json:"cache_read_tokens,omitempty"`
+	Turns               int   `json:"turns,omitempty"`
 }
 
 type ThreadSnapshot struct {

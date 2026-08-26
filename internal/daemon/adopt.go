@@ -163,7 +163,7 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 		// it returns a task to ready, which is how a cancelled run kept
 		// relaunching itself.
 		if ts.State == broker.TaskDispatched {
-			task.CancelDispatch("worker lost to a daemon restart")
+			task.CancelDispatch("worker lost to a daemon restart", run)
 		}
 		res.Abandoned++
 		res.Tasks = append(res.Tasks, AdoptOutcome{ts.ID, "abandoned"})

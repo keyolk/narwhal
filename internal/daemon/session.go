@@ -15,6 +15,7 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/launcher"
+	"github.com/keyolk/narwhal/internal/usage"
 )
 
 // Session is the daemon's owned state.
@@ -36,7 +37,7 @@ type Session struct {
 // server binds.
 func NewSession() *Session {
 	return &Session{
-		Broker:    broker.New(),
+		Broker:    usage.NewBroker(),
 		Registry:  broker.NewAgentRegistry(),
 		launchers: make(map[string]*launcher.Launcher),
 	}

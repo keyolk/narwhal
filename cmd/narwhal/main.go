@@ -20,6 +20,7 @@ import (
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
 	"github.com/keyolk/narwhal/internal/store"
+	"github.com/keyolk/narwhal/internal/usage"
 )
 
 // version is stamped at build time by the Makefile:
@@ -56,6 +57,8 @@ func main() {
 		showCmd(os.Args[2:])
 	case "export":
 		exportCmd(os.Args[2:])
+	case "backfill":
+		backfillCmd(os.Args[2:])
 	case "monitor":
 		monitorCmd(os.Args[2:])
 	case "daemon":
@@ -94,7 +97,7 @@ func runCmd(args []string) {
 
 	runID := generateRunID()
 
-	b := broker.New()
+	b := usage.NewBroker()
 	reg := broker.NewAgentRegistry()
 
 	// Create the run with "main" as the coordinator.
@@ -238,6 +241,14 @@ func showCmd(args []string) {
 			}
 			fmt.Printf("  %s  state=%s tasks=%d (done=%d fail=%d) msgs=%d\n",
 				id, s.State, len(s.Tasks), completed, failed, msgCount)
+			// What a run cost belongs next to whether it worked. The
+			// README's economics claim — frontier planner, cheap workers
+			// — is about this number, and until it was printed the claim
+			// could only be checked against the price list rather than
+			// against what the harness actually spent.
+			if u := usageLine(s); u != "" {
+				fmt.Printf("      %s\n", u)
+			}
 		}
 		return
 	}
@@ -246,6 +257,12 @@ func showCmd(args []string) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	// The accounting first, because it is the question a finished run is
+	// usually opened to answer and the JSON below is 200 lines deep.
+	if r := UsageReport(s); r != "" {
+		fmt.Print(r)
+		fmt.Println()
 	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
@@ -273,6 +290,10 @@ Usage:
 
   narwhal show  [run-id]
                 List finished runs, or print one run's full snapshot.
+
+  narwhal backfill [--dry-run]
+                Fill in token accounting for runs that finished before it
+                was recorded, by reading each worker's Claude transcript.
 
   narwhal export [--dir DIR]
                 Write every persisted run to DIR as markdown, one file per

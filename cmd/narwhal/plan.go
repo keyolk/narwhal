@@ -31,6 +31,7 @@ import (
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
 	"github.com/keyolk/narwhal/internal/store"
+	"github.com/keyolk/narwhal/internal/usage"
 )
 
 func planCmd(args []string) {
@@ -55,7 +56,7 @@ func planCmd(args []string) {
 
 	runID := fmt.Sprintf("plan-%d", time.Now().UnixNano()/1e6)
 
-	b := broker.New()
+	b := usage.NewBroker()
 	reg := broker.NewAgentRegistry()
 	mainAgent := reg.Register("main", runID, true)
 	r := b.CreateRun(runID, *prompt, *cwd, mainAgent.ID)

@@ -11,6 +11,7 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
+	"github.com/keyolk/narwhal/internal/usage"
 )
 
 // experimentCmd validates the central Narwhal hypothesis: that a directly
@@ -45,7 +46,7 @@ func experimentCmd(args []string) {
 
 	runID := fmt.Sprintf("exp-%d", time.Now().UnixNano()/1e6)
 
-	b := broker.New()
+	b := usage.NewBroker()
 	reg := broker.NewAgentRegistry()
 	run := b.CreateRun(runID, "passive awareness experiment", *cwd, "main")
 	run.CreateThread("worklog", "worklog", []string{"receiver", "sender"})

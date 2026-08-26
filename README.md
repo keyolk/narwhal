@@ -15,7 +15,7 @@ serves that tier and handles account routing and quota.
 
 ## Status
 
-Functional. 158 unit tests (race-clean), 8 end-to-end experiments with real
+Functional. 525 unit tests (race-clean), 8 end-to-end experiments with real
 Claude Code workers, and a benchmark slice against SWE-Atlas QnA.
 
 ## Quick Start
@@ -76,10 +76,47 @@ narwhal plan --prompt "audit this codebase" --cwd ~/src/myrepo \
 narwhal monitor            # attach to the newest live run
 narwhal monitor --run <id> # attach to a specific run
 
-# Inspect past runs
+# Inspect past runs — each row carries what it cost
 narwhal show               # list recent runs
-narwhal show <run-id>      # full snapshot
+narwhal show <run-id>      # full snapshot, per-task accounting first
 ```
+
+### What a run cost
+
+A run records what each task spent, read from the worker's own Claude
+transcript when the task reaches a terminal state — completed, failed by
+the circuit breaker, or cancelled with the run. All three, because a run
+abandoned halfway is not a free one.
+
+```
+Usage
+  synthesis            out=14.3k    in=20       cache=681.8k   turns=9    claude-opus-5
+  task-1               out=7.0k     in=18       cache=559.6k   turns=8    claude-opus-5  ← asked for haiku
+  task-2               out=12.5k    in=12       cache=379.1k   turns=5    claude-opus-5  ← asked for haiku
+  TOTAL                out=33.9k    in=50       cache=1.6M     turns=22
+```
+
+The arrow is the reason this exists. The model tier a task asks for is not
+necessarily the one that serves it: ccproxy routes on account and quota,
+and narwhal only ever knew what it requested. The transcript knows what
+ran. Across the 47 runs on disk, 13 tasks named a tier explicitly and
+**5 were served by the other model** — including three `synthesis` tasks
+that asked for opus and got haiku, which is exactly the task the economics
+split above says needs the frontier model. The run shown here is a
+cheap-workers experiment in which both workers ran on opus.
+
+So the Cursor economics split is a lever, not a guarantee, and a run that
+silently did not get it looks identical to one that did unless something
+counts. `narwhal backfill` recovers the accounting for runs that finished
+before this existed; 93 tasks across 27 runs are recoverable that way, and
+80 dispatched tasks predate the launcher pinning session ids and cannot be
+measured at all — so a total over the backlog is a floor, and the report
+says so rather than presenting a partial number as a whole one.
+
+The four token classes are kept apart rather than summed. Cache reads
+dominate every total by an order of magnitude — 1.14B against 110M input
+across this machine's corpus — and collapsing them into one number would
+hide output, which is what actually varies with the tier.
 
 The monitor is an interactive TUI: the task graph on the left, a node
 inspector and the radio channel stacked on the right, and detail views for
@@ -326,6 +363,11 @@ narwhal
 │   ├── pinned --session-id, so the monitor can attach to a live worker
 │   └── wrapper scripts (send/drain/watch/state/task-done/split)
 │
+├── usage
+│   ├── per-task tokens read from the worker's Claude transcript
+│   ├── the model that actually served, vs the tier the task asked for
+│   └── probe installed on the broker, so all three terminal paths count
+│
 ├── store
 │   ├── atomic JSON snapshots under ~/.narwhal/runs/<id>.json
 │   └── live registry (~/.narwhal/live.json) for monitor discovery
@@ -439,8 +481,9 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 | `narwhal daemon` | `start` / `stop` / `status` for the interactive broker |
 | `narwhal mcp` | MCP server over stdio (registered with Claude Code) |
 | `narwhal experiment` | Two-worker passive-awareness validation scenario |
-| `narwhal show` | List recent runs (from disk) |
-| `narwhal show <id>` | Full run snapshot (from disk) |
+| `narwhal show` | List recent runs (from disk), with what each one cost |
+| `narwhal show <id>` | Full run snapshot, per-task token accounting first |
+| `narwhal backfill` | Measure past runs from their transcripts (`--dry-run` to preview) |
 | `narwhal version` | Print version |
 
 ## Coverage
@@ -459,6 +502,8 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Completion gate (synthesis runs early, but cannot finish before its deps)
 - ✓ File ownership (claim / release, conflicts answered on the radio)
 - ✓ Model escalation (worker asks for a stronger tier, breaker still bounds retries)
+- ✓ Resource accounting (per-task tokens and the model that actually served,
+  on every terminal path; unmeasured tasks named rather than counted as free)
 - ✓ Run terminal state (done/failed)
 - ✓ Run persistence + inspection
 - ✓ Coordinating agent (planner decomposes request into DAG)

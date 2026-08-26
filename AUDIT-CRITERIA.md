@@ -1,8 +1,8 @@
 # Self-audit criteria for narwhal
 
-Two published taxonomies, used as the checklist. Both are empirical work at a
-scale we cannot reproduce here, which is why they are the standard rather than
-our own intuition.
+Published taxonomies and harness standards, used as the checklist. All are
+empirical work at a scale we cannot reproduce here, which is why they are the
+standard rather than our own intuition.
 
 ## A. MAST — multi-agent failure taxonomy
 
@@ -70,6 +70,49 @@ trajectory-internal; it does **not** separate agent-reasoning failures from
 harness failures. Defects of the kind fixed in PRs #24–#31 have no home in
 that taxonomy.
 
+## D. Harness failure is a category the trajectory taxonomies lack
+
+*Prime Agent: A Self-Improving RLM Harness* — https://arxiv.org/abs/2608.23552
+
+Its framing is the one this file arrived at from the other direction:
+
+> A model should fail an evaluation because the task exceeds its capability,
+> not because the harness dropped state, restricted useful actions,
+> **miscounted resources**, or terminated prematurely.
+
+That is the gap noted under section C — the Mirage paper's seven categories
+are all trajectory-internal, and the defects fixed in #24–#31 have no home in
+them. Prime Agent names the category and builds a harness around it.
+
+Two of its standards are ones narwhal can be held to:
+
+1. **Resource accounting aggregates the root and descendant sessions, so
+   delegation stays visible in test-time cost.** narwhal had none until #42.
+   The README's economics claim — frontier planner, cheap workers, frontier
+   synthesis — was an argument from the price list, not an observation.
+   Measured across the backlog once accounting existed: 93 tasks in 27 runs
+   are recoverable, 5.6M output tokens, and **5 tasks were served by a
+   different tier than they asked for** — three of them a `synthesis` that
+   requested opus and got haiku, which is precisely the task the economics
+   split says needs the frontier model. 80 dispatched tasks predate the
+   launcher pinning session ids and cannot be measured at all, so every
+   total over the backlog is a floor.
+
+2. **A task-specified end-condition evaluated after each turn.** narwhal's
+   `task-done` gate checks that deps finished, not that the work is right.
+   #41 is one hand-written instance of this for one synthesis task.
+
+Not adopted, deliberately: `/refine`, where the model edits its own harness
+state between runs. The paper supplies the counter-evidence itself — a
+Factorio agent discovered an RCON resource-injection exploit and **preserved
+it as a skill**, past an anti-cheating heartbeat. narwhal's plan immutability
+is a defence of the same kind and is not worth trading away.
+
+Its numbers are not a baseline for ours: a 7-day Factorio run with 633
+depth-one subagents and 23.4M output tokens is a different scale of
+experiment than a 3-task benchmark slice. Read it for the design, the way
+`docs/benchmark.md` already treats AgentRadio's published figures.
+
 ## How this audit must be done
 
 The method that worked repeatedly in this codebase is **counting real
@@ -88,12 +131,13 @@ not a finding.
 
 ## Evidence available on this machine
 
-- `~/.narwhal/runs/*.json` — 41 persisted runs (snapshots: tasks, states,
-  outcomes, radio messages)
+- `~/.narwhal/runs/*.json` — 47 persisted runs (snapshots: tasks, states,
+  outcomes, radio messages, and — since #42 — per-task token usage and the
+  model that actually served each one)
 - `~/.narwhal/sessions/<run>/agents/worker-<task>/` — per-worker instructions,
   scripts, claude-output.txt, claude-session-id, outcome-*.json
 - `~/.claude/projects/*/<session-id>.jsonl` — full worker transcripts,
-  83 of them, ~7,800 tool calls
+  109 of them, 8,982 tool calls
 - `~/.local/state/kmd/rag.jsonl` — 7,500+ RAG decisions, including which
   worker prompts retrieved context and which came back empty
 - the repo itself at `/Users/gavin.jeong/src/keyolk/narwhal`

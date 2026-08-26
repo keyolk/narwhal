@@ -306,7 +306,7 @@ func (d *Dispatcher) reap(runID string, run *broker.Run, active []string) {
 			// skip canceled runs, would have driven a retry.
 			if run.CurrentState() == broker.RunCanceled {
 				log.Printf("[dispatch] %s/%s killed by cancel", runID, task.ID)
-				task.CancelDispatch("run canceled")
+				task.CancelDispatch("run canceled", run)
 				continue
 			}
 			// A worker that posted findings did its job even if it never

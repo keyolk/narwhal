@@ -98,6 +98,11 @@ func RestoreRun(s Snapshot) *Run {
 			State:      ts.State,
 			Model:      ts.Model,
 			CreatedAt:  r.CreatedAt,
+			// What the task cost is durable: it was measured when the
+			// task reached a terminal state, and a restart does not
+			// un-spend it. Dropping it here would make a daemon restart
+			// look like a run that got cheaper.
+			Usage: ts.Usage,
 		}
 		// Dispatch history is rebuilt from the count, which is all the
 		// snapshot keeps. The statuses follow from the task's own state:
@@ -171,9 +176,21 @@ func RestoreRun(s Snapshot) *Run {
 	return r
 }
 
-// AdoptRun installs a restored run under the broker's lock.
+// AdoptRun installs a restored run under the broker's lock, and hands it
+// the broker's usage probe.
+//
+// A restored run measures its tasks for the same reason a fresh one does:
+// its workers are still running and will reach a terminal state under
+// this daemon. Without this, every run that survived a daemon restart
+// would finish unaccounted — and surviving a restart is the normal life
+// of an interactive run, not an edge case.
 func (b *Broker) AdoptRun(r *Run) {
+	if r == nil {
+		return
+	}
 	b.mu.Lock()
+	probe := b.usageProbe
 	b.runs[r.ID] = r
 	b.mu.Unlock()
+	r.SetUsageProbe(probe)
 }

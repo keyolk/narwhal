@@ -162,6 +162,10 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 			Assignment string   `json:"assignment"`
 			Deps       []string `json:"deps"`
 			Model      string   `json:"model"`
+			// Check is the end condition this task must answer before it
+			// completes. Set by the planner, before any worker has an
+			// answer to defend — see broker/check.go.
+			Check string `json:"check"`
 		}
 		if err := decodeBody(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -169,6 +173,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 		}
 		t := run.AddTask(req.ID, req.Name, req.Assignment, req.Deps)
 		t.SetModel(req.Model)
+		t.SetCheck(req.Check)
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":    t.ID,
 			"state": string(t.State),
@@ -439,6 +444,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			// during the wait. Without it a second call would be handed
 			// the same messages again and the task would never complete.
 			Final bool `json:"final"`
+			// CheckResult is what the worker found when it ran the end
+			// condition its task was given. The gate hands the check back
+			// once and completes on the call that answers it.
+			CheckResult string `json:"check_result"`
 			// After is how far the worker has read the radio. The 202
 			// hands back what it has NOT read; without its cursor the
 			// server can only guess, and guessing is what was wrong.
@@ -529,6 +538,38 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 				})
 				return
 			}
+		}
+
+		// The end condition, after the dep gate and before completion.
+		//
+		// After, because a synthesis that has not seen its peers cannot
+		// meaningfully check its own headline — the 202 above may still
+		// send it back to fold in findings that change the answer, and
+		// asking it to verify a number it is about to revise wastes the
+		// check on a draft.
+		//
+		// Answered with 202 rather than refused with 409, for the reason
+		// #17 established: `claude --print` ends its process when the
+		// model's turn ends, so a worker told "come back when you have
+		// checked" does not come back — it dies, the coordinator sees a
+		// dispatch with no task-done, and the breaker fails the task on
+		// the third try. The 202 keeps the worker inside a tool call,
+		// which is the only moment it can act.
+		if req.CheckResult != "" {
+			task.RecordCheckResult(req.CheckResult)
+		}
+		if task.NeedsCheckResult() {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"task_id": task.ID,
+				"state":   string(task.CurrentState()),
+				"check":   task.CurrentCheck(),
+				"hint": "Before this task completes, run the check above and report " +
+					"what it found. Call task-done again with the result — the next " +
+					"call completes the task. Report what the check actually showed, " +
+					"including a result that contradicts your answer: a check that " +
+					"only ever confirms is not a check.",
+			})
+			return
 		}
 
 		task.CompleteDispatch(req.Outcome, run)

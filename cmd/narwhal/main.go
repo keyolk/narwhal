@@ -249,6 +249,11 @@ func showCmd(args []string) {
 			if u := usageLine(s); u != "" {
 				fmt.Printf("      %s\n", u)
 			}
+			// Whether a run's answers were tested belongs beside what
+			// they cost: a cheap wrong answer is the expensive kind.
+			if c := checkLine(s); c != "" {
+				fmt.Printf("      %s\n", c)
+			}
 		}
 		return
 	}
@@ -261,6 +266,10 @@ func showCmd(args []string) {
 	// The accounting first, because it is the question a finished run is
 	// usually opened to answer and the JSON below is 200 lines deep.
 	if r := UsageReport(s); r != "" {
+		fmt.Print(r)
+		fmt.Println()
+	}
+	if r := CheckReport(s); r != "" {
 		fmt.Print(r)
 		fmt.Println()
 	}

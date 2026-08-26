@@ -108,6 +108,21 @@ func writeTask(b *strings.Builder, t broker.TaskSnapshot) {
 	if a := strings.TrimSpace(t.Assignment); a != "" {
 		fmt.Fprintf(b, "%s\n\n", a)
 	}
+	// The end condition and what it showed, before the outcome — reading
+	// the answer is different once you know it was tested, and reading it
+	// is different again when the check was asked and never answered.
+	if c := strings.TrimSpace(t.Check); c != "" {
+		fmt.Fprintf(b, "**Check:** %s\n\n", c)
+		if r := strings.TrimSpace(t.CheckResult); r != "" {
+			fmt.Fprintf(b, "**Check result:** %s\n\n", r)
+		} else {
+			// Named rather than omitted. A check with no result is a task
+			// that completed off the harvest path, where the broker was
+			// gone and nobody could ask — worth knowing when the answer
+			// turns out to be wrong.
+			b.WriteString("**Check result:** not answered\n\n")
+		}
+	}
 	// The outcome last and labelled: it is the answer, and a failed task's
 	// reason is the thing most worth finding later.
 	if o := strings.TrimSpace(t.Outcome); o != "" {

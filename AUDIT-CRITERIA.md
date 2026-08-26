@@ -99,8 +99,35 @@ Two of its standards are ones narwhal can be held to:
    total over the backlog is a floor.
 
 2. **A task-specified end-condition evaluated after each turn.** narwhal's
-   `task-done` gate checks that deps finished, not that the work is right.
-   #41 is one hand-written instance of this for one synthesis task.
+   `task-done` gate checked that deps finished, not that the work was
+   right. #43 adds one: the planner writes a task's `check` at
+   decomposition time, and the gate hands it back at task-done and
+   completes on the call that answers it. Both the check and its result
+   land in the snapshot, which is what run s1787538246213-1 lacked — it
+   reported 8 where the answer was 0 and finished 3/3 completed, and no
+   field in the record distinguished it from a run that was right.
+
+   The narwhal version is weaker than Prime Agent's in a way worth
+   stating: theirs *evaluates* the end condition, ours *records* it. The
+   worker runs its own check and reports its own result, and nothing
+   re-executes the work. The broker has neither the worker's working
+   directory nor a safe way to run planner-authored shell, and a gate that
+   did would be a larger security surface than the thing it verifies. What
+   the gate buys is that the claim is fixed before the work starts and the
+   answer is in the record afterwards — enough for an audit to count,
+   which is what finding #41 by hand cost.
+
+   This is also off-contract in the same way `readOutcome` is (§B): a
+   check result is evidence a worker produced about itself, so RD has to
+   be argued rather than assumed. It is argued the same way — the gate's
+   decision is a function of durable state (`Check` set, `CheckResult`
+   empty), and both survive a restore, so a restarted daemon asks exactly
+   the tasks that had not answered. Harvest is the deliberate exception:
+   there the broker was gone and the worker has exited, so the result is
+   recorded if the outcome file carries one and the task completes either
+   way. Demanding an answer on that path would strand finished work
+   rather than verify anything, and `narwhal show` names such a task as
+   `(not answered)` instead of leaving a blank that reads like a pass.
 
 Not adopted, deliberately: `/refine`, where the model edits its own harness
 state between runs. The paper supplies the counter-evidence itself — a

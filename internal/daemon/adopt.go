@@ -134,10 +134,18 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 		// read the same file with different guards — adoption accepted
 		// pending and ready as well — so whether a run recovered depended
 		// on which one happened to run rather than on what was on disk.
-		if outcome, ok := readOutcome(snap.RunID, ts.ID); ok && harvestable(ts.State) {
+		if outcome, check, ok := readOutcome(snap.RunID, ts.ID); ok && harvestable(ts.State) {
 			// The work is done and was written down; only the delivery
 			// failed. Completing it here is the reconciliation the
 			// task-done script promised the worker.
+			//
+			// The check result is recorded but not required. Harvest is
+			// the path where the broker was gone, so the worker never saw
+			// the 202 asking for one and has since exited — demanding an
+			// answer here would strand a finished task forever rather
+			// than verify anything. A harvested task with a check and no
+			// result is exactly that situation, and the snapshot shows it.
+			task.RecordCheckResult(check)
 			task.CompleteDispatch(outcome, run)
 			res.Harvested++
 			res.Tasks = append(res.Tasks, AdoptOutcome{ts.ID, "harvested"})
@@ -173,9 +181,9 @@ func adoptRun(sess *Session, snap broker.Snapshot, dispatched map[string]string)
 
 // readOutcome returns what a worker recorded locally when it could not
 // reach the broker, if anything.
-func readOutcome(runID, taskID string) (string, bool) {
-	outcome, _, ok := readOutcomeStamped(runID, taskID)
-	return outcome, ok
+func readOutcome(runID, taskID string) (string, string, bool) {
+	outcome, check, _, ok := readOutcomeStamped(runID, taskID)
+	return outcome, check, ok
 }
 
 // readOutcomeStamped is readOutcome plus when the file was written.
@@ -187,10 +195,10 @@ func readOutcome(runID, taskID string) (string, bool) {
 // worker before it. The modification time is the identity the filename
 // lacks — an outcome older than the dispatch now running belongs to an
 // earlier one.
-func readOutcomeStamped(runID, taskID string) (string, time.Time, bool) {
+func readOutcomeStamped(runID, taskID string) (outcome, checkResult string, written time.Time, ok bool) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
 	// The file lives in the agent's own directory, and the agent for a
 	// task is named after it.
@@ -198,20 +206,24 @@ func readOutcomeStamped(runID, taskID string) (string, time.Time, bool) {
 		"agents", "worker-"+taskID, "outcome-"+taskID+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
-	// The script writes the same JSON body it would have posted.
+	// The script writes the same JSON body it would have posted, so the
+	// check result rides along with the outcome. A worker that could not
+	// reach the broker still ran its check, and dropping the answer here
+	// would lose it for good.
 	var body struct {
-		Outcome string `json:"outcome"`
+		Outcome     string `json:"outcome"`
+		CheckResult string `json:"check_result"`
 	}
 	if json.Unmarshal(data, &body) != nil || strings.TrimSpace(body.Outcome) == "" {
-		return "", time.Time{}, false
+		return "", "", time.Time{}, false
 	}
-	var written time.Time
+
 	if fi, err := os.Stat(path); err == nil {
 		written = fi.ModTime()
 	}
-	return body.Outcome, written, true
+	return body.Outcome, strings.TrimSpace(body.CheckResult), written, true
 }
 
 // workerAlive reports whether a task's worker process is still running.

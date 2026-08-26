@@ -56,7 +56,7 @@ func harvestOrphanedOutcomes(runID string, run *broker.Run) int {
 		if !harvestable(ts.State) {
 			continue
 		}
-		outcome, written, ok := readOutcomeStamped(runID, ts.ID)
+		outcome, check, written, ok := readOutcomeStamped(runID, ts.ID)
 		if !ok {
 			continue
 		}
@@ -74,6 +74,8 @@ func harvestOrphanedOutcomes(runID string, run *broker.Run) int {
 			!started.IsZero() && written.Before(started) {
 			continue
 		}
+		// Recorded, not required — see the same decision in adopt.go.
+		task.RecordCheckResult(check)
 		task.CompleteDispatch(outcome, run)
 		harvested++
 		log.Printf("[harvest] %s/%s completed from an outcome the worker "+

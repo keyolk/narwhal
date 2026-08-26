@@ -37,7 +37,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku"}'
+     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku","check":"Name one specific finding and the file:line it is at. A finding with no location was not actually found."}'
 
    - id: unique task id (task-1, task-2, ...)
    - name: short human-readable name
@@ -46,6 +46,22 @@ Your job is to decompose the user's request into a task DAG.
    - model: (optional) claude model for this task's worker, e.g. "haiku",
      "sonnet", "opus". Omit to use the launcher default. Use a cheaper model
      for narrow investigation tasks and a stronger one for synthesis.
+   - check: (optional) an end condition — something cheap to test that
+     would come out WRONG if the task got the wrong answer. task-done
+     hands it back and completes on the call that answers it.
+
+     Write it from the definition in the request, not from what you expect
+     the answer to be. The check that would have caught the worst run in
+     this repo's history was "confirm the names you report are actually
+     exported": a run answered 8 where the answer was 0, every reported
+     name started with a lowercase letter, and it finished 3/3 completed
+     with nothing in the record to show it was wrong.
+
+     Good checks name a property that can be looked at: "re-read two of
+     the reported lines and confirm they say what the finding claims",
+     "the count you report should equal the number of names you list".
+     Skip it for a task with no meaningful end condition — demanding one
+     from every task teaches workers to write filler.
 
 3. Create a synthesis task that DEPENDS on every investigation task
    ("deps": ["task-1","task-2",...]). Narwhal treats these deps as a
@@ -57,11 +73,11 @@ Your job is to decompose the user's request into a task DAG.
      - drains the radio repeatedly, accumulating peer findings as they arrive
      - does NOT investigate the codebase itself — peers are doing that, and
        duplicating their work is how a synthesis runs out of turn. The one
-       exception is the headline itself: before publishing a number, verify
-       it against the definition in the request. Peers with disjoint scopes
-       fail the same way at the same time, and nothing else in the run is
-       positioned to notice. A spot-check of two or three reported items is
-       enough — it is cheap, and it is not the investigation
+       exception is the headline itself, and it belongs in the task's
+       "check" rather than here: peers with disjoint scopes fail the same
+       way at the same time, and nothing else in the run is positioned to
+       notice. The gate asks for the check by name at task-done, which an
+       instruction buried in an assignment cannot do
      - calls task-done when it has written what it can; the call blocks
        until every peer has finished, which is what keeps the worker alive
        until then
@@ -71,7 +87,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio. Before publishing the headline number, confirm two or three of the reported items really meet the definition in the request, and report what that check found.","deps":["task-1","task-2"],"model":"opus"}'
+     -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio and integrate them into one answer.","deps":["task-1","task-2"],"model":"opus","check":"Confirm two or three of the items your peers reported really meet the definition in the request, and report what that showed — including a result that contradicts the headline."}'
 
 4. After creating ALL tasks, signal completion by sending a message:
 

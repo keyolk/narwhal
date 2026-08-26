@@ -15,7 +15,7 @@ serves that tier and handles account routing and quota.
 
 ## Status
 
-Functional. 525 unit tests (race-clean), 8 end-to-end experiments with real
+Functional. 551 unit tests (race-clean), 8 end-to-end experiments with real
 Claude Code workers, and a benchmark slice against SWE-Atlas QnA.
 
 ## Quick Start
@@ -117,6 +117,37 @@ The four token classes are kept apart rather than summed. Cache reads
 dominate every total by an order of magnitude — 1.14B against 110M input
 across this machine's corpus — and collapsing them into one number would
 hide output, which is what actually varies with the tier.
+
+### What a task had to prove
+
+A task can carry an **end condition**: something cheap to test that would
+come out wrong if the task got the wrong answer. The planner writes it at
+decomposition time, so it states what "done" means before any worker has
+an answer to defend.
+
+```
+Checks
+  synthesis
+    asked:  Confirm two or three of the items your peers reported really
+            meet the definition in the request.
+    showed: none of the six names is exported, so the count is 0 not 8
+```
+
+The gate hands the check back at `task-done` and completes on the call
+that answers it — a 202, not a refusal, for the reason the completion gate
+blocks rather than refusing: a `--print` worker told to come back later
+does not come back.
+
+This is recorded, not enforced. The worker runs its own check and reports
+its own result; nothing re-executes the work. The broker has neither the
+worker's working directory nor a safe way to run planner-authored shell.
+What it buys is that a wrong answer stops being invisible: one run asked
+how many exported functions in `internal/store` lack a doc comment,
+answered 8 where the answer is 0, and finished 3/3 completed — no retry,
+no failed task, no stuck frontier. Every field the snapshot recorded said
+it went well. A check and its answer are what make that legible in
+hindsight, and `narwhal show` prints an unanswered one as `(not answered)`
+rather than a blank that reads like a pass.
 
 The monitor is an interactive TUI: the task graph on the left, a node
 inspector and the radio channel stacked on the right, and detail views for
@@ -363,6 +394,11 @@ narwhal
 │   ├── pinned --session-id, so the monitor can attach to a live worker
 │   └── wrapper scripts (send/drain/watch/state/task-done/split)
 │
+├── check
+│   ├── planner-authored end condition, set before the task is dispatched
+│   ├── gate asks at task-done and completes on the answering call
+│   └── check + result in the snapshot, so a wrong answer is findable
+│
 ├── usage
 │   ├── per-task tokens read from the worker's Claude transcript
 │   ├── the model that actually served, vs the tier the task asked for
@@ -504,6 +540,8 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 - ✓ Model escalation (worker asks for a stronger tier, breaker still bounds retries)
 - ✓ Resource accounting (per-task tokens and the model that actually served,
   on every terminal path; unmeasured tasks named rather than counted as free)
+- ✓ End conditions (planner-authored per task, gate asks at task-done,
+  check and result both in the snapshot; recorded rather than enforced)
 - ✓ Run terminal state (done/failed)
 - ✓ Run persistence + inspection
 - ✓ Coordinating agent (planner decomposes request into DAG)

@@ -486,6 +486,20 @@ type Task struct {
 	// terminal state. Nil until then, and nil forever for a task whose
 	// worker left no transcript — see usage_probe.go.
 	Usage *Usage
+	// Check is the end condition this task must answer before it may
+	// complete: a claim about the finished work that is cheap to test and
+	// would fail if the task got the wrong answer. Written by the planner
+	// at decomposition time, so it is a statement of what "done" means
+	// rather than a justification the worker composes for its own answer.
+	//
+	// Empty for tasks with no meaningful end condition, which is most of
+	// them — a gate that demands one from every task teaches workers to
+	// write filler.
+	Check string
+	// CheckResult is what the worker reported when it ran the check.
+	// Guarded with Check by the task lock. See check.go for why this is
+	// recorded rather than enforced.
+	CheckResult string
 }
 
 // Dispatch is one attempt to execute a Task. A retry mints a new Dispatch;
@@ -771,6 +785,8 @@ func (t *Task) snapshot() TaskSnapshot {
 	if n := len(t.Dispatches); n > 0 {
 		ts.Outcome = t.Dispatches[n-1].Output
 	}
+	ts.Check = t.Check
+	ts.CheckResult = t.CheckResult
 	if t.Usage != nil {
 		// Copied rather than aliased: the snapshot outlives the lock and
 		// is handed to callers that persist it, and a pointer shared with
@@ -1177,6 +1193,17 @@ type TaskSnapshot struct {
 	// served by the other model, because ccproxy routes on account and
 	// quota rather than on the tier narwhal requested.
 	Usage *Usage `json:"usage,omitempty"`
+	// Check is the end condition the planner set for this task, and
+	// CheckResult is what the worker reported when it ran it.
+	//
+	// Both live in the snapshot because a wrong-but-completed answer is
+	// otherwise invisible: run s1787538246213-1 reported 8 where the
+	// answer was 0 and finished 3/3 completed, with no retry, no failed
+	// task and no stuck frontier anywhere in the record (#41). Nothing in
+	// the graph could have been read afterwards to find it. A check and
+	// its answer are what make that run legible in hindsight.
+	Check       string `json:"check,omitempty"`
+	CheckResult string `json:"check_result,omitempty"`
 }
 
 // Usage is one task's measured cost.

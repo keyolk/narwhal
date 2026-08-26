@@ -135,6 +135,24 @@ Two of its standards are ones narwhal can be held to:
    rather than verify anything, and `narwhal show` names such a task as
    `(not answered)` instead of leaving a blank that reads like a pass.
 
+Not adopted, and this one was decided by counting rather than by taste:
+**accumulating worker instructions across runs.** The argument for it was
+that a worker's repeated mistakes should carry forward instead of every run
+starting from the same generated instructions. Measured over 109 worker
+transcripts, they do not repeat:
+
+| occurrences | sessions | what |
+|---|---|---|
+| 59 | 33 | `No such file or directory` — 32 are ordinary misses in the repo under investigation, 21 are `cd` into a path that is not there, and only 6 touch a wrapper script |
+| 26 | 16 | task-done could not reach the broker — concentrated in 6 runs, and a dead broker is what harvest already recovers |
+| 9 | 5 | the fold-in round, which is the gate working |
+| 6 | 4 | task-done timed out waiting on peers, likewise |
+
+And 173 dispatched tasks produced 8 failures, 3 of them in a run the
+operator cancelled. There is no recurring instruction-level defect in the
+corpus to accumulate. Revisit if one appears; building the mechanism first
+would be building it for a problem this machine does not have.
+
 Not adopted, deliberately: `/refine`, where the model edits its own harness
 state between runs. The paper supplies the counter-evidence itself — a
 Factorio agent discovered an RCON resource-injection exploit and **preserved

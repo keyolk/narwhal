@@ -92,15 +92,66 @@ Two of its standards are ones narwhal can be held to:
    synthesis — was an argument from the price list, not an observation.
    Measured across the backlog once accounting existed: 93 tasks in 27 runs
    are recoverable, 5.6M output tokens, and **5 tasks were served by a
-   different tier than they asked for** — three of them a `synthesis` that
-   requested opus and got haiku, which is precisely the task the economics
-   split says needs the frontier model. 80 dispatched tasks predate the
-   launcher pinning session ids and cannot be measured at all, so every
-   total over the backlog is a floor.
+   different tier than they asked for**. Counting where they fell found the
+   cause — all 5 are interactive runs and the batch runs have none, because
+   the two dispatch paths built their worker config by hand and only one
+   passed the task's model. Fixed in #44 by giving both one constructor.
+   80 dispatched tasks predate the launcher pinning session ids and cannot
+   be measured at all, so every total over the backlog is a floor.
+
+   Worth recording as method: the defect was invisible for the life of the
+   feature and was not found by reading the two dispatch sites, which look
+   nothing alike. It was found by counting an artifact — the same thing
+   this file says below about every other defect in this repo.
 
 2. **A task-specified end-condition evaluated after each turn.** narwhal's
-   `task-done` gate checks that deps finished, not that the work is right.
-   #41 is one hand-written instance of this for one synthesis task.
+   `task-done` gate checked that deps finished, not that the work was
+   right. #43 adds one: the planner writes a task's `check` at
+   decomposition time, and the gate hands it back at task-done and
+   completes on the call that answers it. Both the check and its result
+   land in the snapshot, which is what run s1787538246213-1 lacked — it
+   reported 8 where the answer was 0 and finished 3/3 completed, and no
+   field in the record distinguished it from a run that was right.
+
+   The narwhal version is weaker than Prime Agent's in a way worth
+   stating: theirs *evaluates* the end condition, ours *records* it. The
+   worker runs its own check and reports its own result, and nothing
+   re-executes the work. The broker has neither the worker's working
+   directory nor a safe way to run planner-authored shell, and a gate that
+   did would be a larger security surface than the thing it verifies. What
+   the gate buys is that the claim is fixed before the work starts and the
+   answer is in the record afterwards — enough for an audit to count,
+   which is what finding #41 by hand cost.
+
+   This is also off-contract in the same way `readOutcome` is (§B): a
+   check result is evidence a worker produced about itself, so RD has to
+   be argued rather than assumed. It is argued the same way — the gate's
+   decision is a function of durable state (`Check` set, `CheckResult`
+   empty), and both survive a restore, so a restarted daemon asks exactly
+   the tasks that had not answered. Harvest is the deliberate exception:
+   there the broker was gone and the worker has exited, so the result is
+   recorded if the outcome file carries one and the task completes either
+   way. Demanding an answer on that path would strand finished work
+   rather than verify anything, and `narwhal show` names such a task as
+   `(not answered)` instead of leaving a blank that reads like a pass.
+
+Not adopted, and this one was decided by counting rather than by taste:
+**accumulating worker instructions across runs.** The argument for it was
+that a worker's repeated mistakes should carry forward instead of every run
+starting from the same generated instructions. Measured over 109 worker
+transcripts, they do not repeat:
+
+| occurrences | sessions | what |
+|---|---|---|
+| 59 | 33 | `No such file or directory` — 32 are ordinary misses in the repo under investigation, 21 are `cd` into a path that is not there, and only 6 touch a wrapper script |
+| 26 | 16 | task-done could not reach the broker — concentrated in 6 runs, and a dead broker is what harvest already recovers |
+| 9 | 5 | the fold-in round, which is the gate working |
+| 6 | 4 | task-done timed out waiting on peers, likewise |
+
+And 173 dispatched tasks produced 8 failures, 3 of them in a run the
+operator cancelled. There is no recurring instruction-level defect in the
+corpus to accumulate. Revisit if one appears; building the mechanism first
+would be building it for a problem this machine does not have.
 
 Not adopted, deliberately: `/refine`, where the model edits its own harness
 state between runs. The paper supplies the counter-evidence itself — a

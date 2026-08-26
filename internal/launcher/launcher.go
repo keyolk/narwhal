@@ -36,6 +36,39 @@ type WorkerConfig struct {
 	Assignment    string
 	IsCoordinator bool
 	Model         string // --model flag for claude; empty = ccproxy default
+	// Check is the end condition this task must answer before it can
+	// complete. Empty for most tasks. It goes in the instructions so the
+	// worker can run it while it still has the context to, rather than
+	// meeting it for the first time as a 202 at task-done.
+	Check string
+}
+
+// WorkerConfigFor builds the config for a task's worker.
+//
+// One function, because there were two sites building this by hand and
+// they drifted: the batch coordinator passed the task's model and the
+// interactive path did not, so a tier the planner chose reached the
+// graph, the monitor and the snapshot and never reached the worker. It
+// went unnoticed for the life of the feature — of the 13 tasks on disk
+// that named a tier, the 5 served by a different model are all
+// interactive runs and the batch runs have none. Token accounting is
+// what made that countable.
+//
+// It lives here rather than in either dispatcher because both of them
+// already depend on this package, and because the lesson is the one
+// Task.snapshot() records: adding a field to WorkerConfig must not
+// require remembering a second site.
+func WorkerConfigFor(task *broker.Task) WorkerConfig {
+	return WorkerConfig{
+		AgentID:    "worker-" + task.ID,
+		TaskID:     task.ID,
+		Assignment: task.Assignment,
+		Model:      task.CurrentModel(),
+		// The end condition travels with the assignment. A worker that
+		// first meets its check as a 202 has already written its answer
+		// and dropped the context it needed to test it.
+		Check: task.CurrentCheck(),
+	}
 }
 
 // Launcher owns worker process lifecycle for a Run.
@@ -140,7 +173,7 @@ curl -s -X POST %s/watch \
 curl -s %s/state
 `, base),
 		"task-done": fmt.Sprintf(`#!/bin/bash
-# usage: task-done <taskId> <outcome> [final] [after]
+# usage: task-done <taskId> <outcome> [final] [after] [checkResult]
 # Mark a task as completed with the given outcome text.
 #
 # If the task has dependencies that are still running, this call BLOCKS
@@ -159,14 +192,18 @@ curl -s %s/state
 # No --max-time: the wait is bounded by the server, and a client-side
 # timeout would defeat the whole point.
 set -uo pipefail
-TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"; AFTER="${4:-0}"
+TASK="$1"; OUTCOME="$2"; FINAL="${3:-false}"; AFTER="${4:-0}"; CHECK="${5:-}"
+# CHECK is what your task's end condition showed when you ran it. If your
+# task was given one, the server answers 202 with the check instead of
+# completing, and you call again with the result here. Report what it
+# actually showed — a check that only ever confirms is not a check.
 # AFTER is how far you have read the radio — the cursor drain handed back.
 # The server uses it to decide what to put in a 202, so pass it and the
 # 202 carries what you have not seen. Omit it and the server falls back to
 # its own last sequence, which is what it used to guess with: a peer
 # message posted after your last drain but before this call was counted as
 # already-seen and left out of the very list meant to deliver it.
-BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final","after":int(sys.argv[3])}))' "$OUTCOME" "$FINAL" "$AFTER")
+BODY=$(python3 -c 'import json,sys; print(json.dumps({"outcome":sys.argv[1],"final":sys.argv[2]=="final","after":int(sys.argv[3]),"check_result":sys.argv[4]}))' "$OUTCOME" "$FINAL" "$AFTER" "$CHECK")
 OUTFILE="%s/outcome-$TASK.json"
 
 # The broker can be gone: it is a separate long-lived process, and
@@ -196,8 +233,21 @@ while :; do
   sleep $ATTEMPT
 done
 
-echo "${OUT%%%%$'\n'*}"
+BOD="${OUT%%%%$'\n'*}"
+echo "$BOD"
 if [ "$CODE" = "202" ]; then
+  # Two different 202s reach here and they ask for different things, so
+  # tell them apart by what the body carries rather than by the code. One
+  # says peers posted while this call waited; the other says the task has
+  # an end condition that has not been answered.
+  if printf '%%s' "$BOD" | grep -q '"check"'; then
+    echo "" >&2
+    echo "NOT COMPLETE YET. This task was given an end condition (\"check\" above)." >&2
+    echo "Run it, then call again with what it showed:" >&2
+    echo "  bash $0 $TASK \"<answer>\" final $AFTER \"<what the check showed>\"" >&2
+    echo "Report the real result, including one that contradicts your answer." >&2
+    exit 5
+  fi
   echo "" >&2
   echo "NOT COMPLETE YET. Your peers finished while this call waited, and the" >&2
   echo "messages above arrived after you wrote your outcome. Fold them into" >&2
@@ -394,6 +444,27 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "arrived. Your task is NOT complete. Those messages landed after you\n")
 	fmt.Fprintf(&b, "wrote your answer, so fold them in and call it once more:\n\n")
 	fmt.Fprintf(&b, "  bash %s/task-done %s \"<updated answer>\" final\n\n", scriptsDir, cfg.TaskID)
+	if c := strings.TrimSpace(cfg.Check); c != "" {
+		// Stated here as well as handed back by the gate. The 202 arrives
+		// when the worker has already written its answer, which is the
+		// worst moment to discover it should have been testing something
+		// — it has to reconstruct context it was about to drop. Knowing
+		// up front makes the check part of the work rather than an
+		// after-the-fact defence of it.
+		fmt.Fprintf(&b, "### Your end condition\n\n")
+		fmt.Fprintf(&b, "This task carries a check. Your answer is not accepted until you\n")
+		fmt.Fprintf(&b, "run it and report what it showed:\n\n")
+		fmt.Fprintf(&b, "  %s\n\n", c)
+		fmt.Fprintf(&b, "Run it as part of the work, not after it. Then pass the result:\n\n")
+		fmt.Fprintf(&b, "  bash %s/task-done %s \"<answer>\" final 0 \"<what the check showed>\"\n\n",
+			scriptsDir, cfg.TaskID)
+		fmt.Fprintf(&b, "Report what it ACTUALLY showed. A result that contradicts your\n")
+		fmt.Fprintf(&b, "answer is the valuable one — it means the check did its job, and\n")
+		fmt.Fprintf(&b, "the right response is to correct the answer, not the check. A check\n")
+		fmt.Fprintf(&b, "that only ever confirms is not a check.\n\n")
+		fmt.Fprintf(&b, "If you call task-done without a result, it exits 5 and hands the\n")
+		fmt.Fprintf(&b, "check back. Your task is NOT complete at that point.\n\n")
+	}
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")

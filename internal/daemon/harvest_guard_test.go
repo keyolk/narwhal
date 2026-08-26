@@ -58,7 +58,7 @@ func TestBothRecoveryPathsAgreeOnWhatIsHarvestable(t *testing.T) {
 
 	// The adoption path, on the same state.
 	adopted := false
-	if outcome, ok := readOutcome("r1", "task-1"); ok {
+	if outcome, _, ok := readOutcome("r1", "task-1"); ok {
 		adopted = harvestable(run.GetTask("task-1").CurrentState())
 		_ = outcome
 	}

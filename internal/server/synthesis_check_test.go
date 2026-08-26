@@ -37,7 +37,10 @@ func TestSynthesisMayCheckTheNumberItPublishes(t *testing.T) {
 	if j := strings.Index(para, "\n\n"); j > 0 {
 		para = para[:j]
 	}
-	if !strings.Contains(para, "verify") && !strings.Contains(para, "spot-check") {
+	// The carve-out moved into the task's "check" field, so the
+	// prohibition must point at it rather than restate it — but it must
+	// still point, or the rule reads as absolute again.
+	if !strings.Contains(para, "check") {
 		t.Errorf("the prohibition has no carve-out for checking the headline:\n%s", para)
 	}
 }
@@ -57,7 +60,16 @@ func TestTheSynthesisExampleTellsItToConfirmTheHeadline(t *testing.T) {
 	if j := strings.Index(example, "\n\n"); j > 0 {
 		example = example[:j]
 	}
-	if !strings.Contains(example, "confirm") && !strings.Contains(example, "verify") {
+	// Case-insensitive: the instruction now leads the "check" field, so
+	// it is capitalised. What matters is that the example the planner
+	// copies carries it, not which letter it starts with.
+	lower := strings.ToLower(example)
+	if !strings.Contains(lower, "confirm") && !strings.Contains(lower, "verify") {
 		t.Errorf("the synthesis example the planner copies never mentions confirming the number:\n%s", example)
+	}
+	// And it must be in the check field, where the gate will ask for it,
+	// rather than only in the assignment prose the worker may skim past.
+	if !strings.Contains(example, `"check"`) {
+		t.Errorf("the synthesis example sets no check, so the gate has nothing to ask for:\n%s", example)
 	}
 }

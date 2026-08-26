@@ -103,6 +103,12 @@ func RestoreRun(s Snapshot) *Run {
 			// un-spend it. Dropping it here would make a daemon restart
 			// look like a run that got cheaper.
 			Usage: ts.Usage,
+			// The end condition and its answer are durable for the same
+			// reason. A restored task that lost its check would complete
+			// without being asked, and a restored task that lost its
+			// answer would be asked a second time for work already done.
+			Check:       ts.Check,
+			CheckResult: ts.CheckResult,
 		}
 		// Dispatch history is rebuilt from the count, which is all the
 		// snapshot keeps. The statuses follow from the task's own state:

@@ -92,11 +92,17 @@ Two of its standards are ones narwhal can be held to:
    synthesis — was an argument from the price list, not an observation.
    Measured across the backlog once accounting existed: 93 tasks in 27 runs
    are recoverable, 5.6M output tokens, and **5 tasks were served by a
-   different tier than they asked for** — three of them a `synthesis` that
-   requested opus and got haiku, which is precisely the task the economics
-   split says needs the frontier model. 80 dispatched tasks predate the
-   launcher pinning session ids and cannot be measured at all, so every
-   total over the backlog is a floor.
+   different tier than they asked for**. Counting where they fell found the
+   cause — all 5 are interactive runs and the batch runs have none, because
+   the two dispatch paths built their worker config by hand and only one
+   passed the task's model. Fixed in #44 by giving both one constructor.
+   80 dispatched tasks predate the launcher pinning session ids and cannot
+   be measured at all, so every total over the backlog is a floor.
+
+   Worth recording as method: the defect was invisible for the life of the
+   feature and was not found by reading the two dispatch sites, which look
+   nothing alike. It was found by counting an artifact — the same thing
+   this file says below about every other defect in this repo.
 
 2. **A task-specified end-condition evaluated after each turn.** narwhal's
    `task-done` gate checked that deps finished, not that the work was

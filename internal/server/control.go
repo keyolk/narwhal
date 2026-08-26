@@ -188,11 +188,8 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 func DispatchTask(reg *broker.AgentRegistry, l *launcher.Launcher, run *broker.Run, task *broker.Task) error {
 	agentID := "worker-" + task.ID
 	agent := reg.Register(agentID, run.ID, false)
-	cfg := launcher.WorkerConfig{
-		AgentID:    agentID,
-		TaskID:     task.ID,
-		Assignment: task.Assignment,
-	}
+	cfg := launcher.WorkerConfigFor(task)
+	cfg.AgentID = agentID
 	agentDir, err := l.SetupAgent(agent, cfg)
 	if err != nil {
 		return fmt.Errorf("setup agent: %w", err)

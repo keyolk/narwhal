@@ -15,7 +15,7 @@ serves that tier and handles account routing and quota.
 
 ## Status
 
-Functional. 551 unit tests (race-clean), 8 end-to-end experiments with real
+Functional. 554 unit tests (race-clean), 8 end-to-end experiments with real
 Claude Code workers, and a benchmark slice against SWE-Atlas QnA.
 
 ## Quick Start
@@ -96,18 +96,22 @@ Usage
   TOTAL                out=33.9k    in=50       cache=1.6M     turns=22
 ```
 
-The arrow is the reason this exists. The model tier a task asks for is not
-necessarily the one that serves it: ccproxy routes on account and quota,
-and narwhal only ever knew what it requested. The transcript knows what
-ran. Across the 47 runs on disk, 13 tasks named a tier explicitly and
-**5 were served by the other model** — including three `synthesis` tasks
-that asked for opus and got haiku, which is exactly the task the economics
-split above says needs the frontier model. The run shown here is a
-cheap-workers experiment in which both workers ran on opus.
+The arrow is the reason this exists, and the first thing it found was a
+bug in narwhal rather than a routing decision. Across the 47 runs on disk,
+13 tasks named a tier explicitly and **5 were served by the other model**
+— and all 5 are interactive runs, while the batch runs have none. The two
+dispatch paths built their worker config by hand and had drifted: the
+batch coordinator passed the task's model and the interactive path did
+not, so a tier the planner chose reached the graph, the monitor and the
+snapshot, and never reached the worker. It had been that way for the life
+of the feature. Both paths now share one constructor.
 
-So the Cursor economics split is a lever, not a guarantee, and a run that
-silently did not get it looks identical to one that did unless something
-counts. `narwhal backfill` recovers the accounting for runs that finished
+That is what accounting is for. The tier a task asks for is still not
+guaranteed to be the one that serves it — whatever fronts the API decides
+that — but until the numbers existed there was no way to tell a routing
+decision from a dropped field, and no reason to look.
+
+`narwhal backfill` recovers the accounting for runs that finished
 before this existed; 93 tasks across 27 runs are recoverable that way, and
 80 dispatched tasks predate the launcher pinning session ids and cannot be
 measured at all — so a total over the backlog is a floor, and the report

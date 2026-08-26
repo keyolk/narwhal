@@ -212,12 +212,7 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 	agentID := fmt.Sprintf("worker-%s", task.ID)
 	agent := c.registry.Register(agentID, c.run.ID, false)
 
-	cfg := launcher.WorkerConfig{
-		AgentID:    agentID,
-		TaskID:     task.ID,
-		Assignment: task.Assignment,
-		Model:      task.CurrentModel(),
-	}
+	cfg := launcher.WorkerConfigFor(task)
 	// The synthesis task integrates peer findings — it needs frontier
 	// intelligence even when the investigation workers do not. Apply the
 	// config-level synthesis model unless the planner already set a

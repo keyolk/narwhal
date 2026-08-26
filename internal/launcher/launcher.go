@@ -36,6 +36,39 @@ type WorkerConfig struct {
 	Assignment    string
 	IsCoordinator bool
 	Model         string // --model flag for claude; empty = ccproxy default
+	// Check is the end condition this task must answer before it can
+	// complete. Empty for most tasks. It goes in the instructions so the
+	// worker can run it while it still has the context to, rather than
+	// meeting it for the first time as a 202 at task-done.
+	Check string
+}
+
+// WorkerConfigFor builds the config for a task's worker.
+//
+// One function, because there were two sites building this by hand and
+// they drifted: the batch coordinator passed the task's model and the
+// interactive path did not, so a tier the planner chose reached the
+// graph, the monitor and the snapshot and never reached the worker. It
+// went unnoticed for the life of the feature — of the 13 tasks on disk
+// that named a tier, the 5 served by a different model are all
+// interactive runs and the batch runs have none. Token accounting is
+// what made that countable.
+//
+// It lives here rather than in either dispatcher because both of them
+// already depend on this package, and because the lesson is the one
+// Task.snapshot() records: adding a field to WorkerConfig must not
+// require remembering a second site.
+func WorkerConfigFor(task *broker.Task) WorkerConfig {
+	return WorkerConfig{
+		AgentID:    "worker-" + task.ID,
+		TaskID:     task.ID,
+		Assignment: task.Assignment,
+		Model:      task.CurrentModel(),
+		// The end condition travels with the assignment. A worker that
+		// first meets its check as a 202 has already written its answer
+		// and dropped the context it needed to test it.
+		Check: task.CurrentCheck(),
+	}
 }
 
 // Launcher owns worker process lifecycle for a Run.
@@ -411,6 +444,27 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "arrived. Your task is NOT complete. Those messages landed after you\n")
 	fmt.Fprintf(&b, "wrote your answer, so fold them in and call it once more:\n\n")
 	fmt.Fprintf(&b, "  bash %s/task-done %s \"<updated answer>\" final\n\n", scriptsDir, cfg.TaskID)
+	if c := strings.TrimSpace(cfg.Check); c != "" {
+		// Stated here as well as handed back by the gate. The 202 arrives
+		// when the worker has already written its answer, which is the
+		// worst moment to discover it should have been testing something
+		// — it has to reconstruct context it was about to drop. Knowing
+		// up front makes the check part of the work rather than an
+		// after-the-fact defence of it.
+		fmt.Fprintf(&b, "### Your end condition\n\n")
+		fmt.Fprintf(&b, "This task carries a check. Your answer is not accepted until you\n")
+		fmt.Fprintf(&b, "run it and report what it showed:\n\n")
+		fmt.Fprintf(&b, "  %s\n\n", c)
+		fmt.Fprintf(&b, "Run it as part of the work, not after it. Then pass the result:\n\n")
+		fmt.Fprintf(&b, "  bash %s/task-done %s \"<answer>\" final 0 \"<what the check showed>\"\n\n",
+			scriptsDir, cfg.TaskID)
+		fmt.Fprintf(&b, "Report what it ACTUALLY showed. A result that contradicts your\n")
+		fmt.Fprintf(&b, "answer is the valuable one — it means the check did its job, and\n")
+		fmt.Fprintf(&b, "the right response is to correct the answer, not the check. A check\n")
+		fmt.Fprintf(&b, "that only ever confirms is not a check.\n\n")
+		fmt.Fprintf(&b, "If you call task-done without a result, it exits 5 and hands the\n")
+		fmt.Fprintf(&b, "check back. Your task is NOT complete at that point.\n\n")
+	}
 	fmt.Fprintf(&b, "Do NOT modify files unless your assignment explicitly says to.\n")
 	fmt.Fprintf(&b, "\n## The environment thread\n\n")
 	fmt.Fprintf(&b, "Post to the \"environment\" thread when you learn something about the\n")

@@ -15,7 +15,7 @@ serves that tier and handles account routing and quota.
 
 ## Status
 
-Functional. 554 unit tests (race-clean), 8 end-to-end experiments with real
+Functional. 562 unit tests (race-clean), 8 end-to-end experiments with real
 Claude Code workers, and a benchmark slice against SWE-Atlas QnA.
 
 ## Quick Start
@@ -604,6 +604,26 @@ make daemon-restart   # reinstall, then restart the daemon detached
 will not overwrite a running Mach-O in place, and the failure mode is not
 an error message — the binary is left in a state where every invocation
 dies with SIGKILL.
+
+Installing does not touch a **running daemon**, and it should not: it
+serves live workers, and killing it under them to pick up a new binary
+would be worse than finishing a run on the old code. But the two do drift,
+so `daemon status` says which build is actually serving:
+
+```json
+{"running": true, "pid": 56644, "version": "0c38ff2", "stale": true,
+ "hint": "the running daemon is build 0c38ff2 but d398125 is installed;
+          run `make daemon-restart` or runs will keep being served by the
+          old code"}
+```
+
+The MCP server prints the same warning when it attaches to a stale daemon.
+This is worth its own field because the alternative is finding out
+afterwards: run `s1787888345056-2` was a four-worker run served by a
+daemon four days older than the installed binary, and it recorded no token
+accounting at all — the code that measures it had been installed but was
+not what was running. Its `harness_version` stamp (#40) says so, and a
+stamp on a finished run arrives too late to act on.
 
 ## License
 

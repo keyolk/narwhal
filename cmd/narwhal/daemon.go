@@ -44,7 +44,7 @@ func daemonCmd(args []string) {
 // one, tried to stop it, and aborted the whole restart on that failure —
 // leaving no daemon at all after an install.
 func daemonStatus() (string, int) {
-	out, _ := nd.StatusJSON()
+	out, _ := nd.StatusJSONFor(version)
 	if _, err := nd.Status(); err != nil {
 		return string(out), 1
 	}
@@ -117,9 +117,17 @@ func daemonStart(args []string) {
 	if err := nd.WriteState(lock, os.Getpid(), addr); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: write daemon state: %v\n", err)
 	}
+	// Which build is serving. A daemon outlives installs by design, so
+	// without this the only record of the gap is a finished run's
+	// harness_version — read after the run it affected, which is too
+	// late to act on.
+	if err := nd.WriteVersion(version); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: write daemon version: %v\n", err)
+	}
 	defer nd.ClearState()
 
-	fmt.Fprintf(os.Stderr, "[narwhal] daemon listening on %s (pid %d)\n", addr, os.Getpid())
+	fmt.Fprintf(os.Stderr, "[narwhal] daemon listening on %s (pid %d, build %s)\n",
+		addr, os.Getpid(), version)
 	if !*foreground {
 		fmt.Printf("%s\n", addr)
 	}

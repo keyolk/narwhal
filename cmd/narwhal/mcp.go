@@ -25,6 +25,22 @@ func mcpCmd(args []string) {
 
 	resolve := func() (string, error) {
 		if info, err := nd.Status(); err == nil {
+			// A running daemon is used whatever build it is — killing
+			// one out from under live workers to pick up a new binary
+			// would be worse than serving a run on the old code. But say
+			// so, because the alternative is what happened on
+			// s1787888345056-2: a four-worker run served by a daemon
+			// four days older than the installed binary, recording no
+			// accounting because the code that measures it was not the
+			// code that was running. The stamp on the finished run is
+			// the only other evidence, and it arrives after the run.
+			if stale, running := nd.Stale(version); stale {
+				fmt.Fprintf(os.Stderr,
+					"[narwhal-mcp] warning: daemon is build %s, this binary is %s.\n"+
+						"[narwhal-mcp] runs will be served by the old code until "+
+						"`make daemon-restart`.\n",
+					orUnknownBuild(running), version)
+			}
 			return info.URL, nil
 		}
 		if *noAutoStart {
@@ -38,6 +54,15 @@ func mcpCmd(args []string) {
 		fmt.Fprintf(os.Stderr, "[narwhal-mcp] %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// orUnknownBuild names a daemon that recorded no version — one predating
+// the field, which is itself old.
+func orUnknownBuild(v string) string {
+	if v == "" {
+		return "(unstamped)"
+	}
+	return v
 }
 
 // autoStartDaemon launches a detached daemon and waits for it to publish

@@ -92,11 +92,16 @@ func WriteState(lockFile *os.File, pid int, url string) error {
 	return writeFileAtomic(urlFilePath(), []byte(url), 0o600)
 }
 
-// ClearState removes the pid/port/url files on shutdown.
+// ClearState removes the pid/port/url/version files on shutdown.
+//
+// The version goes with the rest: a file left behind by a dead daemon
+// would answer for the next one, and the staleness check would compare
+// the installed binary against a daemon that is not there.
 func ClearState() {
 	os.Remove(pidFilePath())
 	os.Remove(portFilePath())
 	os.Remove(urlFilePath())
+	os.Remove(versionFilePath())
 }
 
 func readPID() (int, error) {
@@ -220,13 +225,49 @@ func activeWorkers(baseURL string) (int, error) {
 	return n, nil
 }
 
+// StatusJSONFor is StatusJSON plus the staleness verdict against the
+// binary asking. The caller passes its own version because only it knows
+// what build it is; the daemon package must not import main.
+func StatusJSONFor(current string) ([]byte, error) {
+	info, err := Status()
+	if err != nil {
+		return json.Marshal(map[string]any{"running": false, "error": err.Error()})
+	}
+	out := map[string]any{"running": true, "pid": info.PID, "url": info.URL}
+	stale, running := Stale(current)
+	if running != "" {
+		out["version"] = running
+	}
+	if stale {
+		out["stale"] = true
+		// Named rather than left to be inferred from two version
+		// strings: the reader has to know what to do, and what to do is
+		// restart the daemon.
+		out["hint"] = "the running daemon is build " + orUnknown(running) +
+			" but " + current + " is installed; run `make daemon-restart`" +
+			" or runs will keep being served by the old code"
+	}
+	return json.Marshal(out)
+}
+
+func orUnknown(v string) string {
+	if v == "" {
+		return "(unstamped, predating this field)"
+	}
+	return v
+}
+
 // StatusJSON renders the daemon status for machine consumption.
 func StatusJSON() ([]byte, error) {
 	info, err := Status()
 	if err != nil {
 		return json.Marshal(map[string]any{"running": false, "error": err.Error()})
 	}
-	return json.Marshal(map[string]any{"running": true, "pid": info.PID, "url": info.URL})
+	out := map[string]any{"running": true, "pid": info.PID, "url": info.URL}
+	if v := RunningVersion(); v != "" {
+		out["version"] = v
+	}
+	return json.Marshal(out)
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {

@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 func toolDefinitions() []map[string]any {
@@ -66,7 +68,8 @@ func toolDefinitions() []map[string]any {
 				"with peers while it works. Returns the run id and per-worker dispatch state. " +
 				"Choose this when you already know how the work splits; use narwhal_plan when " +
 				"a planner agent should work the split out first. Not for work you can finish " +
-				"yourself in a few steps.",
+				"yourself in a few steps.\n\n" +
+				"You are building a DAG, not a list of errands. " + broker.SynthesisContract,
 			"inputSchema": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -100,7 +103,17 @@ func toolDefinitions() []map[string]any {
 								"deps": map[string]any{
 									"type":        "array",
 									"items":       map[string]any{"type": "string"},
-									"description": "Task ids that must complete first. Omit for independent work.",
+									"description": broker.DepsContract,
+								},
+								"model": map[string]any{
+									"type": "string",
+									"description": "Model tier for this worker (e.g. haiku, sonnet, opus). " +
+										"Omit for ccproxy rotation. Narrow investigation is cheap work; " +
+										"a synthesis task integrates peer findings and wants a frontier tier.",
+								},
+								"check": map[string]any{
+									"type":        "string",
+									"description": broker.CheckContract,
 								},
 							},
 							"required": []string{"assignment"},
@@ -243,7 +256,7 @@ func (s *Server) spawn(base string, args json.RawMessage) (string, error) {
 	if err != nil {
 		return out, err
 	}
-	return annotateDuplicate(out), nil
+	return annotateGraphGap(annotateDuplicate(out)), nil
 }
 
 // annotateDuplicate turns the duplicate_of field into something the reader
@@ -265,6 +278,23 @@ func annotateDuplicate(out string) string {
 		" may have been left mid-flight by a daemon restart — in which case its" +
 		" results are on disk and narwhal_status will show them. This run was" +
 		" started anyway; cancel it with narwhal_cancel if it was not intended."
+}
+
+// annotateGraphGap surfaces the server's graph_gap field the same way.
+//
+// The gap is a judgement the caller can overrule — a flat fan-out is
+// sometimes right — but it has to be read to be overruled, and a key in a
+// JSON blob beside session_dir and a worker array is not read. What it
+// reports is the thing the runs on disk kept missing: workers spawned with
+// no task to reconcile them and no end condition on any of them.
+func annotateGraphGap(out string) string {
+	var resp struct {
+		GraphGap string `json:"graph_gap"`
+	}
+	if json.Unmarshal([]byte(out), &resp) != nil || resp.GraphGap == "" {
+		return out
+	}
+	return out + "\n\nGRAPH GAP: " + resp.GraphGap
 }
 
 func (s *Server) post(url string, body []byte) (string, error) {

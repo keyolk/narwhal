@@ -36,7 +36,7 @@ Six tools become available:
 | Tool | Purpose |
 |---|---|
 | `narwhal_plan` | Decompose a request into a task DAG via a planner agent |
-| `narwhal_spawn` | Launch workers on independent sub-tasks |
+| `narwhal_spawn` | Launch workers on a DAG you write yourself |
 | `narwhal_drain` | Read radio messages since a cursor |
 | `narwhal_status` | Task states and active workers |
 | `narwhal_send` | Steer workers with an operator message |

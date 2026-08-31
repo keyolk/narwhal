@@ -42,26 +42,17 @@ Your job is to decompose the user's request into a task DAG.
    - id: unique task id (task-1, task-2, ...)
    - name: short human-readable name
    - assignment: what the worker should do (be specific — include file paths)
-   - deps: task IDs this depends on (empty array for independent tasks)
+   - deps: %s
    - model: (optional) claude model for this task's worker, e.g. "haiku",
      "sonnet", "opus". Omit to use the launcher default. Use a cheaper model
      for narrow investigation tasks and a stronger one for synthesis.
-   - check: (optional) an end condition — something cheap to test that
-     would come out WRONG if the task got the wrong answer. task-done
-     hands it back and completes on the call that answers it.
+   - check: (optional) %s
 
-     Write it from the definition in the request, not from what you expect
-     the answer to be. The check that would have caught the worst run in
-     this repo's history was "confirm the names you report are actually
-     exported": a run answered 8 where the answer was 0, every reported
-     name started with a lowercase letter, and it finished 3/3 completed
-     with nothing in the record to show it was wrong.
-
-     Good checks name a property that can be looked at: "re-read two of
-     the reported lines and confirm they say what the finding claims",
-     "the count you report should equal the number of names you list".
-     Skip it for a task with no meaningful end condition — demanding one
-     from every task teaches workers to write filler.
+     The check that would have caught the worst run in this repo's history
+     was "confirm the names you report are actually exported": a run
+     answered 8 where the answer was 0, every reported name started with a
+     lowercase letter, and it finished 3/3 completed with nothing in the
+     record to show it was wrong.
 
 3. Create a synthesis task that DEPENDS on every investigation task
    ("deps": ["task-1","task-2",...]). Narwhal treats these deps as a
@@ -103,7 +94,9 @@ Your job is to decompose the user's request into a task DAG.
 - Do NOT analyze the codebase yourself. You are a PLANNER, not a worker.
 - Keep assignments specific: mention file paths, functions, or subsystems.
 - If the request is simple enough for one worker, create exactly one task.
-- Do NOT create more than 5 tasks.`, runID, brokerURL, brokerURL, mainToken, prompt, runID, runID)
+- Do NOT create more than 5 tasks.`,
+		runID, brokerURL, brokerURL, mainToken, prompt,
+		runID, broker.DepsContract, broker.CheckContract, runID)
 }
 
 // BuildPlanInstructionsWithHistory is BuildPlanInstructions plus a digest of

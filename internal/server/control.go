@@ -18,6 +18,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -89,11 +91,17 @@ func checkDir(path string) error {
 }
 
 // spawnWorkerSpec describes one worker the caller wants launched.
+//
+// The field set matches the task-create API body in server.go on purpose.
+// Check was missing here while that path had it, so a run built through
+// narwhal_spawn could not carry an end condition at all — and of the last
+// six runs on disk, all six were spawned and all six recorded check=none.
 type spawnWorkerSpec struct {
 	Name       string   `json:"name"`
 	Assignment string   `json:"assignment"`
 	Deps       []string `json:"deps"`
 	Model      string   `json:"model"`
+	Check      string   `json:"check"`
 }
 
 // handleSpawn creates a run (or adds to an existing one) and launches a
@@ -163,10 +171,19 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 
 		task := run.AddTask(taskID, name, spec.Assignment, spec.Deps)
 		task.SetModel(spec.Model)
+		task.SetCheck(spec.Check)
 
 		note := "queued; the dispatcher will launch it shortly"
 		if task.CurrentState() != broker.TaskReady {
-			note = "waiting on deps; will launch when they complete"
+			// A synthesis task is pending on its deps and launched anyway
+			// — DispatchableTasks makes that exception so it can listen
+			// while its peers work. Reporting it as waiting would describe
+			// the state field rather than what happens next.
+			if task.IsSynthesis() {
+				note = "pending on deps but launched immediately; task-done blocks until they finish"
+			} else {
+				note = "waiting on deps; will launch when they complete"
+			}
 		}
 		launched = append(launched, map[string]any{
 			"task_id": taskID,
@@ -175,11 +192,65 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"run_id":      req.RunID,
 		"workers":     launched,
 		"session_dir": l.SessionDir(),
-	})
+	}
+	if gap := graphGap(run); gap != "" {
+		resp["graph_gap"] = gap
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// graphGap reports what a multi-worker run is missing, or "" when it is
+// well-formed.
+//
+// It exists because the spawn path had no way to say this and the plan path
+// did. A planner is told at length to create a synthesis task and to give
+// tasks end conditions; a caller of narwhal_spawn was told neither, and the
+// runs show it — every run built by a planner carries deps and a synthesis
+// task, and the six most recent, all spawned, carry neither, nor a single
+// check between them.
+//
+// Reported rather than refused, for the same reason the duplicate note is:
+// a flat fan-out is sometimes exactly right, and a hard error on a judgement
+// call teaches callers to route around the check.
+func graphGap(run *broker.Run) string {
+	tasks := run.SnapshotTasks()
+	if len(tasks) < 2 {
+		return ""
+	}
+	hasSynthesis := false
+	checked := 0
+	for _, t := range tasks {
+		if isSynthesisTask(run, t.ID) {
+			hasSynthesis = true
+		}
+		if strings.TrimSpace(t.Check) != "" {
+			checked++
+		}
+	}
+	var missing []string
+	if !hasSynthesis {
+		missing = append(missing, "no synthesis task: "+broker.SynthesisContract)
+	}
+	if checked == 0 {
+		missing = append(missing, "no task carries an end condition: "+broker.CheckContract)
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return "This run has " + strconv.Itoa(len(tasks)) + " tasks. " +
+		strings.Join(missing, " ") +
+		" Add what is missing with another narwhal_spawn call on this run_id."
+}
+
+// isSynthesisTask asks the run rather than re-deriving the naming rule, so
+// this cannot disagree with the dispatcher about which task is synthesis.
+func isSynthesisTask(run *broker.Run, taskID string) bool {
+	t := run.GetTask(taskID)
+	return t != nil && t.IsSynthesis()
 }
 
 // DispatchTask registers an agent for a ready task, sets up its workspace,

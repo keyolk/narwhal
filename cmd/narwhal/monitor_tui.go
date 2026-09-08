@@ -420,6 +420,12 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Under a Korean input source the shortcut keys arrive as jamo (`q` -> `ㅂ`).
+	// Rewrite them to the Latin key at the same physical position so shortcuts
+	// fire without switching the input source back. Unconditional: the monitor
+	// has no text entry, so no key is ever meant as a literal character.
+	msg = normalizeCJKKey(msg)
+
 	if m.picker {
 		return m.handlePickerKey(msg)
 	}

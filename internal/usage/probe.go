@@ -2,8 +2,10 @@ package usage
 
 import (
 	"log"
+	"os"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/jev"
 )
 
 // TranscriptProbe measures a task by reading its worker's Claude session
@@ -47,8 +49,17 @@ func (TranscriptProbe) TaskUsage(runID, taskID string) *broker.Usage {
 // SetUsageProbe is the shape of defect this codebase has hit before —
 // Model was omitted from one of two snapshot builders and 143 tasks
 // recorded no tier as a result. A constructor cannot be half-applied.
+//
+// It installs the Jev judge on the same reasoning: a dispatch rule that
+// applies to the runs one constructor made and not another's is the
+// half-applied rule this function exists to prevent. NARWHAL_JEV=off turns
+// it off; a machine with no gateway key gets a judge that is always
+// undecided, which is the same as none.
 func NewBroker() *broker.Broker {
 	b := broker.New()
 	b.SetUsageProbe(TranscriptProbe{})
+	if os.Getenv("NARWHAL_JEV") != "off" {
+		b.SetJudge(jev.New())
+	}
 	return b
 }

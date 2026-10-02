@@ -322,6 +322,11 @@ type Run struct {
 	// usageProbe measures a task's cost when it stops running. Nil in
 	// tests that do not care about accounting. Guarded by mu.
 	usageProbe UsageProbe
+
+	// judge weighs in on dispatch calls made on thin evidence; verdicts is
+	// what it said. Both guarded by mu. See judge.go.
+	judge    Judge
+	verdicts []Verdict
 }
 
 // ClaimFiles records ownership of paths for a task. Paths already held by
@@ -550,6 +555,8 @@ type Broker struct {
 	// of the five call sites of CreateRun has to remember. Nil by
 	// default: a broker in a test measures nothing.
 	usageProbe UsageProbe
+	// judge is handed to every run for the same reason usageProbe is.
+	judge Judge
 }
 
 // New returns a fresh empty Broker.
@@ -568,6 +575,14 @@ func New() *Broker {
 func (b *Broker) SetUsageProbe(p UsageProbe) {
 	b.mu.Lock()
 	b.usageProbe = p
+	b.mu.Unlock()
+}
+
+// SetJudge installs the judge every run created or restored by this broker
+// will consult. Nil, the default, keeps every dispatch call as it was.
+func (b *Broker) SetJudge(j Judge) {
+	b.mu.Lock()
+	b.judge = j
 	b.mu.Unlock()
 }
 
@@ -592,6 +607,7 @@ func (b *Broker) CreateRun(id, prompt, cwd, coordinator string) *Run {
 	}
 	b.mu.Lock()
 	r.usageProbe = b.usageProbe
+	r.judge = b.judge
 	b.runs[id] = r
 	b.mu.Unlock()
 	return r
@@ -712,27 +728,6 @@ func isSynthesisName(name, assignment string) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(assignment), "synthesis task")
-}
-
-// AgentPostedToRadio reports whether an agent sent any message to the
-// run's radio channel.
-//
-// A worker that posted findings but exited without calling task-done still
-// produced usable output — peers and the synthesis task can drain it — so
-// the dispatcher marks the task complete rather than retrying and spending
-// another full worker run on work already done.
-//
-// This lives on the Run because both dispatchers need it. The check
-// existed on the batch coordinator only, and the interactive path failed
-// tasks whose workers had posted their findings — the same
-// one-dispatcher-knows-the-rule split that DispatchableTasks had.
-func (r *Run) AgentPostedToRadio(agentID string) bool {
-	for _, m := range r.MessagesSince(0) {
-		if m.Sender == agentID {
-			return true
-		}
-	}
-	return false
 }
 
 // GetTask returns a task by id within the run.
@@ -1160,10 +1155,14 @@ type Snapshot struct {
 	// meaningful: it marks a run whose failures cannot be attributed to
 	// the decomposition, because the harness of that week was itself
 	// producing them. See harness_version.go.
-	HarnessVersion string           `json:"harness_version,omitempty"`
-	Tasks          []TaskSnapshot   `json:"tasks"`
-	Threads        []ThreadSnapshot `json:"threads"`
-	Messages       []*Message       `json:"messages"`
+	HarnessVersion string `json:"harness_version,omitempty"`
+	// Verdicts are the judgements made on this run's dispatch calls. They
+	// are durable because they explain a task's fate: a task retried on a
+	// verdict reads, without it, as a worker that failed for no reason.
+	Verdicts []Verdict        `json:"verdicts,omitempty"`
+	Tasks    []TaskSnapshot   `json:"tasks"`
+	Threads  []ThreadSnapshot `json:"threads"`
+	Messages []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1246,6 +1245,7 @@ func (r *Run) Snapshot() Snapshot {
 		CWD:            r.CWD,
 		StartedAt:      r.CreatedAt.Unix(),
 		HarnessVersion: HarnessVersion(),
+		Verdicts:       append([]Verdict(nil), r.verdicts...),
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

@@ -239,12 +239,23 @@ func (m tuiModel) activityLabel(start, end, total int) string {
 	return styDim.Render(label + pos)
 }
 
-// nodeActivityLines is the worker's full activity, rendered to width.
-//
-// Kept for callers that genuinely need every line. The pane itself uses
-// nodeActivitySlice, because rendering hundreds of lines to display six is
-// the difference between a 2.4ms frame and a 0.2ms one.
+// nodeActivityLines is the worker's activity as the node pane shows it:
+// its prose, with the tool calls between paragraphs folded to one line.
+// See renderNarrative for why the pane does not show every call.
 func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
+	if sid := m.workerSessionID(taskID); sid != "" {
+		if lines := globalTranscripts.renderNarrative(
+			transcriptPath(m.live.CWD, sid), width); len(lines) > 0 {
+			return lines
+		}
+	}
+	return m.workerOutputLines(taskID)
+}
+
+// sessionActivityLines is the worker's full activity — every call and a
+// clip of every result — for the session view, which is where you go to
+// see exactly what it touched.
+func (m tuiModel) sessionActivityLines(taskID string, width int) []string {
 	if sid := m.workerSessionID(taskID); sid != "" {
 		if lines := globalTranscripts.render(
 			transcriptPath(m.live.CWD, sid), width); len(lines) > 0 {

@@ -150,6 +150,9 @@ type tuiModel struct {
 	now         time.Time
 	animated    bool // an animation tick is scheduled
 
+	// briefMode shows the operator's summary in the radio pane's place.
+	briefMode bool
+
 	// steering is the open command line, steerBuf what has been typed into
 	// it, and steerMsg the result of the last send. See steer.go.
 	steering    bool
@@ -528,6 +531,12 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.followZoom()
 	case "3":
 		m.focus = focusRadio
+		m.briefMode = false
+		m.followZoom()
+	case "4":
+		// The operator's summary takes the radio pane's place. See brief.go.
+		m.focus = focusRadio
+		m.briefMode = true
 		m.followZoom()
 	case "z":
 		// Zoom the focused pane to the whole body, tmux-style. A second
@@ -1002,7 +1011,7 @@ func (m tuiModel) View() string {
 	case focusNode:
 		return pinFooter(header+"\n"+m.viewInspector(m.width, bodyHeight), footer, m.height)
 	case focusRadio:
-		return pinFooter(header+"\n"+m.viewRadio(m.width, bodyHeight), footer, m.height)
+		return pinFooter(header+"\n"+m.viewChannel(m.width, bodyHeight), footer, m.height)
 	}
 
 	rightWidth := m.width - leftWidth - 1
@@ -1032,9 +1041,9 @@ func (m tuiModel) View() string {
 		right = lipgloss.JoinVertical(lipgloss.Left,
 			m.viewInspector(rightWidth, inspectHeight-1),
 			"",
-			m.viewRadio(rightWidth, radioHeight))
+			m.viewChannel(rightWidth, radioHeight))
 	} else {
-		right = m.viewRadio(rightWidth, radioHeight)
+		right = m.viewChannel(rightWidth, radioHeight)
 	}
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 
@@ -1641,7 +1650,7 @@ func (m tuiModel) viewFooter() string {
 // the graph navigates, the node scrolls — so the hints follow the focus
 // and stay one line.
 func (m tuiModel) footerKeys() string {
-	parts := []string{"1/2/3 pane"}
+	parts := []string{"1/2/3 pane", "4 brief"}
 	switch m.focus {
 	case focusTasks:
 		parts = append(parts, "hjkl move", "b lanes", "< > width")
@@ -1939,6 +1948,14 @@ func padRows(rows []string, width, height int) string {
 		}
 	}
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+}
+
+// viewChannel is the lower right pane: the radio, or the operator's brief.
+func (m tuiModel) viewChannel(width, height int) string {
+	if m.briefMode {
+		return m.viewBrief(width, height)
+	}
+	return m.viewRadio(width, height)
 }
 
 func (m tuiModel) viewRadio(width, height int) string {

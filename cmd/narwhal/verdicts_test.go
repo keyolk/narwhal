@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -108,5 +109,30 @@ func TestVerdictColourIsWhatTheDispatcherDid(t *testing.T) {
 	}
 	if !strings.Contains(kept, styYellow.Render(verdictBar(0.4))) {
 		t.Errorf("a kept verdict is not yellow: %q", kept)
+	}
+}
+
+// A worker's own question shows the question — that is what the operator
+// needs to read — and counts apart from the dispatcher's verdicts.
+func TestWorkerQuestionShowsWhatWasAsked(t *testing.T) {
+	m := verdictModel(t)
+	m.snap.Verdicts = append(m.snap.Verdicts, broker.Verdict{
+		TaskID: "api", Asker: "worker-api", Question: broker.QuestionWorker,
+		Ask: "Is the TestReplay failure flaky?", P: 0.83, Decided: true, Action: broker.ActionAnswered,
+	})
+	m.taskCur = 0
+	got := ansi.Strip(m.viewInspector(100, 16))
+	if !strings.Contains(got, "asked") || !strings.Contains(got, "0.83  Is the TestReplay failure flaky?") {
+		t.Errorf("worker question not shown:\n%s", got)
+	}
+	if h := ansi.Strip(m.viewHeader()); !strings.Contains(h, "1 asked") {
+		t.Errorf("header does not count the question apart: %q", h)
+	}
+}
+
+func TestUnansweredWorkerQuestionSaysSo(t *testing.T) {
+	v := broker.Verdict{Asker: "worker-x", Ask: "is it mine?", Question: broker.QuestionWorker}
+	if got := ansi.Strip(verdictRow(v, 80)); !strings.Contains(got, "no answer") || !strings.Contains(got, "is it mine?") {
+		t.Errorf("row = %q", got)
 	}
 }

@@ -281,6 +281,19 @@ func (m *tuiModel) absorbLive(activity map[string]agentLive, now time.Time) tea.
 			m.flash[id] = at
 		}
 	}
+	// A worker asking the judge is activity too: light its box when a new
+	// question lands. Counted by position, since verdicts only append.
+	if m.seenChannel && len(m.snap.Verdicts) > m.seenVerdicts {
+		if m.flash == nil {
+			m.flash = map[string]time.Time{}
+		}
+		for _, v := range m.snap.Verdicts[m.seenVerdicts:] {
+			if v.Asker != "" {
+				m.flash[v.TaskID] = now
+			}
+		}
+	}
+	m.seenVerdicts = len(m.snap.Verdicts)
 	m.seenChannel = true
 	if newest > m.lastSeq {
 		m.lastSeq = newest
@@ -298,6 +311,7 @@ func (m *tuiModel) resetLive() {
 	m.pulses = nil
 	m.flash = nil
 	m.lastSeq = 0
+	m.seenVerdicts = 0
 	m.seenChannel = false
 }
 

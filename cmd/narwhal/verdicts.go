@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -40,6 +41,10 @@ func verdictStyle(v broker.Verdict) lipgloss.Style {
 	switch {
 	case !v.Decided:
 		return styDim
+	case v.Asker != "":
+		// A worker's own question: the answer is the worker's to act on,
+		// so it reads as information rather than as an action taken.
+		return styCyan
 	case v.Action == broker.ActionFallback:
 		return styYellow
 	case v.Action == broker.ActionEscalate:
@@ -51,6 +56,9 @@ func verdictStyle(v broker.Verdict) lipgloss.Style {
 
 // verdictRow is one verdict on one line: question, bar, p, what happened.
 func verdictRow(v broker.Verdict, width int) string {
+	if v.Asker != "" {
+		return workerVerdictRow(v, width)
+	}
 	style := verdictStyle(v)
 	label := fmt.Sprintf(" %s %-10s ", icons.fieldJudge, v.Question)
 	if !v.Decided {
@@ -65,6 +73,17 @@ func verdictRow(v broker.Verdict, width int) string {
 		tail += styDim.Render(fmt.Sprintf("  %dms", v.Latency))
 	}
 	return truncate(styDim.Render(label)+style.Render(verdictBar(v.P))+style.Render(tail), width)
+}
+
+// workerVerdictRow is a question a worker asked: the bar and probability,
+// then the question itself, which is the part worth reading.
+func workerVerdictRow(v broker.Verdict, width int) string {
+	head := styDim.Render(fmt.Sprintf(" %s asked ", icons.fieldJudge))
+	if !v.Decided {
+		return truncate(head+styDim.Render(strings.Repeat("·", verdictBarWidth)+" no answer  ")+v.Ask, width)
+	}
+	style := verdictStyle(v)
+	return ansiTruncate(head+style.Render(verdictBar(v.P))+style.Render(fmt.Sprintf(" %.2f  ", v.P))+v.Ask, width)
 }
 
 // taskVerdicts returns the verdicts made about one task, oldest first.
@@ -85,9 +104,11 @@ func verdictSummary(vs []broker.Verdict) string {
 	if len(vs) == 0 {
 		return ""
 	}
-	var sharp, kept, undecided int
+	var sharp, kept, undecided, asked int
 	for _, v := range vs {
 		switch {
+		case v.Asker != "":
+			asked++
 		case !v.Decided:
 			undecided++
 		case v.Sharp():
@@ -106,5 +127,14 @@ func verdictSummary(vs []broker.Verdict) string {
 	if undecided > 0 {
 		parts = append(parts, styDim.Render(fmt.Sprintf("%d undecided", undecided)))
 	}
+	if asked > 0 {
+		parts = append(parts, styCyan.Render(fmt.Sprintf("%d asked", asked)))
+	}
 	return strings.Join(parts, styDim.Render(" · "))
+}
+
+// ansiTruncate fits a styled line to width without counting escape codes as
+// cells or cutting one in half.
+func ansiTruncate(s string, width int) string {
+	return ansi.Truncate(s, width, "…")
 }

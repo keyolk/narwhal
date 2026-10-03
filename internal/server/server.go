@@ -14,6 +14,7 @@
 //	POST /agents/<token>/drain                 non-blocking message check
 //	GET  /agents/<token>/state                 full run state for this agent
 //	POST /agents/<token>/task/<task-id>/done   mark a task completed
+//	POST /agents/<token>/judge                 ask the run's judge a yes/no question
 package server
 
 import (
@@ -241,9 +242,38 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request, parts []str
 		s.handleState(w, agent, run)
 	case "task":
 		s.handleTaskAction(w, r, agent, run, parts[2:])
+	case "judge":
+		s.handleJudge(w, r, agent, run)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// handleJudge answers a worker's yes/no question about some state with the
+// run's judge, and records the verdict on the run. See Run.AskForWorker.
+func (s *Server) handleJudge(w http.ResponseWriter, r *http.Request, agent *broker.Agent, run *broker.Run) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Question string `json:"question"`
+		State    string `json:"state"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Question) == "" || strings.TrimSpace(req.State) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "question and state are both required"})
+		return
+	}
+	v := run.AskForWorker(agent.ID, req.Question, req.State)
+	resp := map[string]any{"decided": v.Decided, "latency_ms": v.Latency}
+	if v.Decided {
+		resp["probability"] = v.P
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request, agent *broker.Agent, run *broker.Run) {

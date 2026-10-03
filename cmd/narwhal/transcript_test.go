@@ -244,3 +244,21 @@ func TestSessionViewShowsActivityWhileTheWorkerRuns(t *testing.T) {
 		t.Errorf("a running worker was reported as not started:\n%s", out)
 	}
 }
+
+// Thinking blocks with text are the clearest view of a worker's reasoning
+// there is; empty ones (a signature with the text withheld) are skipped.
+func TestThinkingWithTextIsKeptAndEmptyIsSkipped(t *testing.T) {
+	lines := []string{
+		`{"type":"assistant","timestamp":"2026-08-13T14:33:01Z","message":{"content":[{"type":"thinking","thinking":"","signature":"x"}]}}`,
+		`{"type":"assistant","timestamp":"2026-08-13T14:33:02Z","message":{"content":[{"type":"thinking","thinking":"the lock key is missing from the payload"}]}}`,
+	}
+	cwd := writeTranscript(t, "s-think", lines)
+	entries := readTranscript(transcriptPath(cwd, "s-think"))
+	if len(entries) != 1 || entries[0].kind != "thinking" {
+		t.Fatalf("entries = %+v, want one thinking entry", entries)
+	}
+	out := strings.Join(renderTranscript(entries, 100), "\n")
+	if !strings.Contains(out, "∴ ") || !strings.Contains(out, "lock key") {
+		t.Errorf("thinking is not marked in the feed:\n%s", out)
+	}
+}

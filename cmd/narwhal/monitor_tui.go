@@ -1167,6 +1167,10 @@ var (
 	styGreenBold = styGreen.Bold(true)
 	styCyanBold  = styCyan.Bold(true)
 	styRedBold   = styRed.Bold(true)
+	// styThought is a worker's extended thinking: the same weight as its
+	// prose, set apart so private reasoning is not mistaken for what it
+	// told its peers.
+	styThought = lipgloss.NewStyle().Italic(true)
 )
 
 // runLabel is the one line that tells a run apart from its neighbours.

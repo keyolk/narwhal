@@ -80,6 +80,9 @@ type snapshotMsg struct {
 	snap   broker.Snapshot
 	agents []string
 	err    error
+	// activity is what each worker is doing, read alongside the snapshot
+	// so the transcripts are never touched on the UI goroutine.
+	activity map[string]agentLive
 }
 
 // runsMsg carries a refreshed list of live runs.
@@ -132,6 +135,20 @@ type tuiModel struct {
 	// nodeScroll is how far the node pane has been scrolled through the
 	// worker's activity, or nodeScrollTail to stay on the newest.
 	nodeScroll int
+
+	// activity is what each worker is doing, gathered on the poll; pulses
+	// are radio messages in flight between boxes; flash is when each task
+	// last sent or received a message. See live.go.
+	activity map[string]agentLive
+	pulses   []pulse
+	flash    map[string]time.Time
+	lastSeq  int64
+	// seenChannel is false until the first snapshot of a run has been
+	// absorbed, so history is not replayed as pulses.
+	seenChannel bool
+	frame       int
+	now         time.Time
+	animated    bool // an animation tick is scheduled
 
 	width  int
 	height int
@@ -186,15 +203,34 @@ func (m tuiModel) poll() tea.Cmd {
 	// read it instead of failing every second against a dead port.
 	if m.live.BrokerURL == "" {
 		runID := m.live.RunID
-		return func() tea.Msg {
+		return m.withActivity(func() tea.Msg {
 			snap, err := store.LoadRun(runID)
 			if err != nil {
 				return snapshotMsg{err: fmt.Errorf("read saved run: %w", err)}
 			}
 			return snapshotMsg{snap: snap}
-		}
+		})
 	}
 
+	return m.withActivity(m.fetchSnapshot())
+}
+
+// withActivity wraps a snapshot fetch so each result also carries what the
+// workers are doing. Both run in the same background command.
+func (m tuiModel) withActivity(fetch tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := fetch().(snapshotMsg)
+		if !ok || msg.snap.RunID == "" {
+			return msg
+		}
+		msg.activity = m.gatherLive(msg.snap, time.Now())
+		return msg
+	}
+}
+
+// fetchSnapshot reads the watched run from its broker, falling back to the
+// copy on disk.
+func (m tuiModel) fetchSnapshot() tea.Cmd {
 	url := m.live.BrokerURL + "/api/v1/monitor/" + m.live.RunID
 	runID := m.live.RunID
 	client := m.client
@@ -311,6 +347,7 @@ func (m *tuiModel) selectRun(i int) tea.Cmd {
 	m.followTail = true
 	m.detail = detailClosed
 	m.detailScroll = 0
+	m.resetLive()
 	return m.poll()
 }
 
@@ -370,7 +407,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if now, ok := m.selectedTask(); hadSelection && (!ok || now.ID != selected.ID) {
 			m.nodeScroll = nodeScrollTail
 		}
-		return m, nil
+		return m, m.absorbLive(msg.activity, time.Now())
+
+	case animMsg:
+		m.now = time.Time(msg)
+		m.frame++
+		m.pulses = prunePulses(m.pulses, m.now)
+		if !m.animating(m.now) {
+			m.animated = false
+			return m, nil
+		}
+		return m, animTick()
 
 	case attachDoneMsg:
 		// The attached session took over the terminal; Bubble Tea has just
@@ -1120,6 +1167,10 @@ var (
 	styGreenBold = styGreen.Bold(true)
 	styCyanBold  = styCyan.Bold(true)
 	styRedBold   = styRed.Bold(true)
+	// styThought is a worker's extended thinking: the same weight as its
+	// prose, set apart so private reasoning is not mistaken for what it
+	// told its peers.
+	styThought = lipgloss.NewStyle().Italic(true)
 )
 
 // runLabel is the one line that tells a run apart from its neighbours.
@@ -1608,6 +1659,12 @@ func (m tuiModel) viewTasks(width, height int) string {
 // selects a task, and the window is positioned to keep its box on screen.
 func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 	rows := m.boxRows(width)
+	now := m.now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	marks := overlayPulses(rows, boxCenters(rows, layoutGraph(m.sortedTasks()).nodes), m.pulses, now)
+	headline := headlineRows(rows)
 	out := make([]string, 0, height)
 	out = append(out, title)
 
@@ -1634,7 +1691,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		if m.focus == focusTasks {
 			selected = m.taskCur
 		}
-		out = append(out, m.styleBoxLine(r, truncate(r.text, width), selected))
+		out = append(out, m.styleBoxLine(r, truncate(r.text, width), selected, marks[i], headline[i]))
 	}
 	return padRows(out, width, height)
 }
@@ -1645,12 +1702,47 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 // matters because siblings share a row: styling the whole line would give
 // three boxes the first one's state, and highlight all three when one is
 // selected. selected is -1 when the graph pane does not have focus.
-func (m tuiModel) styleBoxLine(r boxRow, line string, selected int) string {
+func (m tuiModel) styleBoxLine(r boxRow, line string, selected int, marks map[int]pulseMark,
+	headline map[int]bool) string {
+	runes := []rune(line)
+	// A running box's icon is the spinner's current frame. The swap happens
+	// here rather than in the layout so the layout stays a pure function of
+	// the graph — it is what navigation and its tests measure against.
+	// Only the headline: a box with a detail line has two body rows, and
+	// the second one holds the tool, not an icon.
+	for _, s := range r.spans {
+		t := m.taskByIndex(s.node)
+		if headline[s.node] && t.State == broker.TaskDispatched {
+			if at := s.x0 + 2; at < len(runes) {
+				runes[at] = []rune(spinnerAt(m.frame))[0]
+			}
+		}
+	}
+	// Routing cells are dim, except where a pulse is passing through.
+	dimRun := func(seg []rune, x0 int) string {
+		if len(marks) == 0 {
+			return styDim.Render(string(seg))
+		}
+		var b strings.Builder
+		for i, ch := range seg {
+			mk, ok := marks[x0+i]
+			switch {
+			case !ok:
+				b.WriteString(styDim.Render(string(ch)))
+			case mk.urgent:
+				b.WriteString(styRedBold.Render(string(ch)))
+			case mk.head:
+				b.WriteString(styCyanBold.Render(string(ch)))
+			default:
+				b.WriteString(styCyan.Render(string(ch)))
+			}
+		}
+		return b.String()
+	}
 	if len(r.spans) == 0 {
-		return styDim.Render(line)
+		return dimRun(runes, 0)
 	}
 
-	runes := []rune(line)
 	clamp := func(x int) int {
 		if x < 0 {
 			return 0
@@ -1669,21 +1761,31 @@ func (m tuiModel) styleBoxLine(r boxRow, line string, selected int) string {
 			continue
 		}
 		if x0 > at {
-			b.WriteString(styDim.Render(string(runes[at:x0])))
+			b.WriteString(dimRun(runes[at:x0], at))
 		}
 		seg := string(runes[x0:x1])
+		task := m.taskByIndex(s.node)
+		hot := m.isHot(task.ID)
 		switch {
 		case s.node == selected:
 			b.WriteString(stySel.Render(seg))
 		case s.part == partBody:
-			_, style := taskIconStyle(m.taskByIndex(s.node).State)
+			_, style := taskIconStyle(task.State)
+			if hot {
+				style = style.Bold(true)
+			}
 			b.WriteString(style.Render(seg))
 		case s.part == partTop || s.part == partBottom:
 			// The frame takes its task's colour, faintly, so a box reads as
 			// one object. Dim borders around a coloured label made every
-			// box look like a grey frame someone had written inside.
-			_, style := taskIconStyle(m.taskByIndex(s.node).State)
-			b.WriteString(style.Faint(true).Render(seg))
+			// box look like a grey frame someone had written inside. A box
+			// that just acted or was just spoken to lights its frame.
+			_, style := taskIconStyle(task.State)
+			if hot {
+				b.WriteString(style.Bold(true).Render(seg))
+			} else {
+				b.WriteString(style.Faint(true).Render(seg))
+			}
 		default:
 			// Routing between boxes stays dim: the edges are structure, and
 			// colouring them would compete with the nodes they connect.
@@ -1692,7 +1794,7 @@ func (m tuiModel) styleBoxLine(r boxRow, line string, selected int) string {
 		at = x1
 	}
 	if at < len(runes) {
-		b.WriteString(styDim.Render(string(runes[at:])))
+		b.WriteString(dimRun(runes[at:], at))
 	}
 	return b.String()
 }
@@ -1708,7 +1810,7 @@ func (m tuiModel) taskByIndex(i int) broker.TaskSnapshot {
 
 // boxRows lays out the DAG as boxes for the current snapshot.
 func (m tuiModel) boxRows(width int) []boxRow {
-	return layoutGraph(m.sortedTasks()).renderBoxes(width, taskIconPlain)
+	return layoutGraph(m.sortedTasks()).renderBoxesDetailed(width, taskIconPlain, m.liveDetail)
 }
 
 // taskIconPlain adapts taskIconStyle for the box renderer, which applies

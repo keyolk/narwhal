@@ -27,7 +27,7 @@ import (
 // transcriptEntry is one rendered line of a worker's activity.
 type transcriptEntry struct {
 	at   time.Time
-	kind string // "text", "tool", "result"
+	kind string // "text", "thinking", "tool", "result"
 	text string
 }
 
@@ -187,11 +187,12 @@ func parseContent(raw json.RawMessage, at time.Time) []transcriptEntry {
 	}
 
 	var blocks []struct {
-		Type    string          `json:"type"`
-		Text    string          `json:"text"`
-		Name    string          `json:"name"`
-		Input   json.RawMessage `json:"input"`
-		Content json.RawMessage `json:"content"`
+		Type     string          `json:"type"`
+		Text     string          `json:"text"`
+		Thinking string          `json:"thinking"`
+		Name     string          `json:"name"`
+		Input    json.RawMessage `json:"input"`
+		Content  json.RawMessage `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return nil
@@ -205,6 +206,15 @@ func parseContent(raw json.RawMessage, at time.Time) []transcriptEntry {
 				continue
 			}
 			out = append(out, transcriptEntry{at: at, kind: "text", text: b.Text})
+		case "thinking":
+			// Most thinking blocks are stored as a signature with the text
+			// withheld — 2,590 of 3,423 across five transcripts on this
+			// machine. The ones that do carry text are the clearest view
+			// of the reasoning there is, so keep them; skip the empty ones.
+			if strings.TrimSpace(b.Thinking) == "" {
+				continue
+			}
+			out = append(out, transcriptEntry{at: at, kind: "thinking", text: b.Thinking})
 		case "tool_use":
 			out = append(out, transcriptEntry{
 				at: at, kind: "tool", text: summarizeToolUse(b.Name, b.Input),
@@ -332,6 +342,14 @@ func renderTranscript(entries []transcriptEntry, width int) []string {
 		case "result":
 			for _, l := range clipLines(e.text, 2) {
 				out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
+			}
+		case "thinking":
+			for i, l := range wrapText(e.text, width-len(stamp)-2) {
+				if i == 0 {
+					out = append(out, styDim.Render(stamp)+styMagenta.Render("∴ ")+styThought.Render(l))
+					continue
+				}
+				out = append(out, pad+styThought.Render(l))
 			}
 		default:
 			for i, l := range wrapText(e.text, width-len(stamp)-2) {

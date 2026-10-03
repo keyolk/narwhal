@@ -61,8 +61,21 @@ func (m tuiModel) inspectorHeadline(t broker.TaskSnapshot, width int) string {
 	if t.Name != "" && t.Name != t.ID {
 		name += styDim.Render(" (" + t.Name + ")")
 	}
-	return fmt.Sprintf("%s %s  %s", style.Render(icon), styTitle.Render(name),
+	line := fmt.Sprintf("%s %s  %s", style.Render(icon), styTitle.Render(name),
 		style.Bold(true).Render(string(t.State)))
+	// A worker with a session says how busy it has been and how to open
+	// it. The keys existed and sat at the end of a footer with a dozen
+	// others; on the node you are looking at, they are the next thing to do.
+	if a, ok := m.activity[t.ID]; ok {
+		line += "  " + styCyan.Render(sparkline(a.spark))
+	}
+	if m.workerSessionID(t.ID) != "" {
+		hint := styCyanBold.Render("s") + styDim.Render(" session · ") + styCyanBold.Render("a") + styDim.Render(" attach")
+		if lipgloss.Width(line)+2+lipgloss.Width(hint) <= width {
+			line += "  " + hint
+		}
+	}
+	return line
 }
 
 // inspectorFields renders the one-line facts: model, what it waits on, what

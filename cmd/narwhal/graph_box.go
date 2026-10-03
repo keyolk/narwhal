@@ -152,25 +152,23 @@ func (c *canvas) join(x, y int, r rune) {
 }
 
 // mergeGlyph combines two box-drawing runes into the junction that carries
-// both. Only the cases the router actually produces are handled; anything
-// else keeps the newer glyph.
+// both: the union of their arms.
+//
+// It used to handle three crossings by name and let the newer glyph win
+// everywhere else, so a stroke drawn second could erase the arm a first
+// one needed — a fan-in bar's left end and a detour arriving at the same
+// cell came out as a glyph pointing at neither. Taking the union lets
+// strokes go down in any order.
 func mergeGlyph(a, b rune) rune {
 	if a == ' ' || a == b {
 		return b
 	}
-	const (
-		h = '─'
-		v = '│'
-	)
-	switch {
-	case a == h && b == v, a == v && b == h:
-		return '┼'
-	case a == '┬' && b == v, a == v && b == '┬':
-		return '┼'
-	case a == '┴' && b == v, a == v && b == '┴':
-		return '┼'
+	aa, okA := glyphArms[a]
+	ba, okB := glyphArms[b]
+	if !okA || !okB {
+		return b
 	}
-	return b
+	return glyphFor(aa[0] || ba[0], aa[1] || ba[1], aa[2] || ba[2], aa[3] || ba[3])
 }
 
 func (c *canvas) lines() []string {
@@ -210,6 +208,9 @@ type placedBox struct {
 	label string
 	badge string
 	icon  string
+	// detail is a second body line — what the worker is doing now — or ""
+	// for a one-line box.
+	detail string
 }
 
 // tap returns the column an edge attaches to: the box's horizontal center.
@@ -217,6 +218,15 @@ func (b placedBox) tap() int { return b.x + b.w/2 }
 
 // renderBoxes draws the layout as a diagram sized to fit width.
 func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (string, string)) []boxRow {
+	return g.renderBoxesDetailed(width, iconFor, nil)
+}
+
+// renderBoxesDetailed is renderBoxes with an optional second line per box.
+// detailFor returns what a task is doing now, or "" to keep its box to one
+// line. A row of boxes is as tall as its tallest: routing assumes every
+// box in a row shares its bottom edge.
+func (g graphLayout) renderBoxesDetailed(width int, iconFor func(broker.TaskState) (string, string),
+	detailFor func(id string) string) []boxRow {
 	if len(g.nodes) == 0 {
 		return nil
 	}
@@ -240,6 +250,12 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		gapX      = 2 // whitespace between sibling boxes
 		gapY      = 2 // routing band between layers
 	)
+	detailOf := func(id string) string {
+		if detailFor == nil {
+			return ""
+		}
+		return detailFor(id)
+	}
 
 	var placed []placedBox
 	y := 0
@@ -248,8 +264,14 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		if len(nodes) == 0 {
 			continue
 		}
-		rows := packRow(nodes, width, gapX, iconFor)
+		rows := packRow(nodes, width, gapX, iconFor, detailOf)
 		for _, row := range rows {
+			h := boxHeight
+			for _, b := range row {
+				if b.detail != "" {
+					h = boxHeight + 1
+				}
+			}
 			// Center the row's boxes in the pane so the diagram has margins
 			// rather than hugging the left edge.
 			total := 0
@@ -266,12 +288,12 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 			for i := range row {
 				row[i].x = x
 				row[i].y = y
-				row[i].h = boxHeight
+				row[i].h = h
 				row[i].index = index[row[i].node.task.ID]
 				x += row[i].w + gapX
 				placed = append(placed, row[i])
 			}
-			y += boxHeight + gapY
+			y += h + gapY
 		}
 	}
 
@@ -338,6 +360,8 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 	for _, p := range parents {
 		routeFanOut(c, p, children[p.node.task.ID])
 	}
+
+	settleJoints(c, placed)
 
 	// Trim trailing blank lines so the pane does not carry dead space.
 	lines := c.lines()
@@ -453,6 +477,7 @@ func packRow(
 	nodes []graphNode,
 	width, gapX int,
 	iconFor func(broker.TaskState) (string, string),
+	detailOf func(id string) string,
 ) [][]placedBox {
 	var rows [][]placedBox
 	var cur []placedBox
@@ -460,6 +485,12 @@ func packRow(
 
 	for _, n := range nodes {
 		b := measureBox(n, width, iconFor)
+		// The detail line never widens a box. The tool changes every few
+		// seconds, and a box that grew to fit it reflowed the diagram as the
+		// worker worked: on a narrow pane five running siblings wrapped onto
+		// two rows, and "down" started landing on boxes that were beside
+		// the cursor a second ago. The detail is cut to the box instead.
+		b.detail = detailOf(n.task.ID)
 		need := b.w
 		if len(cur) > 0 {
 			need += gapX
@@ -535,6 +566,14 @@ func drawBox(c *canvas, b placedBox) {
 		c.set(x, b.y+1, r)
 		x += runeCells(r)
 	}
+	if b.detail != "" && b.h > 3 {
+		line := padRight(truncate(" "+fitDetail(b.detail, inner-1), inner), inner)
+		x = b.x + 1
+		for _, r := range line {
+			c.set(x, b.y+2, r)
+			x += runeCells(r)
+		}
+	}
 }
 
 // routeFanIn draws every edge arriving at one child: a drop out of each
@@ -591,7 +630,11 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 		c.hline(lo, hi, bar)
 		taps := make([]int, 0, len(group))
 		for _, p := range group {
-			c.set(p.tap(), bar, sourceJunction(p.tap(), lo, hi))
+			// join, not set: a parent shared by two fan-ins taps both bars
+			// on the same row, and the second fan-in overwrote the first
+			// one's end with its own start — ─└ where the parent's drop
+			// should have been one ┴ feeding both.
+			c.join(p.tap(), bar, sourceJunction(p.tap(), lo, hi))
 			taps = append(taps, p.tap())
 		}
 		// The child's column, unless a parent already taps it. Writing
@@ -637,17 +680,35 @@ func routeFanIn(c *canvas, parents []placedBox, child placedBox) {
 			c.vline(cx, bar+1, end)
 			continue
 		}
-		c.hline(cx, detour, bar)
+		// The bar already spans lo..hi. Re-drawing it from the child's
+		// column to the detour ran over the cells in between, and where a
+		// parent's drop sat on that stretch its ┴ came back as a plain ─:
+		// the parent was drawn with an edge leading into a bar that did
+		// not lead back (the "client" box in a wrapped four-sibling fan-in
+		// floated free). Only extend the bar where the detour lies outside
+		// it.
+		switch {
+		case detour < run.lo:
+			c.hline(detour, run.lo, bar)
+		case detour > run.hi:
+			c.hline(run.hi, detour, bar)
+		}
+		// Nothing leaves the child's column downward on this row any more —
+		// the detour carries it — so that cell loses its lower arm.
+		c.set(cx, bar, barCellWithoutDrop(cx, run, detour))
 		c.vline(detour, bar+1, end)
 		c.hline(detour, cx, end)
 		c.set(detour, bar, leaveGlyph(detour, cx, run))
-		c.set(detour, end, cornerAt(detour, cx, false))
+		c.join(detour, end, cornerAt(detour, cx, false))
 		// The detour now rejoins on the next bar's own row rather than the
 		// line above it, so the child's column already carries a drop
 		// there. Arriving edge plus continuing drop is a tee, not the
 		// crossing that overwriting the cell would leave.
 		if i+1 < len(bars) {
-			c.set(cx, end, joinTee(detour, cx))
+			// Merge rather than overwrite: this cell is also on the next
+			// bar, and the bar's own arm toward its parent's tap must
+			// survive the detour arriving beside it.
+			c.join(cx, end, joinTee(detour, cx))
 		}
 	}
 }
@@ -906,4 +967,132 @@ func runeCells(r rune) int {
 		return 1
 	}
 	return w
+}
+
+// fitDetail shortens a "Tool  argument" summary to w cells. When the
+// argument will not fit, the tool name alone is more useful than a path
+// cut to its first few letters: "Edit" says what the worker is doing,
+// "Edit  cmd/na…" does not say much more and costs the same row.
+func fitDetail(detail string, w int) string {
+	if displayWidth(detail) <= w {
+		return detail
+	}
+	tool, arg, ok := strings.Cut(detail, "  ")
+	if !ok || displayWidth(tool)+4 > w {
+		return truncate(tool, w)
+	}
+	return tool + " " + truncate(arg, w-displayWidth(tool)-1)
+}
+
+// barCellWithoutDrop is the glyph at the child's column on a bar once a
+// detour has taken over the downward run: arms up if a parent drops here,
+// and left and right wherever the bar (now including the detour's leg)
+// continues.
+func barCellWithoutDrop(cx int, run barRun, detour int) rune {
+	lo, hi := run.lo, run.hi
+	if detour < lo {
+		lo = detour
+	}
+	if detour > hi {
+		hi = detour
+	}
+	up := slices.Contains(run.taps, cx)
+	left, right := cx > lo, cx < hi
+	switch {
+	case up && left && right:
+		return []rune(jTeeUp)[0] // ┴
+	case up && right:
+		return []rune(jElbowSW)[0] // └
+	case up && left:
+		return []rune(jElbowSE)[0] // ┘
+	case up:
+		return []rune(boxVert)[0]
+	default:
+		return []rune(boxHoriz)[0]
+	}
+}
+
+// glyphArms is which sides a routing glyph connects to: up, down, left,
+// right.
+var glyphArms = map[rune][4]bool{
+	'│': {true, true, false, false},
+	'─': {false, false, true, true},
+	'┌': {false, true, false, true},
+	'┐': {false, true, true, false},
+	'└': {true, false, false, true},
+	'┘': {true, false, true, false},
+	'├': {true, true, false, true},
+	'┤': {true, true, true, false},
+	'┬': {false, true, true, true},
+	'┴': {true, false, true, true},
+	'┼': {true, true, true, true},
+}
+
+// glyphFor is the routing glyph with exactly the given arms.
+func glyphFor(up, down, left, right bool) rune {
+	for r, a := range glyphArms {
+		if a == [4]bool{up, down, left, right} {
+			return r
+		}
+	}
+	switch {
+	case up || down:
+		return '│'
+	case left || right:
+		return '─'
+	}
+	return ' '
+}
+
+// settleJoints redraws every routing cell outside a box with the glyph its
+// neighbours actually call for.
+//
+// Edges are drawn one stroke at a time, and each stroke picks a junction
+// glyph from what it knows — its own bar, its own detour. Where two strokes
+// meet that guess is sometimes wrong for the cell as a whole: a fan-in bar
+// one row under a wrapped box drew ┤ with an arm reaching up into the box's
+// bottom border, and the elbow beside it reached left into a glyph that did
+// not reach back, so the join read as └──────┤┘. Deciding each cell from
+// its neighbours once everything is drawn makes every join agree with what
+// is around it, whatever order the strokes went down in.
+//
+// An arm survives only if the neighbour reaches back; a box border counts
+// when the edge is entering or leaving through a tee in it.
+func settleJoints(c *canvas, placed []placedBox) {
+	inBox := func(x, y int) bool {
+		for _, b := range placed {
+			if x >= b.x && x < b.x+b.w && y >= b.y && y < b.y+b.h {
+				return true
+			}
+		}
+		return false
+	}
+	at := func(x, y int) rune {
+		if y < 0 || y >= c.h || x < 0 || x >= c.w {
+			return ' '
+		}
+		return c.cells[y][x]
+	}
+	reaches := func(x, y, back int) bool {
+		a, ok := glyphArms[at(x, y)]
+		return ok && a[back]
+	}
+	next := make([][]rune, c.h)
+	for y := range c.cells {
+		next[y] = append([]rune(nil), c.cells[y]...)
+		for x, r := range c.cells[y] {
+			a, ok := glyphArms[r]
+			if !ok || inBox(x, y) {
+				continue
+			}
+			up := a[0] && reaches(x, y-1, 1)
+			down := a[1] && reaches(x, y+1, 0)
+			left := a[2] && reaches(x-1, y, 3)
+			right := a[3] && reaches(x+1, y, 2)
+			if up || down || left || right {
+				next[y][x] = glyphFor(up, down, left, right)
+			}
+		}
+	}
+	c.cells = next
 }

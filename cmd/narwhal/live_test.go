@@ -403,3 +403,22 @@ func TestPulsePathWithoutBoxesDoesNotPanic(t *testing.T) {
 	rows := []boxRow{{text: "──────────"}}
 	_ = pulsePath(rows, [2]int{0, 0}, [2]int{9, 0})
 }
+
+// A worker asking the judge is activity: its box lights.
+func TestWorkerQuestionLightsItsBox(t *testing.T) {
+	m := liveModel(t)
+	now := time.Now()
+	m.absorbLive(nil, now)
+	m.snap.Verdicts = append(m.snap.Verdicts, broker.Verdict{TaskID: "beta-worker", Asker: "worker-beta-worker"})
+	m.absorbLive(nil, now)
+	if !m.isHot("beta-worker") {
+		t.Error("a worker's question did not light its box")
+	}
+	// History is not replayed on a fresh run.
+	fresh := liveModel(t)
+	fresh.snap.Verdicts = []broker.Verdict{{TaskID: "alpha-worker", Asker: "worker-alpha-worker"}}
+	fresh.absorbLive(nil, now)
+	if fresh.isHot("alpha-worker") {
+		t.Error("an old question lit a box on first open")
+	}
+}

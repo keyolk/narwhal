@@ -336,6 +336,18 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"urgent"}))' "$BODY")"
 `, base),
+		"judge": fmt.Sprintf(`#!/bin/bash
+# usage: judge "<yes/no question>" "<state>"   (or pipe the state on stdin)
+# Ask a fast decision model a yes/no question about some state and get a
+# probability back in about a second. Prints e.g. {"decided":true,"probability":0.83}.
+# "decided":false means no answer (no key, gateway down): decide yourself.
+set -euo pipefail
+QUESTION="$1"; STATE="${2:-}"
+if [ -z "$STATE" ] && [ ! -t 0 ]; then STATE="$(cat)"; fi
+curl -s -X POST %s/judge \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"question":sys.argv[1],"state":sys.argv[2]}))' "$QUESTION" "$STATE")"
+`, base),
 	}
 
 	for name, content := range scripts {
@@ -418,6 +430,13 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    Ask to be retried on a stronger model. Use when the area needs more\n")
 	fmt.Fprintf(&b, "    than the tier you were given — a thin answer from a model that cannot\n")
 	fmt.Fprintf(&b, "    do the work is worse than a retry. Say concretely what exceeded you.\n")
+	fmt.Fprintf(&b, "- bash %s/judge \"<yes/no question>\" \"<state>\"\n", scriptsDir)
+	fmt.Fprintf(&b, "    Ask a fast decision model a yes/no question about concrete state —\n")
+	fmt.Fprintf(&b, "    a test log, a diff, a peer's message — and get a probability in about\n")
+	fmt.Fprintf(&b, "    a second. Use it for calls you would otherwise guess: is this failure\n")
+	fmt.Fprintf(&b, "    flaky or real, does this output answer the assignment, does this\n")
+	fmt.Fprintf(&b, "    peer's change conflict with mine. It is advice; you decide. The\n")
+	fmt.Fprintf(&b, "    operator sees every question and answer.\n")
 	fmt.Fprintf(&b, "\n## Passive Awareness (CRITICAL)\n\n")
 	fmt.Fprintf(&b, "1. Start ONE background watcher before you begin work:\n")
 	fmt.Fprintf(&b, "     bash %s/watch\n", scriptsDir)

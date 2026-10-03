@@ -146,9 +146,12 @@ type tuiModel struct {
 	// seenChannel is false until the first snapshot of a run has been
 	// absorbed, so history is not replayed as pulses.
 	seenChannel bool
-	frame       int
-	now         time.Time
-	animated    bool // an animation tick is scheduled
+	// seenVerdicts is how many verdicts have been absorbed, so a worker's
+	// new question can light its box.
+	seenVerdicts int
+	frame        int
+	now          time.Time
+	animated     bool // an animation tick is scheduled
 
 	// briefMode shows the operator's summary in the radio pane's place.
 	briefMode bool

@@ -59,6 +59,12 @@ type Verdict struct {
 	// the fallback it kept because the verdict was uncertain or missing.
 	Action  string `json:"action"`
 	Latency int64  `json:"latency_ms"`
+	// Asker is the worker that asked, for a judgement a worker requested
+	// through its judge script; empty for the dispatcher's own. Ask is the
+	// question it put, since a worker's question is free text rather than
+	// one of the named ones above.
+	Asker string `json:"asker,omitempty"`
+	Ask   string `json:"ask,omitempty"`
 }
 
 // Sharp reports whether the verdict was confident enough to act on.
@@ -69,6 +75,13 @@ const (
 	// the monitor can label a row without parsing the instructions.
 	QuestionNoResult  = "no-result"
 	QuestionSameCause = "same-cause"
+
+	// QuestionWorker names a judgement a worker asked for.
+	QuestionWorker = "worker"
+
+	// ActionAnswered is what a worker's question got: an answer, which the
+	// worker acts on, not the dispatcher.
+	ActionAnswered = "answered"
 
 	ActionFallback = "fallback"
 	ActionRetry    = "retry"
@@ -316,4 +329,34 @@ func (t *Task) failureReasons() []string {
 		}
 	}
 	return out
+}
+
+// workerJudgeTimeout bounds a worker's question. Longer than the
+// dispatcher's: the worker is waiting on the answer anyway, and a gateway
+// hiccup is cheaper to ride out than to report as undecided.
+const workerJudgeTimeout = 8 * time.Second
+
+// AskForWorker puts a worker's yes/no question to the judge and records it
+// on the run, so the monitor shows what the worker asked and was told.
+//
+// A worker reaches this through its judge script when a call it would
+// otherwise make by guessing — is this flaky or real, is this file mine to
+// touch, does this output answer the assignment — can be put as a question
+// about some state. The answer is advice; the worker decides.
+func (r *Run) AskForWorker(asker, question, state string) Verdict {
+	v := Verdict{At: time.Now(), TaskID: strings.TrimPrefix(asker, "worker-"),
+		Question: QuestionWorker, Action: ActionFallback, Asker: asker, Ask: question}
+	j := r.currentJudge()
+	if j != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), workerJudgeTimeout)
+		start := time.Now()
+		v.P, v.Decided = j.Ask(ctx, clip(state, 4000), QuestionWorker, question)
+		v.Latency = time.Since(start).Milliseconds()
+		cancel()
+		if v.Decided {
+			v.Action = ActionAnswered
+		}
+	}
+	r.recordVerdict(v)
+	return v
 }

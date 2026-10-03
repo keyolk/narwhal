@@ -336,3 +336,70 @@ func TestSparklineScalesToItsOwnPeak(t *testing.T) {
 		t.Errorf("an idle sparkline = %q, want blanks", got)
 	}
 }
+
+// A pulse between connected boxes rides the edge joining them. The first
+// router took the shortest gap path and ran beside the line instead of on
+// it. Siblings with no direct edge share their common child's bar, so they
+// ride that too.
+func TestPulseRidesTheDrawnEdges(t *testing.T) {
+	m := testModel(0, 0)
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "api", State: broker.TaskDispatched}, {ID: "client", State: broker.TaskDispatched},
+		{ID: "fuzz", State: broker.TaskDispatched}, {ID: "schema", State: broker.TaskDispatched},
+		{ID: "synthesis", State: broker.TaskPending, Deps: []string{"api", "client", "fuzz", "schema"}},
+	}
+	rows := m.boxRows(70)
+	centers := boxCenters(rows, layoutGraph(m.sortedTasks()).nodes)
+	for _, pair := range [][2]string{{"fuzz", "synthesis"}, {"api", "schema"}} {
+		path := pulsePath(rows, centers[pair[0]], centers[pair[1]])
+		if len(path) == 0 {
+			t.Fatalf("%s → %s: no path", pair[0], pair[1])
+		}
+		for _, p := range path {
+			r := []rune(rows[p[1]].text)
+			if p[0] >= len(r) || !strings.ContainsRune("│─┌┐└┘├┤┬┴┼", r[p[0]]) {
+				t.Errorf("%s → %s leaves the edges at (%d,%d)", pair[0], pair[1], p[0], p[1])
+				break
+			}
+		}
+	}
+}
+
+// On an edge the trail keeps the line glyph and only takes the pulse's
+// colour, so the edge reads as lit rather than broken into dots.
+func TestTrailOnALineKeepsTheLine(t *testing.T) {
+	m := testModel(0, 0)
+	m.snap.Tasks = []broker.TaskSnapshot{
+		{ID: "api", State: broker.TaskDispatched}, {ID: "fuzz", State: broker.TaskDispatched},
+		{ID: "synthesis", State: broker.TaskPending, Deps: []string{"api", "fuzz"}},
+	}
+	rows := m.boxRows(60)
+	centers := boxCenters(rows, layoutGraph(m.sortedTasks()).nodes)
+	ps := []pulse{{from: "api", to: "fuzz", born: time.Now().Add(-pulseDuration / 2)}}
+	got := overlayPulses(rows, centers, ps, time.Now())
+
+	heads, trail := 0, 0
+	for y, cols := range got {
+		r := []rune(rows[y].text)
+		for x, mk := range cols {
+			if mk.head {
+				heads++
+				continue
+			}
+			trail++
+			if r[x] == pulseTrail {
+				t.Errorf("trail at (%d,%d) replaced a line with a dot", x, y)
+			}
+		}
+	}
+	if heads != 1 || trail == 0 {
+		t.Errorf("heads=%d trail=%d, want one head and a lit trail", heads, trail)
+	}
+}
+
+// No boxes, no border to leave through: the router must not index past the
+// grid looking for one.
+func TestPulsePathWithoutBoxesDoesNotPanic(t *testing.T) {
+	rows := []boxRow{{text: "──────────"}}
+	_ = pulsePath(rows, [2]int{0, 0}, [2]int{9, 0})
+}

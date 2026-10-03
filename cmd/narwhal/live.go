@@ -356,24 +356,34 @@ func boxCenters(rows []boxRow, nodes []graphNode) map[string][2]int {
 	return out
 }
 
-// pulsePath is the route a pulse follows: the shortest walk from the
-// bottom or top edge of one box to the other that never enters a box.
+// pulsePath is the route a pulse follows from one box to another: along
+// the drawn edges wherever they lead there, across the gaps where they
+// do not, and never through a box.
 //
-// A straight line between the centres was the first version. On a real
-// run it was invisible most of the time — between two boxes there is
-// mostly other boxes, and a pulse that may not draw over a box has nowhere
-// to be. Walking the gaps puts it on the routing bands and the margins,
-// which is where the eye already looks for edges.
+// The first version walked the gaps only, by shortest path, and a pulse
+// between two connected boxes ran beside the edge joining them instead of
+// on it — the line was right there and the message ignored it. Costing
+// line cells far below blank ones makes the route ride the edges, and
+// still lets a mention between unconnected peers cross open space, since
+// most messages worth seeing follow no edge at all.
 func pulsePath(rows []boxRow, from, to [2]int) [][2]int {
 	h := len(rows)
 	if h == 0 {
 		return nil
 	}
+	grid := make([][]rune, h)
 	w := 0
-	for _, r := range rows {
-		if n := len([]rune(r.text)); n > w {
-			w = n
+	for y, r := range rows {
+		grid[y] = []rune(r.text)
+		if len(grid[y]) > w {
+			w = len(grid[y])
 		}
+	}
+	cell := func(x, y int) rune {
+		if x < len(grid[y]) {
+			return grid[y][x]
+		}
+		return ' '
 	}
 	inBox := func(x, y int) bool {
 		for _, s := range rows[y].spans {
@@ -383,7 +393,9 @@ func pulsePath(rows []boxRow, from, to [2]int) [][2]int {
 		}
 		return false
 	}
-	// Start and end just outside each box, on the side facing the other.
+	// Leave each box through its border, on the side facing the other box,
+	// at the column where an edge already attaches if there is one — the
+	// tee in the border — so the route starts on the line.
 	exit := func(c [2]int, toward int) [2]int {
 		step := 1
 		if toward < c[1] {
@@ -396,33 +408,79 @@ func pulsePath(rows []boxRow, from, to [2]int) [][2]int {
 		if y < 0 || y >= h {
 			return [2]int{-1, -1}
 		}
+		border := y - step
+		if border < 0 || border >= h || border == c[1] && !inBox(c[0], border) {
+			// The centre was not inside a box, so there is no border to
+			// leave through; start where we are.
+			return [2]int{c[0], y}
+		}
+		for dx := 0; dx < w; dx++ {
+			for _, x := range []int{c[0] - dx, c[0] + dx} {
+				if x < 0 || x >= w || !inBox(x, border) {
+					continue
+				}
+				if r := cell(x, border); r == '┬' || r == '┴' || r == '┼' {
+					if !inBox(x, y) {
+						return [2]int{x, y}
+					}
+				}
+			}
+		}
 		return [2]int{c[0], y}
 	}
 	start, goal := exit(from, to[1]), exit(to, from[1])
 	if start[0] < 0 || goal[0] < 0 {
 		return nil
 	}
-	prev := map[[2]int][2]int{start: start}
-	queue := [][2]int{start}
-	for len(queue) > 0 {
-		c := queue[0]
-		queue = queue[1:]
-		if c == goal {
+
+	const lineCost, gapCost = 1, 8
+	cost := func(x, y int) int {
+		if strings.ContainsRune("│─┌┐└┘├┤┬┴┼", cell(x, y)) {
+			return lineCost
+		}
+		return gapCost
+	}
+	type node struct {
+		c [2]int
+		d int
+	}
+	dist := map[[2]int]int{start: 0}
+	prev := map[[2]int][2]int{}
+	// The grid is a few thousand cells; a linear scan for the minimum is
+	// simpler than a heap and well inside a frame's budget.
+	open := []node{{start, 0}}
+	done := map[[2]int]bool{}
+	for len(open) > 0 {
+		bi := 0
+		for i := range open {
+			if open[i].d < open[bi].d {
+				bi = i
+			}
+		}
+		cur := open[bi]
+		open = append(open[:bi], open[bi+1:]...)
+		if done[cur.c] {
+			continue
+		}
+		done[cur.c] = true
+		if cur.c == goal {
 			break
 		}
 		for _, d := range [][2]int{{0, 1}, {0, -1}, {1, 0}, {-1, 0}} {
-			n := [2]int{c[0] + d[0], c[1] + d[1]}
+			n := [2]int{cur.c[0] + d[0], cur.c[1] + d[1]}
 			if n[0] < 0 || n[0] >= w || n[1] < 0 || n[1] >= h || inBox(n[0], n[1]) {
 				continue
 			}
-			if _, seen := prev[n]; seen {
+			nd := cur.d + cost(n[0], n[1])
+			if old, ok := dist[n]; ok && old <= nd {
 				continue
 			}
-			prev[n] = c
-			queue = append(queue, n)
+			dist[n] = nd
+			prev[n] = cur.c
+			open = append(open, node{n, nd})
 		}
 	}
-	if _, ok := prev[goal]; !ok {
+	if !done[goal] {
 		return nil
 	}
 	var path [][2]int
@@ -441,6 +499,10 @@ func pulsePath(rows []boxRow, from, to [2]int) [][2]int {
 const (
 	pulseHead  = '●'
 	pulseTrail = '·'
+	// pulseTrailLen is how many cells behind the head stay lit. On an edge
+	// those cells keep their line glyph, so the trail is a stretch of
+	// brightened line rather than dots.
+	pulseTrailLen = 3
 )
 
 // overlayPulses draws in-flight pulses onto the rendered rows, returning
@@ -457,6 +519,9 @@ func overlayPulses(rows []boxRow, centers map[string][2]int, pulses []pulse, now
 				return
 			}
 		}
+		// On a line the trail keeps the line's own glyph and only takes the
+		// pulse's colour, so the edge reads as lit rather than broken up;
+		// the head replaces whatever is there.
 		runes := []rune(rows[y].text)
 		for len(runes) <= x {
 			runes = append(runes, ' ')
@@ -493,7 +558,7 @@ func overlayPulses(rows []boxRow, centers map[string][2]int, pulses []pulse, now
 			continue
 		}
 		head := int(f * float64(len(path)-1))
-		for back := 2; back >= 1; back-- {
+		for back := pulseTrailLen; back >= 1; back-- {
 			if i := head - back; i >= 0 {
 				put(path[i][0], path[i][1], pulseTrail, p.urgent, false)
 			}

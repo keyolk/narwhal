@@ -130,3 +130,40 @@ func TestVerdictThatRetriedATaskNeedsAttention(t *testing.T) {
 		t.Errorf("verdict not listed:\n%s", got)
 	}
 }
+
+// An instruction that named nobody but was relayed shows where it went, and
+// counts as answered only when those workers speak.
+func TestRoutedInstructionShowsWhereItWent(t *testing.T) {
+	m := briefModel(t)
+	m.snap.Messages = []*broker.Message{
+		{Seq: 1, Sender: "main", Content: "make sure nothing logs the token"},
+		{Seq: 2, Sender: "coordinator", Mentions: []string{"worker-api"},
+			Content: broker.RelayPrefix + " from the operator, for api: make sure nothing logs the token"},
+		{Seq: 3, Sender: "worker-schema", Content: "unrelated progress"},
+	}
+	ins := briefInstructions(m.snap)
+	if len(ins) != 1 || !ins[0].routed || strings.Join(ins[0].addressed, ",") != "api" {
+		t.Fatalf("instruction = %+v", ins)
+	}
+	if len(ins[0].answeredBy) != 0 {
+		t.Errorf("schema's post counted as an answer to an instruction relayed to api: %v", ins[0].answeredBy)
+	}
+	if got := briefText(m); !strings.Contains(got, "→api") {
+		t.Errorf("brief does not show the relay target:\n%s", got)
+	}
+	m.snap.Messages = append(m.snap.Messages, &broker.Message{Seq: 4, Sender: "worker-api", Content: "removed the token log line"})
+	if ins := briefInstructions(m.snap); strings.Join(ins[0].answeredBy, ",") != "api" {
+		t.Errorf("api's reply not counted: %v", ins[0].answeredBy)
+	}
+}
+
+// "No worker covers this" is the operator's decision to make.
+func TestUncoveredInstructionNeedsADecision(t *testing.T) {
+	m := briefModel(t)
+	m.snap.Messages = append(m.snap.Messages, &broker.Message{Seq: 20, Sender: "coordinator",
+		Priority: broker.PriorityUrgent, Content: broker.RelayPrefix + " no running worker's task covers this instruction; it may need a new task: add metrics"})
+	full := briefText(m)
+	if got := full[:strings.Index(full, "Workers")]; !strings.Contains(got, "may need a new task") {
+		t.Errorf("uncovered instruction not in decisions:\n%s", got)
+	}
+}

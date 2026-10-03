@@ -46,6 +46,11 @@ type cachedTranscript struct {
 	// the pane is resized, which are the only things that change it.
 	renderWidth int
 	rendered    []string
+	// narrative is the same, for the prose-first render the node pane
+	// uses. Kept apart because the session view still shows the full feed
+	// and the two would otherwise evict each other on every frame.
+	narrativeWidth int
+	narrative      []string
 	// tailProbe is the last few hundred bytes before offset, so the next
 	// read can tell "the same file, longer" from "a different file that
 	// happens to be at least this long".
@@ -117,6 +122,7 @@ func (c *transcriptCache) read(path string) []transcriptEntry {
 	fresh, consumed := parseTranscriptFrom(f, prev.offset)
 	if len(fresh) > 0 {
 		prev.rendered = nil
+		prev.narrative = nil
 	}
 	prev.entries = append(prev.entries, fresh...)
 	prev.offset += consumed
@@ -170,6 +176,26 @@ func (c *transcriptCache) render(path string, width int) []string {
 	cached.rendered = renderTranscript(cached.entries, width)
 	cached.renderWidth = width
 	return cached.rendered
+}
+
+// renderNarrative is render for renderNarrative.
+func (c *transcriptCache) renderNarrative(path string, width int) []string {
+	entries := c.read(path)
+	if len(entries) == 0 {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cached, ok := c.entries[path]
+	if !ok {
+		return renderNarrative(entries, width)
+	}
+	if cached.narrative != nil && cached.narrativeWidth == width {
+		return cached.narrative
+	}
+	cached.narrative = renderNarrative(cached.entries, width)
+	cached.narrativeWidth = width
+	return cached.narrative
 }
 
 // forget drops a file's cache. Used by tests; the monitor watches a handful

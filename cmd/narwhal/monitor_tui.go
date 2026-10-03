@@ -2120,7 +2120,7 @@ func (m tuiModel) viewSessionDetail() string {
 		meta = append(meta, fmt.Sprintf("%d events", len(entries)))
 		// Through the cache: this view scrolls too, and re-rendering the
 		// whole feed per frame is the same 2.4ms the node pane paid.
-		body = m.nodeActivityLines(t.ID, width)
+		body = m.sessionActivityLines(t.ID, width)
 	}
 
 	// The final answer only exists once the worker has exited. Append it

@@ -29,6 +29,11 @@ type transcriptEntry struct {
 	at   time.Time
 	kind string // "text", "thinking", "tool", "result"
 	text string
+	// user marks text that came in on a user record — the assignment and
+	// any steer sent later — rather than something the worker wrote. Both
+	// read as prose in the feed, but only the worker's own words say what
+	// it is doing now.
+	user bool
 }
 
 // transcriptPath resolves a session id to the file Claude Code writes it
@@ -167,7 +172,13 @@ func parseTranscriptFrom(r io.ReadSeeker, offset int64) ([]transcriptEntry, int6
 			continue
 		}
 		at, _ := time.Parse(time.RFC3339, rec.Timestamp)
-		out = append(out, parseContent(rec.Message.Content, at)...)
+		entries := parseContent(rec.Message.Content, at)
+		if rec.Type == "user" {
+			for i := range entries {
+				entries[i].user = true
+			}
+		}
+		out = append(out, entries...)
 	}
 	return out, int64(len(complete))
 }
@@ -362,6 +373,85 @@ func renderTranscript(entries []transcriptEntry, width int) []string {
 		}
 	}
 	return out
+}
+
+// renderNarrative formats entries for the node pane: the worker's prose
+// carries the feed, and the tool calls between two paragraphs fold into a
+// single line under the first.
+//
+// The full feed is one line per call plus two per result, so on a real
+// worker the paragraphs that say what it is doing and why were a few lines
+// lost among dozens of Read/Grep/Bash rows — the pane answered "what did it
+// touch" and buried "what is it thinking". The full feed is still behind
+// `s`; this one is for reading along.
+func renderNarrative(entries []transcriptEntry, width int) []string {
+	var out []string
+	var tools []string
+	flush := func() {
+		if len(tools) == 0 {
+			return
+		}
+		out = append(out, styDim.Render("         ")+styCyan.Render("→ ")+
+			styDim.Render(truncate(foldTools(tools), width-11)))
+		tools = nil
+	}
+	for _, e := range entries {
+		switch e.kind {
+		case "tool":
+			tools = append(tools, toolName(e.text))
+		case "result":
+			// Evidence for the call it answers; the folded line already
+			// says the call happened.
+		default:
+			flush()
+			out = append(out, renderTranscript([]transcriptEntry{e}, width)...)
+		}
+	}
+	flush()
+	return out
+}
+
+// foldTools names the first three calls of a run and counts the rest:
+// "Read, Grep, Edit +4". Repeats are kept — three Reads in a row is what
+// the worker did, and collapsing them would hide that it was reading.
+func foldTools(names []string) string {
+	const shown = 3
+	if len(names) <= shown {
+		return strings.Join(names, ", ")
+	}
+	return strings.Join(names[:shown], ", ") + fmt.Sprintf(" +%d", len(names)-shown)
+}
+
+// toolName is the tool in a summarized call, without its argument.
+func toolName(summary string) string {
+	if i := strings.IndexByte(summary, ' '); i >= 0 {
+		return summary[:i]
+	}
+	return summary
+}
+
+// firstSentence is the opening sentence of a paragraph, on one line: what a
+// box has room to say about what its worker last said.
+func firstSentence(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "#*->` "))
+		if l == "" {
+			continue
+		}
+		for i, r := range l {
+			switch r {
+			case '.', '?', '!', '。':
+				// A period inside "go.mod" or "1.5" is not a sentence end;
+				// one followed by a space or the end of the line is.
+				rest := l[i+len(string(r)):]
+				if rest == "" || rest[0] == ' ' {
+					return l[:i+len(string(r))]
+				}
+			}
+		}
+		return l
+	}
+	return ""
 }
 
 // clipLines returns at most n non-empty lines, noting how many were cut.

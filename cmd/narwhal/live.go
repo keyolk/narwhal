@@ -59,6 +59,9 @@ func animTick() tea.Cmd {
 type agentLive struct {
 	// tool is the worker's latest tool call, summarized to one line.
 	tool string
+	// said is the first sentence of the latest thing the worker wrote —
+	// text or thinking, never the assignment or a steer sent to it.
+	said string
 	// last is when the worker last wrote anything to its transcript.
 	last time.Time
 	// spark counts transcript entries per second over the last
@@ -122,15 +125,19 @@ func summarizeLive(entries []transcriptEntry, now time.Time) agentLive {
 		if a.tool == "" && e.kind == "tool" {
 			a.tool = e.text
 		}
+		if a.said == "" && !e.user && (e.kind == "text" || e.kind == "thinking") {
+			a.said = firstSentence(e.text)
+		}
 		age := now.Sub(e.at)
 		if age < 0 {
 			age = 0
 		}
 		if b := int(age / time.Second); b < sparkBuckets {
 			a.spark[sparkBuckets-1-b]++
-		} else if a.tool != "" {
+		} else if a.tool != "" && a.said != "" {
 			// Entries are in time order, so once one falls outside the
-			// window and the tool is known, nothing older matters.
+			// window and the tool and prose are known, nothing older
+			// matters.
 			break
 		}
 	}
@@ -316,18 +323,28 @@ func (m *tuiModel) resetLive() {
 }
 
 // liveDetail is the second line of a box: what its worker is doing now.
-// Only a running task gets one. A finished task's last tool is history,
+// Only a running task gets one. A finished task's last line is history,
 // and spending a row on it for every box would halve what fits.
+//
+// It leads with what the worker last said rather than its last tool. The
+// tool flickers between Read and Grep every second and says little on its
+// own; "Splitting the config loader before touching the API" says what the
+// worker is about. The tool stands in only until the worker has written
+// any prose.
 func (m tuiModel) liveDetail(id string) string {
 	t := m.taskByID(id)
 	if t.State != broker.TaskDispatched {
 		return ""
 	}
 	a, ok := m.activity[id]
-	if !ok || a.tool == "" {
+	switch {
+	case ok && a.said != "":
+		return a.said
+	case ok && a.tool != "":
+		return a.tool
+	default:
 		return "starting…"
 	}
-	return a.tool
 }
 
 // isHot reports whether a task acted, or was spoken to, within hotWindow.

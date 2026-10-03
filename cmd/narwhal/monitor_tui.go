@@ -150,6 +150,14 @@ type tuiModel struct {
 	now         time.Time
 	animated    bool // an animation tick is scheduled
 
+	// steering is the open command line, steerBuf what has been typed into
+	// it, and steerMsg the result of the last send. See steer.go.
+	steering    bool
+	steerBuf    []rune
+	steerMsg    string
+	steerFailed bool
+	steerAt     time.Time
+
 	width  int
 	height int
 	quit   bool
@@ -419,6 +427,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, animTick()
 
+	case steerSentMsg:
+		if msg.err != nil {
+			m.steerNote(fmt.Sprintf("not sent (%v): %s", msg.err, msg.text), true)
+			return m, nil
+		}
+		m.steerNote(msg.text, false)
+		// Show the instruction on the radio now rather than on the next
+		// tick, so it is clear it went in.
+		return m, m.poll()
+
 	case attachDoneMsg:
 		// The attached session took over the terminal; Bubble Tea has just
 		// restored the TUI. Poll immediately rather than waiting out the
@@ -467,10 +485,16 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The command line owns every key while it is open, and sees them as
+	// typed: an instruction written in Korean must arrive in Korean.
+	if m.steering {
+		return m.handleSteerKey(msg)
+	}
+
 	// Under a Korean input source the shortcut keys arrive as jamo (`q` -> `ㅂ`).
 	// Rewrite them to the Latin key at the same physical position so shortcuts
-	// fire without switching the input source back. Unconditional: the monitor
-	// has no text entry, so no key is ever meant as a literal character.
+	// fire without switching the input source back. Outside the command line
+	// above, no key is ever meant as a literal character.
 	msg = normalizeCJKKey(msg)
 
 	if m.picker {
@@ -483,6 +507,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "i":
+		m.steering, m.steerBuf = true, nil
+		return m, nil
 	case "tab":
 		m.focus = m.focus.next()
 		m.followZoom()
@@ -1599,6 +1626,11 @@ func (m tuiModel) viewFooter() string {
 		// state — dim made it read as a label nobody had to notice.
 		tail = "  " + styCyan.Render("[following]")
 	}
+	// The command line takes the key-hint row rather than adding one, so
+	// opening it does not shift the panes above.
+	if line := m.viewSteer(); line != "" {
+		return stats + tail + "\n" + line
+	}
 	return stats + tail + "\n" + styDim.Render(m.footerKeys())
 }
 
@@ -1622,7 +1654,7 @@ func (m tuiModel) footerKeys() string {
 	if m.zoom >= 0 {
 		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
 	}
-	parts = append(parts, zoomKey, "enter detail", "s session", "a attach")
+	parts = append(parts, zoomKey, "enter detail", "s session", "a attach", "i steer")
 	if len(m.runs) > 1 {
 		parts = append(parts, "[ ] run")
 	} else {

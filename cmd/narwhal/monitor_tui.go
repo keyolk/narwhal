@@ -1451,6 +1451,9 @@ func (m tuiModel) viewHeader() string {
 	if m.err != nil {
 		line += "  " + styRed.Render("(broker unreachable)")
 	}
+	if sum := verdictSummary(m.snap.Verdicts); sum != "" {
+		line += "  " + sum
+	}
 	prompt := m.snap.Prompt
 	if w := m.width - 2; w > 10 && len(prompt) > w {
 		prompt = prompt[:w-3] + "..."

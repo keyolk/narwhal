@@ -80,6 +80,7 @@ func RestoreRun(s Snapshot) *Run {
 	// tasks that had already finished. So an absent cursor means "already
 	// applied", and the channel is treated as read to its end.
 	r.intakeCursor = s.IntakeCursor
+	r.verdicts = append([]Verdict(nil), s.Verdicts...)
 	if r.intakeCursor == 0 && len(s.Messages) > 0 {
 		for _, m := range s.Messages {
 			if m != nil && m.Seq > r.intakeCursor {
@@ -195,8 +196,9 @@ func (b *Broker) AdoptRun(r *Run) {
 		return
 	}
 	b.mu.Lock()
-	probe := b.usageProbe
+	probe, judge := b.usageProbe, b.judge
 	b.runs[r.ID] = r
 	b.mu.Unlock()
 	r.SetUsageProbe(probe)
+	r.SetJudge(judge)
 }

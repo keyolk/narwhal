@@ -282,21 +282,18 @@ func (c *Coordinator) reapFinishedWorkers() {
 			c.mu.Unlock()
 			continue
 		}
-		// Worker exited without declaring completion. Before failing the
-		// dispatch, check whether the worker actually posted findings to the
-		// radio — a worker that did its job but forgot the task-done call
-		// should not be retried and waste another 10 minutes. The synthesis
-		// task can still drain whatever the worker posted.
-		if c.run.AgentPostedToRadio(et.agentID) {
-			log.Printf("[coordinator] %s exited without task-done but posted to radio; marking complete", et.taskID)
-			task.CompleteDispatch("completed via radio activity", c.run)
+		// Worker exited without declaring completion. A worker that did its
+		// job but forgot the task-done call should not be retried and waste
+		// another 10 minutes; one whose radio holds no result should. The
+		// Run decides, so both dispatchers apply the same rule.
+		action := c.run.ResolveExitWithoutDone(task, et.agentID)
+		log.Printf("[coordinator] %s exited without task-done; %s", et.taskID, action)
+		if task.CurrentState() == broker.TaskCompleted {
 			c.mu.Lock()
 			c.finished[et.taskID] = true
 			c.mu.Unlock()
 			continue
 		}
-		log.Printf("[coordinator] %s exited without task-done; recording failure", et.taskID)
-		task.FailDispatch("worker exited without calling task-done", c.run)
 		if task.CurrentState() == broker.TaskFailed {
 			c.mu.Lock()
 			c.finished[et.taskID] = true

@@ -132,6 +132,13 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 			fmt.Sprintf("%d of %d", t.Dispatches, broker.MaxDispatchFailures), tryStyle)
 	}
 
+	// What Jev said about this task, and what the dispatcher did with it.
+	// Placed above the outcome because a verdict is often *why* the
+	// outcome reads the way it does — a retry, an escalated model.
+	for _, v := range taskVerdicts(m.snap.Verdicts, t.ID) {
+		out = append(out, verdictRow(v, width))
+	}
+
 	if t.Outcome != "" {
 		// What the task concluded. On a finished node this is the answer
 		// the whole dispatch existed to produce; on a failed one it is the

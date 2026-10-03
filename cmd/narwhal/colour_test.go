@@ -182,8 +182,8 @@ func TestBoxFrameSharesItsTaskColour(t *testing.T) {
 		t.Fatal("expected a box with a top border and a body")
 	}
 
-	topOut := m.styleBoxLine(top, top.text, -1)
-	bodyOut := m.styleBoxLine(body, body.text, -1)
+	topOut := m.styleBoxLine(top, top.text, -1, nil, nil)
+	bodyOut := m.styleBoxLine(body, body.text, -1, nil, nil)
 	if !strings.Contains(topOut, "32") {
 		t.Errorf("a completed task's frame is not green: %q", topOut)
 	}

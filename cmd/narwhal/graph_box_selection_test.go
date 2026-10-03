@@ -113,7 +113,7 @@ func TestSelectionHighlightsOneBoxNotTheRow(t *testing.T) {
 		t.Fatal("no three-sibling body row")
 	}
 
-	out := m.styleBoxLine(body, body.text, m.taskCur)
+	out := m.styleBoxLine(body, body.text, m.taskCur, nil, nil)
 	sel := body.spanOf(2)
 	runes := []rune(body.text)
 	selText := string(runes[sel.x0:sel.x1])
@@ -144,7 +144,7 @@ func TestUnselectedSiblingsKeepTheirStateColour(t *testing.T) {
 			break
 		}
 	}
-	out := m.styleBoxLine(body, body.text, m.taskCur)
+	out := m.styleBoxLine(body, body.text, m.taskCur, nil, nil)
 
 	runes := []rune(body.text)
 	for _, s := range body.spans {

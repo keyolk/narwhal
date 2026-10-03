@@ -210,6 +210,9 @@ type placedBox struct {
 	label string
 	badge string
 	icon  string
+	// detail is a second body line — what the worker is doing now — or ""
+	// for a one-line box.
+	detail string
 }
 
 // tap returns the column an edge attaches to: the box's horizontal center.
@@ -217,6 +220,15 @@ func (b placedBox) tap() int { return b.x + b.w/2 }
 
 // renderBoxes draws the layout as a diagram sized to fit width.
 func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (string, string)) []boxRow {
+	return g.renderBoxesDetailed(width, iconFor, nil)
+}
+
+// renderBoxesDetailed is renderBoxes with an optional second line per box.
+// detailFor returns what a task is doing now, or "" to keep its box to one
+// line. A row of boxes is as tall as its tallest: routing assumes every
+// box in a row shares its bottom edge.
+func (g graphLayout) renderBoxesDetailed(width int, iconFor func(broker.TaskState) (string, string),
+	detailFor func(id string) string) []boxRow {
 	if len(g.nodes) == 0 {
 		return nil
 	}
@@ -240,6 +252,12 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		gapX      = 2 // whitespace between sibling boxes
 		gapY      = 2 // routing band between layers
 	)
+	detailOf := func(id string) string {
+		if detailFor == nil {
+			return ""
+		}
+		return detailFor(id)
+	}
 
 	var placed []placedBox
 	y := 0
@@ -248,8 +266,14 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 		if len(nodes) == 0 {
 			continue
 		}
-		rows := packRow(nodes, width, gapX, iconFor)
+		rows := packRow(nodes, width, gapX, iconFor, detailOf)
 		for _, row := range rows {
+			h := boxHeight
+			for _, b := range row {
+				if b.detail != "" {
+					h = boxHeight + 1
+				}
+			}
 			// Center the row's boxes in the pane so the diagram has margins
 			// rather than hugging the left edge.
 			total := 0
@@ -266,12 +290,12 @@ func (g graphLayout) renderBoxes(width int, iconFor func(broker.TaskState) (stri
 			for i := range row {
 				row[i].x = x
 				row[i].y = y
-				row[i].h = boxHeight
+				row[i].h = h
 				row[i].index = index[row[i].node.task.ID]
 				x += row[i].w + gapX
 				placed = append(placed, row[i])
 			}
-			y += boxHeight + gapY
+			y += h + gapY
 		}
 	}
 
@@ -453,6 +477,7 @@ func packRow(
 	nodes []graphNode,
 	width, gapX int,
 	iconFor func(broker.TaskState) (string, string),
+	detailOf func(id string) string,
 ) [][]placedBox {
 	var rows [][]placedBox
 	var cur []placedBox
@@ -460,6 +485,12 @@ func packRow(
 
 	for _, n := range nodes {
 		b := measureBox(n, width, iconFor)
+		// The detail line never widens a box. The tool changes every few
+		// seconds, and a box that grew to fit it reflowed the diagram as the
+		// worker worked: on a narrow pane five running siblings wrapped onto
+		// two rows, and "down" started landing on boxes that were beside
+		// the cursor a second ago. The detail is cut to the box instead.
+		b.detail = detailOf(n.task.ID)
 		need := b.w
 		if len(cur) > 0 {
 			need += gapX
@@ -534,6 +565,14 @@ func drawBox(c *canvas, b placedBox) {
 	for _, r := range body {
 		c.set(x, b.y+1, r)
 		x += runeCells(r)
+	}
+	if b.detail != "" && b.h > 3 {
+		line := padRight(truncate(" "+fitDetail(b.detail, inner-1), inner), inner)
+		x = b.x + 1
+		for _, r := range line {
+			c.set(x, b.y+2, r)
+			x += runeCells(r)
+		}
 	}
 }
 
@@ -906,4 +945,19 @@ func runeCells(r rune) int {
 		return 1
 	}
 	return w
+}
+
+// fitDetail shortens a "Tool  argument" summary to w cells. When the
+// argument will not fit, the tool name alone is more useful than a path
+// cut to its first few letters: "Edit" says what the worker is doing,
+// "Edit  cmd/na…" does not say much more and costs the same row.
+func fitDetail(detail string, w int) string {
+	if displayWidth(detail) <= w {
+		return detail
+	}
+	tool, arg, ok := strings.Cut(detail, "  ")
+	if !ok || displayWidth(tool)+4 > w {
+		return truncate(tool, w)
+	}
+	return tool + " " + truncate(arg, w-displayWidth(tool)-1)
 }

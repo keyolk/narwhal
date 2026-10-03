@@ -17,6 +17,8 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -341,7 +343,7 @@ func runOnCoordinator(t *testing.T, sc parityScenario) graphOutcome {
 func runOnDaemon(t *testing.T, sc parityScenario) graphOutcome {
 	t.Helper()
 	t.Setenv("HOME", t.TempDir())
-	stubWorker(t)
+	gate := gatedWorker(t)
 
 	sess := NewSession()
 	sess.URL = "http://127.0.0.1:1"
@@ -379,6 +381,7 @@ func runOnDaemon(t *testing.T, sc parityScenario) graphOutcome {
 				// in the same instant gives the loop no window to read the
 				// radio, which makes the harness look like a defect.
 				sc.work(run, snap.ID)
+				gate.release("worker-" + snap.ID)
 				time.Sleep(2 * DispatchInterval)
 				acted = true
 			}
@@ -391,6 +394,52 @@ func runOnDaemon(t *testing.T, sc parityScenario) graphOutcome {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return outcomeOf(run)
+}
+
+// workerGate holds the daemon's stub workers alive until the harness has
+// applied their scenario.
+//
+// The plain stub exits at once, so the dispatch tick could reap a worker
+// before the harness got to it and record an exit without task-done.
+// Workers are handled one at a time with a sleep between them, so a task
+// waiting its turn was relaunched and reaped until the breaker tripped:
+// with two CPUs, origin/main failed "task b: batch=completed daemon=failed"
+// in 1 of 6 runs under -race. The coordinator's fake runner calls the
+// scenario inside the worker, so it never had this window — the two paths
+// were being compared under different rules, which is the one thing this
+// test exists to rule out. A real worker exits after its work, and so does
+// this one.
+type workerGate struct {
+	t   *testing.T
+	dir string
+}
+
+// release lets agentID's worker exit. Writing it for a worker that already
+// gave up waiting is harmless; failing to write it is not.
+func (g workerGate) release(agentID string) {
+	if err := os.WriteFile(filepath.Join(g.dir, agentID), nil, 0o600); err != nil {
+		g.t.Fatalf("release %s: %v", agentID, err)
+	}
+}
+
+func gatedWorker(t *testing.T) workerGate {
+	t.Helper()
+	dir := t.TempDir()
+	gate := filepath.Join(dir, "gate")
+	if err := os.Mkdir(gate, 0o700); err != nil {
+		t.Fatalf("mkdir gate: %v", err)
+	}
+	// Wait for the harness's release, bounded so a scenario that never
+	// dispatches cannot leave processes behind past the test's deadline.
+	body := "#!/bin/sh\n" +
+		"i=0\n" +
+		"while [ ! -e \"" + gate + "/$NARWHAL_AGENT_ID\" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "ccproxy"), []byte(body), 0o700); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	return workerGate{t: t, dir: gate}
 }
 
 func allTerminal(run *broker.Run) bool {

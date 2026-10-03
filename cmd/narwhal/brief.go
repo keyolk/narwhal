@@ -127,6 +127,25 @@ type briefInstruction struct {
 	// an instruction to everyone, any worker that has.
 	answeredBy []string
 	addressed  []string
+	// routed says the router chose addressed, not the operator.
+	routed bool
+}
+
+// routedTo is the workers the router relayed an instruction to, read back
+// from its relay on the radio.
+func routedTo(s broker.Snapshot, content string) []string {
+	for _, m := range s.Messages {
+		if m == nil || m.Sender != "coordinator" || !strings.HasPrefix(m.Content, broker.RelayPrefix) ||
+			!strings.HasSuffix(m.Content, content) || len(m.Mentions) == 0 {
+			continue
+		}
+		var out []string
+		for _, id := range m.Mentions {
+			out = append(out, strings.TrimPrefix(id, "worker-"))
+		}
+		return out
+	}
+	return nil
 }
 
 // briefInstructions lists the operator's messages, oldest first, each with
@@ -143,6 +162,12 @@ func briefInstructions(s broker.Snapshot) []briefInstruction {
 			continue
 		}
 		in := briefInstruction{text: oneLine(m.Content), addressed: recipients(m, "", tasks)}
+		// An instruction that named nobody may have been relayed by the
+		// router; then the workers it went to are the ones to hear from.
+		if len(in.addressed) == 0 {
+			in.addressed = routedTo(s, m.Content)
+			in.routed = len(in.addressed) > 0
+		}
 		if !m.CreatedAt.IsZero() {
 			in.at = m.CreatedAt.Format("15:04")
 		}
@@ -219,7 +244,12 @@ func (m tuiModel) viewBrief(width, height int) string {
 		if len(in.answeredBy) > 0 {
 			mark, state = styGreen.Render("✓"), styGreen.Render(padRight(strings.Join(in.answeredBy, ","), 14))
 		}
-		line("  " + mark + " " + styDim.Render(in.at) + " " + state + " " + in.text)
+		via := ""
+		if in.routed {
+			// Who it was relayed to, so a routing mistake is visible.
+			via = styMagenta.Render("→" + strings.Join(in.addressed, ",") + " ")
+		}
+		line("  " + mark + " " + styDim.Render(in.at) + " " + state + " " + via + in.text)
 	}
 	return padRows(rows, width, height)
 }

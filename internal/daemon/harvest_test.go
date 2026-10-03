@@ -1,7 +1,10 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -110,5 +113,50 @@ func TestTheRunningDaemonHarvestsWithoutARestart(t *testing.T) {
 	})
 	if got := run.Snapshot().Tasks[0].Outcome; got != "SWEEP_WORKS" {
 		t.Errorf("harvested outcome is %q", got)
+	}
+}
+
+// outcomePath is where writeOutcome puts a task's outcome.
+func outcomePath(runID, taskID string) string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".narwhal", "sessions", runID, "agents", "worker-"+taskID, "outcome-"+taskID+".json")
+}
+
+// An outcome left by an earlier attempt must not complete the retry that
+// is now running — that would discard the work in flight.
+func TestAnEarlierAttemptsOutcomeIsNotHarvested(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := broker.New()
+	run := b.CreateRun("r-old", "p", "/tmp", "main")
+	task := run.AddTask("task-1", "n", "a", nil)
+	task.StartDispatch("d1", "worker-task-1")
+	task.FailDispatch("worker died", run)
+	task.StartDispatch("d2", "worker-task-1")
+	writeOutcome(t, "r-old", "task-1", "from attempt one")
+	old := task.DispatchStartedAt().Add(-30 * time.Second)
+	if err := os.Chtimes(outcomePath("r-old", "task-1"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if got := harvestOrphanedOutcomes("r-old", run); got != 0 {
+		t.Errorf("harvested an outcome from 30s before the dispatch")
+	}
+}
+
+// Linux stamps mtime from a coarse tick, so a file written just after a
+// dispatch began can read a few milliseconds before it. On a first
+// attempt there is no earlier one for it to belong to.
+func TestAnOutcomeStampedJustBeforeTheDispatchIsHarvested(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := broker.New()
+	run := b.CreateRun("r-tick", "p", "/tmp", "main")
+	task := run.AddTask("task-1", "n", "a", nil)
+	task.StartDispatch("d1", "worker-task-1")
+	writeOutcome(t, "r-tick", "task-1", "this attempt")
+	tick := task.DispatchStartedAt().Add(-4 * time.Millisecond)
+	if err := os.Chtimes(outcomePath("r-tick", "task-1"), tick, tick); err != nil {
+		t.Fatal(err)
+	}
+	if got := harvestOrphanedOutcomes("r-tick", run); got != 1 {
+		t.Errorf("an outcome 4ms 'before' the dispatch was skipped")
 	}
 }

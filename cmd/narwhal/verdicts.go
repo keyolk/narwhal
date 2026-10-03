@@ -72,7 +72,12 @@ func verdictRow(v broker.Verdict, width int) string {
 	if v.Latency > 0 {
 		tail += styDim.Render(fmt.Sprintf("  %dms", v.Latency))
 	}
-	return truncate(styDim.Render(label)+style.Render(verdictBar(v.P))+style.Render(tail), width)
+	// A routing verdict is about an instruction; without its text the row
+	// says a worker was or was not sent something, and not what.
+	if v.Ask != "" {
+		tail += styDim.Render("  ") + v.Ask
+	}
+	return ansiTruncate(styDim.Render(label)+style.Render(verdictBar(v.P))+style.Render(tail), width)
 }
 
 // workerVerdictRow is a question a worker asked: the bar and probability,

@@ -136,3 +136,11 @@ func TestUnansweredWorkerQuestionSaysSo(t *testing.T) {
 		t.Errorf("row = %q", got)
 	}
 }
+
+func TestRouteVerdictShowsTheInstruction(t *testing.T) {
+	v := broker.Verdict{TaskID: "api", Question: broker.QuestionRoute, P: 0.9, Decided: true,
+		Action: broker.ActionRouted, Ask: "make sure nothing logs the token"}
+	if got := ansi.Strip(verdictRow(v, 120)); !strings.Contains(got, "→ routed") || !strings.Contains(got, "nothing logs the token") {
+		t.Errorf("row = %q", got)
+	}
+}

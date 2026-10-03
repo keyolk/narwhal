@@ -86,6 +86,10 @@ func (r *Run) IntakeGraphRequests(cursor int64) int64 {
 		}
 		if taskID, model, reason, ok := ParseModelEscalateRequest(m.Content); ok {
 			r.applyModelEscalation(taskID, model, reason, m.Sender)
+			continue
+		}
+		if r.needsRouting(m) {
+			r.routeInstruction(m)
 		}
 	}
 	if len(msgs) > 0 {

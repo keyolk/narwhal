@@ -70,9 +70,17 @@ func harvestOrphanedOutcomes(runID string, run *broker.Run) int {
 		// running belongs to an earlier one; completing on it would
 		// discard the work in flight and record the answer of the worker
 		// before it.
-		if started := task.DispatchStartedAt(); !written.IsZero() &&
-			!started.IsZero() && written.Before(started) {
-			continue
+		//
+		// Only a retry can find an earlier attempt's file, so only a retry
+		// is checked. On a first attempt the comparison was all risk: Linux
+		// stamps mtime from a coarse tick, so an outcome written just after
+		// the dispatch began read a few milliseconds "before" it and was
+		// skipped — CI failed TestHarvestingIsNotRepeated that way.
+		if task.DispatchCount() > 1 {
+			if started := task.DispatchStartedAt(); !written.IsZero() &&
+				!started.IsZero() && written.Before(started) {
+				continue
+			}
 		}
 		// Recorded, not required — see the same decision in adopt.go.
 		task.RecordCheckResult(check)

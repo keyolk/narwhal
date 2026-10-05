@@ -28,6 +28,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -1040,7 +1041,7 @@ func (m tuiModel) View() string {
 		radioHeight, inspectHeight = bodyHeight, 0
 	}
 
-	left := m.viewTasks(leftWidth, bodyHeight)
+	left := m.viewLeft(leftWidth, bodyHeight)
 	var right string
 	if inspectHeight > 0 {
 		// A blank line between the two panes. Stacked flush, the inspector's
@@ -1638,18 +1639,24 @@ func (m tuiModel) viewFooter() string {
 		stat("failed", counts[broker.TaskFailed], styRed),
 	}, "  ")
 
-	tail := ""
+	tail := m.steerStatus()
 	if m.followTail {
 		// This says the view is tracking new messages, which is a live
 		// state — dim made it read as a label nobody had to notice.
-		tail = "  " + styCyan.Render("[following]")
+		tail += "  " + styCyan.Render("[following]")
 	}
 	// The command line takes the key-hint row rather than adding one, so
 	// opening it does not shift the panes above.
-	if line := m.viewSteer(); line != "" {
-		return stats + tail + "\n" + line
+	// One row however long the last instruction was: a wrapped footer
+	// takes its extra line from the panes.
+	top := stats + tail
+	if m.width > 0 {
+		top = ansi.Truncate(top, m.width, "…")
 	}
-	return stats + tail + "\n" + styDim.Render(m.footerKeys())
+	if line := m.viewSteer(); line != "" {
+		return top + "\n" + line
+	}
+	return top + "\n" + styDim.Render(m.footerKeys())
 }
 
 // footerKeys lists the keys that do something where the cursor is.
@@ -1741,7 +1748,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		if m.focus == focusTasks {
 			selected = m.taskCur
 		}
-		out = append(out, m.styleBoxLine(r, truncate(r.text, width), selected, marks[i], headline[i]))
+		out = append(out, printable(m.styleBoxLine(r, truncate(r.text, width), selected, marks[i], headline[i])))
 	}
 	return padRows(out, width, height)
 }

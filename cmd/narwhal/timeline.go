@@ -17,10 +17,40 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
+// viewLeft is the graph, with the timeline beneath it when the graph
+// leaves room.
+//
+// A graph is a handful of boxes; on a normal terminal it filled a tenth of
+// its column and padded the rest, while the run's history sat behind a key
+// nobody thinks to press. Giving the history the space the graph does not
+// use puts "what has happened" next to "what the run looks like", always.
+func (m tuiModel) viewLeft(width, height int) string {
+	graph := m.graphContentHeight(width)
+	// The timeline needs a title and a few events to be worth drawing;
+	// below that the graph keeps its whole column, and `5` still shows the
+	// timeline in the radio's place.
+	const minTimeline = 6
+	if !m.boxMode || graph+1+minTimeline > height || m.lower == lowerTimeline {
+		return m.viewTasks(width, height)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left,
+		m.viewTasks(width, graph),
+		"",
+		m.viewTimeline(width, height-graph-1))
+}
+
+// graphContentHeight is the rows the box graph needs: its title, its
+// drawing, and one row of air.
+func (m tuiModel) graphContentHeight(width int) int {
+	return 1 + len(m.boxRows(width)) + 1
+}
+
 func (m tuiModel) viewTimeline(width, height int) string {
 	events := broker.Timeline(m.snap)
+	// Focused only where it stands in for the radio; under the graph it is
+	// read-only and must not light up with the radio's focus.
 	rows := []string{numberedPaneTitle(5, fmt.Sprintf("Timeline (%d)", len(events)),
-		m.focus == focusRadio, width)}
+		m.focus == focusRadio && m.lower == lowerTimeline, width)}
 	if len(events) == 0 {
 		rows = append(rows, styDim.Render("   nothing yet"))
 		return padRows(rows, width, height)
@@ -29,14 +59,25 @@ func (m tuiModel) viewTimeline(width, height int) string {
 	if avail := height - 1; avail > 0 && len(events) > avail {
 		events = events[len(events)-avail:]
 	}
+	// The glyph says what kind of event it is, so the kind is not spelled
+	// out: under the graph the pane is a third of the screen wide, and the
+	// word "instruction" cost the line most of what the operator wrote.
+	whoW := 0
+	for _, e := range events {
+		whoW = max(whoW, displayWidth(e.Who))
+	}
+	whoW = min(whoW, 10)
 	for _, e := range events {
 		glyph, style := timelineGlyph(e.Kind)
-		who := ""
-		if e.Who != "" {
-			who = styCyan.Render(padRight(e.Who, 12)) + " "
+		text := e.Text
+		if text == "" {
+			text = string(e.Kind)
+		} else if e.Kind == broker.TimelineStarted || e.Kind == broker.TimelineVerdict {
+			text = string(e.Kind) + " " + text
 		}
 		line := styDim.Render(e.At.Local().Format("15:04:05")) + " " +
-			style.Render(glyph) + " " + who + style.Render(string(e.Kind)) + " " + e.Text
+			style.Render(glyph) + " " + styCyan.Render(padRight(truncate(e.Who, whoW), whoW)) + " " +
+			style.Render(text)
 		// Styled before it is fitted, so the cut has to skip escapes.
 		rows = append(rows, ansi.Truncate(line, width, "…"))
 	}

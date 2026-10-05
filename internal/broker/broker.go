@@ -516,8 +516,12 @@ type Dispatch struct {
 	FailureCount int
 	Heartbeat    time.Time
 	StartedAt    time.Time
-	Status       DispatchStatus
-	Output       string
+	// EndedAt is when the dispatch reached done, failed or cancelled; zero
+	// while it runs. Recorded so a run's history can say when each task
+	// finished, which nothing else in the record does.
+	EndedAt time.Time
+	Status  DispatchStatus
+	Output  string
 }
 
 // Thread is a named conversation channel within a Run's radio layer.
@@ -778,7 +782,10 @@ func (t *Task) snapshot() TaskSnapshot {
 		Model:      t.Model,
 	}
 	if n := len(t.Dispatches); n > 0 {
-		ts.Outcome = t.Dispatches[n-1].Output
+		last := t.Dispatches[n-1]
+		ts.Outcome = last.Output
+		ts.StartedAt = last.StartedAt
+		ts.EndedAt = last.EndedAt
 	}
 	ts.Check = t.Check
 	ts.CheckResult = t.CheckResult
@@ -965,6 +972,7 @@ func (t *Task) CompleteDispatch(output string, r *Run) {
 	if len(t.Dispatches) > 0 {
 		t.Dispatches[len(t.Dispatches)-1].Status = DispatchDone
 		t.Dispatches[len(t.Dispatches)-1].Output = output
+		t.Dispatches[len(t.Dispatches)-1].EndedAt = time.Now()
 	}
 	t.State = TaskCompleted
 	t.mu.Unlock()
@@ -987,6 +995,7 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 		d := t.Dispatches[len(t.Dispatches)-1]
 		d.Status = DispatchFailed
 		d.Output = reason
+		d.EndedAt = time.Now()
 	}
 	for _, d := range t.Dispatches {
 		if d.Status == DispatchFailed {
@@ -1029,6 +1038,7 @@ func (t *Task) CancelDispatch(reason string, r *Run) {
 		if d.Status == DispatchRunning {
 			d.Status = DispatchFailed
 			d.Output = reason
+			d.EndedAt = time.Now()
 		}
 	}
 	if t.State != TaskCompleted {
@@ -1203,6 +1213,12 @@ type TaskSnapshot struct {
 	// its answer are what make that run legible in hindsight.
 	Check       string `json:"check,omitempty"`
 	CheckResult string `json:"check_result,omitempty"`
+	// StartedAt and EndedAt are the latest dispatch's start and end. They
+	// place the task on the run's timeline; without them the record says
+	// what a task concluded and never when, and a history of the run could
+	// only be ordered by the radio, where task-done is not posted.
+	StartedAt time.Time `json:"started_at,omitzero"`
+	EndedAt   time.Time `json:"ended_at,omitzero"`
 }
 
 // Usage is one task's measured cost.

@@ -70,6 +70,26 @@ func ExportMarkdown(s broker.Snapshot) string {
 		}
 	}
 
+	// How the run got to its answer: what was asked of whom, which calls
+	// the judge made, when each task ended. The Tasks section says what
+	// each concluded and the radio what they said; neither says in what
+	// order, or which of it the operator was involved in.
+	if events := broker.Timeline(s); len(events) > 0 {
+		b.WriteString("## Timeline\n\n")
+		for _, e := range events {
+			who := e.Who
+			if who != "" {
+				who = " **" + who + "**"
+			}
+			text := e.Text
+			if text != "" {
+				text = " — " + text
+			}
+			fmt.Fprintf(&b, "- %s %s%s%s\n", e.At.Local().Format("15:04:05"), e.Kind, who, text)
+		}
+		b.WriteString("\n")
+	}
+
 	// The radio is where workers told each other what they found, and it
 	// holds observations that never made it into any one task's outcome.
 	if len(s.Messages) > 0 {
@@ -162,16 +182,7 @@ func synthesisOutcome(tasks []broker.TaskSnapshot) string {
 // found in this history was posted to worklog, which also carries every
 // file claim.
 func isProtocol(content string) bool {
-	if _, _, _, _, ok := broker.ParseSplitRequest(content); ok {
-		return true
-	}
-	if _, _, _, ok := broker.ParseFileClaimRequest(content); ok {
-		return true
-	}
-	if _, _, _, ok := broker.ParseDepEdgeRequest(content); ok {
-		return true
-	}
-	return strings.HasPrefix(strings.TrimSpace(content), broker.ModelEscalatePrefix)
+	return broker.IsProtocol(content)
 }
 
 // substantial reports whether a rendered run is worth putting in a corpus

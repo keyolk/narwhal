@@ -153,8 +153,9 @@ type tuiModel struct {
 	now          time.Time
 	animated     bool // an animation tick is scheduled
 
-	// briefMode shows the operator's summary in the radio pane's place.
-	briefMode bool
+	// lower is what the radio pane's slot shows: the radio, the operator's
+	// brief, or the run's timeline.
+	lower lowerPane
 
 	// steering is the open command line, steerBuf what has been typed into
 	// it, and steerMsg the result of the last send. See steer.go.
@@ -534,12 +535,17 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.followZoom()
 	case "3":
 		m.focus = focusRadio
-		m.briefMode = false
+		m.lower = lowerRadio
 		m.followZoom()
 	case "4":
 		// The operator's summary takes the radio pane's place. See brief.go.
 		m.focus = focusRadio
-		m.briefMode = true
+		m.lower = lowerBrief
+		m.followZoom()
+	case "5":
+		// The run's history, oldest first. See timeline.go.
+		m.focus = focusRadio
+		m.lower = lowerTimeline
 		m.followZoom()
 	case "z":
 		// Zoom the focused pane to the whole body, tmux-style. A second
@@ -1653,7 +1659,7 @@ func (m tuiModel) viewFooter() string {
 // the graph navigates, the node scrolls — so the hints follow the focus
 // and stay one line.
 func (m tuiModel) footerKeys() string {
-	parts := []string{"1/2/3 pane", "4 brief"}
+	parts := []string{"1/2/3 pane", "4 brief", "5 timeline"}
 	switch m.focus {
 	case focusTasks:
 		parts = append(parts, "hjkl move", "b lanes", "< > width")
@@ -1953,10 +1959,23 @@ func padRows(rows []string, width, height int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
 }
 
-// viewChannel is the lower right pane: the radio, or the operator's brief.
+// lowerPane is what occupies the radio pane's slot.
+type lowerPane int
+
+const (
+	lowerRadio lowerPane = iota
+	lowerBrief
+	lowerTimeline
+)
+
+// viewChannel is the lower right pane: the radio, the operator's brief, or
+// the run's timeline.
 func (m tuiModel) viewChannel(width, height int) string {
-	if m.briefMode {
+	switch m.lower {
+	case lowerBrief:
 		return m.viewBrief(width, height)
+	case lowerTimeline:
+		return m.viewTimeline(width, height)
 	}
 	return m.viewRadio(width, height)
 }

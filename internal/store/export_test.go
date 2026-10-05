@@ -311,3 +311,30 @@ func TestTheSynthesisAnswerLeadsTheDocument(t *testing.T) {
 		t.Errorf("the synthesis answer appears below the task list:\n%s", md)
 	}
 }
+
+// The export says in what order the run happened, not only what each task
+// concluded: the urgent post, then the failure, each in its own line.
+func TestTheExportCarriesTheTimeline(t *testing.T) {
+	md := ExportMarkdown(exportFixture(t))
+	i := strings.Index(md, "## Timeline")
+	if i < 0 {
+		t.Fatalf("no timeline section:\n%s", md)
+	}
+	section := md[i:]
+	if j := strings.Index(section, "## Radio"); j >= 0 {
+		section = section[:j]
+	}
+	for _, want := range []string{
+		"started **task-1**",
+		"completed **task-1** — 4 of 7 SANs are covered",
+		"urgent **task-1** — the apne2 gateway advertises a host",
+	} {
+		if !strings.Contains(section, want) {
+			t.Errorf("timeline lacks %q:\n%s", want, section)
+		}
+	}
+	// An ordinary post is radio, not history.
+	if strings.Contains(section, "wildcard but not the apex") {
+		t.Errorf("an ordinary post reached the timeline:\n%s", section)
+	}
+}

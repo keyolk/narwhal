@@ -38,14 +38,14 @@ func briefText(m tuiModel) string { return ansi.Strip(m.viewBrief(110, 30)) }
 func TestFourShowsTheBriefAndThreeTheRadio(t *testing.T) {
 	m := briefModel(t)
 	m = press(m, "4")
-	if !m.briefMode || m.focus != focusRadio {
-		t.Fatalf("4: briefMode=%v focus=%v", m.briefMode, m.focus)
+	if m.lower != lowerBrief || m.focus != focusRadio {
+		t.Fatalf("4: lower=%v focus=%v", m.lower, m.focus)
 	}
 	if !strings.Contains(ansi.Strip(m.viewChannel(100, 20)), "Brief") {
 		t.Error("the lower pane is not the brief")
 	}
 	m = press(m, "3")
-	if m.briefMode {
+	if m.lower == lowerBrief {
 		t.Error("3 did not go back to the radio")
 	}
 }

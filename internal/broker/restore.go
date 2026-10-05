@@ -133,6 +133,10 @@ func RestoreRun(s Snapshot) *Run {
 				// Earlier attempts' reasons were never stored, so they stay
 				// empty rather than being copied onto every attempt.
 				d.Output = ts.Outcome
+				// Its times too, or a restart would wipe when each task
+				// ran from the run's history.
+				d.StartedAt = ts.StartedAt
+				d.EndedAt = ts.EndedAt
 			}
 			t.Dispatches = append(t.Dispatches, d)
 		}

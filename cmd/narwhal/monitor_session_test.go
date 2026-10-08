@@ -100,7 +100,7 @@ func TestSessionViewFollowsNewOutputUntilYouScroll(t *testing.T) {
 
 func TestSKeyTogglesBetweenTaskAndSession(t *testing.T) {
 	m := sessionModel(t, "task-1", []string{"line"})
-	m = press(m, "tab", "enter") // task detail
+	m = press(m, "1", "enter") // task detail
 	if m.detail != detailTask {
 		t.Fatalf("expected task detail, got %v", m.detail)
 	}
@@ -130,7 +130,7 @@ func TestSessionViewWalksTasksWithNP(t *testing.T) {
 
 func TestTaskDetailPointsAtTheSessionView(t *testing.T) {
 	m := sessionModel(t, "task-1", []string{"some output"})
-	m = press(m, "tab", "enter")
+	m = press(m, "1", "enter")
 	if out := m.View(); !strings.Contains(out, "press s") {
 		t.Fatalf("task detail does not mention the session view:\n%s", out)
 	}

@@ -58,7 +58,7 @@ func TestTabCyclesEveryPane(t *testing.T) {
 	if m.focus != focusRadio {
 		t.Fatalf("initial focus = %v, want radio", m.focus)
 	}
-	for i, want := range []focusPane{focusTasks, focusNode, focusRadio} {
+	for i, want := range []focusPane{focusTimeline, focusTasks, focusNode, focusRadio} {
 		m = press(m, "tab")
 		if m.focus != want {
 			t.Fatalf("tab %d focused %v, want %v", i+1, m.focus, want)
@@ -71,7 +71,7 @@ func TestShiftTabGoesBack(t *testing.T) {
 	m.focus = focusTasks
 
 	m = press(m, "shift+tab")
-	if m.focus != focusRadio {
+	if m.focus != focusTimeline {
 		t.Fatalf("shift+tab from the first pane went to %v, want the last", m.focus)
 	}
 }
@@ -93,7 +93,7 @@ func TestCursorMovesWithinFocusedPane(t *testing.T) {
 	// depends on the drawn layout — what this test pins is that the focused
 	// pane is the one that moves. These four tasks have no deps and share a
 	// row, so l is the direction with somewhere to go.
-	m = press(m, "tab", "l")
+	m = press(m, "1", "l")
 	if m.taskCur == 0 {
 		t.Fatalf("task cursor did not move while tasks were focused")
 	}
@@ -173,7 +173,7 @@ func TestEnterOpensDetailAndEscCloses(t *testing.T) {
 
 func TestEnterOnTasksPaneOpensTaskDetail(t *testing.T) {
 	m := testModel(2, 3)
-	m = press(m, "tab", "enter")
+	m = press(m, "1", "enter")
 	if m.detail != detailTask {
 		t.Fatalf("enter on the tasks pane should open the task detail, got %v", m.detail)
 	}
@@ -200,7 +200,7 @@ func TestDetailNavigationBetweenMessages(t *testing.T) {
 
 func TestDetailNavigationBetweenTasks(t *testing.T) {
 	m := testModel(3, 1)
-	m = press(m, "tab", "enter")
+	m = press(m, "1", "enter")
 
 	m = press(m, "n")
 	if m.taskCur != 1 {

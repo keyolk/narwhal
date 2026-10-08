@@ -6,8 +6,8 @@
 // acknowledgements, a worker's state has to be pieced together from its
 // last few posts, and an instruction from the operator scrolls away with
 // no sign of whether anyone picked it up. Brief answers those three
-// questions from the same snapshot, in the radio pane's place. `4` shows
-// it, `3` goes back to the radio.
+// questions from the same snapshot, as the second tab of pane 3: `3` on
+// the focused pane switches between the radio and the brief.
 package main
 
 import (
@@ -194,7 +194,7 @@ func briefInstructions(s broker.Snapshot) []briefInstruction {
 
 // viewBrief renders the operator's view in the radio pane's place.
 func (m tuiModel) viewBrief(width, height int) string {
-	rows := []string{numberedPaneTitle(4, "Brief", m.focus == focusRadio, width)}
+	rows := []string{m.channelTitle(width)}
 	section := func(name string) {
 		rows = append(rows, styTitle.Render(" "+name))
 	}

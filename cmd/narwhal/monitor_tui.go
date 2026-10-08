@@ -47,10 +47,16 @@ const (
 	focusTasks focusPane = iota
 	focusNode
 	focusRadio
+	// focusTimeline is the run's history under the graph. It is a pane
+	// like the others — a number, a focus, a scroll — rather than a view
+	// that 5 swapped into the radio's slot, where the same history moved
+	// across the screen depending on which key was pressed last.
+	focusTimeline
 )
 
-// panes is the cycle order, left to right and top to bottom on screen.
-var panes = []focusPane{focusTasks, focusNode, focusRadio}
+// panes is the cycle order, which is the order of the numbers in the pane
+// titles: graph, node, radio, then the timeline under the graph.
+var panes = []focusPane{focusTasks, focusNode, focusRadio, focusTimeline}
 
 func (f focusPane) next() focusPane { return panes[(int(f)+1)%len(panes)] }
 func (f focusPane) prev() focusPane { return panes[(int(f)+len(panes)-1)%len(panes)] }
@@ -154,9 +160,13 @@ type tuiModel struct {
 	now          time.Time
 	animated     bool // an animation tick is scheduled
 
-	// lower is what the radio pane's slot shows: the radio, the operator's
-	// brief, or the run's timeline.
-	lower lowerPane
+	// briefTab says pane 3 shows the operator's brief instead of the radio.
+	// The two are tabs of one pane: both are the whole run's channel, one
+	// as it was said and one as it stands. 3 on a focused pane 3 switches.
+	briefTab bool
+	// timelineBack is how many events the timeline is scrolled back from
+	// the newest; 0 follows the run.
+	timelineBack int
 
 	// steering is the open command line, steerBuf what has been typed into
 	// it, and steerMsg the result of the last send. See steer.go.
@@ -400,7 +410,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// was selected and put the cursor back on it, the same way the run
 		// picker anchors on a run id rather than a row number.
 		selected, hadSelection := m.selectedTask()
+		before := len(m.timelineEvents())
 		m.snap = msg.snap
+		if m.timelineBack > 0 {
+			// Scrolled back, the pane stays on the events it was showing
+			// as new ones arrive below; at 0 it follows the newest.
+			m.timelineBack += len(m.timelineEvents()) - before
+		}
 		m.agents = msg.agents
 		if hadSelection {
 			m.restoreTaskCursor(selected.ID)
@@ -535,18 +551,16 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusNode
 		m.followZoom()
 	case "3":
+		// A number only ever names a place. Pane 3 has two tabs, so the
+		// key that names it also turns it once you are there; it never
+		// sends the focus anywhere but pane 3.
+		if m.focus == focusRadio {
+			m.briefTab = !m.briefTab
+		}
 		m.focus = focusRadio
-		m.lower = lowerRadio
 		m.followZoom()
 	case "4":
-		// The operator's summary takes the radio pane's place. See brief.go.
-		m.focus = focusRadio
-		m.lower = lowerBrief
-		m.followZoom()
-	case "5":
-		// The run's history, oldest first. See timeline.go.
-		m.focus = focusRadio
-		m.lower = lowerTimeline
+		m.focus = focusTimeline
 		m.followZoom()
 	case "z":
 		// Zoom the focused pane to the whole body, tmux-style. A second
@@ -862,6 +876,9 @@ func (m tuiModel) nodeFieldRows() int {
 
 func (m *tuiModel) moveCursor(delta int) {
 	switch m.focus {
+	case focusTimeline:
+		// Down is newer, and back counts from the newest.
+		m.timelineBack -= delta
 	case focusTasks:
 		m.taskCur += delta
 	case focusRadio:
@@ -873,6 +890,8 @@ func (m *tuiModel) moveCursor(delta int) {
 
 func (m *tuiModel) jumpTo(i int) {
 	switch m.focus {
+	case focusTimeline:
+		m.timelineBack = len(m.timelineEvents())
 	case focusTasks:
 		m.selectNode(i)
 	case focusRadio:
@@ -884,6 +903,8 @@ func (m *tuiModel) jumpTo(i int) {
 
 func (m *tuiModel) jumpToEnd() {
 	switch m.focus {
+	case focusTimeline:
+		m.timelineBack = 0
 	case focusTasks:
 		m.selectNode(len(m.snap.Tasks) - 1)
 	case focusRadio:
@@ -970,6 +991,12 @@ func (m *tuiModel) clampCursors() {
 	if n := len(m.snap.Messages); n > 0 && m.radioCur >= n {
 		m.radioCur = n - 1
 	}
+	if most := m.timelineMaxBack(); m.timelineBack > most {
+		m.timelineBack = most
+	}
+	if m.timelineBack < 0 {
+		m.timelineBack = 0
+	}
 }
 
 // sortedTasks returns tasks in a stable order so the cursor does not jump
@@ -998,15 +1025,7 @@ func (m tuiModel) View() string {
 
 	header := m.viewHeader()
 	footer := m.viewFooter()
-	bodyHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
-	if bodyHeight < 1 {
-		// On a terminal too short for header, body and footer together,
-		// draw one row of body and let the rest be clipped by the caller.
-		// A floor of 3 here overflowed a five-row terminal by two lines —
-		// the panes are told a height and honour it, so a floor larger
-		// than the space available is an instruction to overflow.
-		bodyHeight = 1
-	}
+	bodyHeight := m.bodyHeightFor(header, footer)
 
 	leftWidth := m.graphPaneWidth()
 	inspectHeight := m.inspectorHeight(bodyHeight)
@@ -1015,7 +1034,16 @@ func (m tuiModel) View() string {
 	// channel means wanting one pane to be the screen for a moment, and
 	// the sizes come from the same two functions navigation uses so the
 	// cursor still lands where it looks like it should.
-	switch m.zoom {
+	zoom := m.zoom
+	if zoom < 0 && m.focus == focusTimeline && !m.timelineFits(bodyHeight) {
+		// Pane 4 has no room under the graph here. Focusing it still shows
+		// it — across the body, as a zoom would — so 4 means the same
+		// thing on every terminal; leaving it restores the split.
+		zoom = focusTimeline
+	}
+	switch zoom {
+	case focusTimeline:
+		return pinFooter(header+"\n"+m.viewTimeline(m.width, bodyHeight), footer, m.height)
 	case focusTasks:
 		return pinFooter(header+"\n"+m.viewTasks(m.width, bodyHeight), footer, m.height)
 	case focusNode:
@@ -1063,6 +1091,27 @@ func (m tuiModel) View() string {
 	return pinFooter(header+"\n"+body, footer, m.height)
 }
 
+// bodyHeightFor is the rows between the header and the footer.
+func (m tuiModel) bodyHeightFor(header, footer string) int {
+	h := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
+	if h < 1 {
+		// On a terminal too short for header, body and footer together,
+		// draw one row of body and let the rest be clipped by the caller.
+		// A floor of 3 here overflowed a five-row terminal by two lines —
+		// the panes are told a height and honour it, so a floor larger
+		// than the space available is an instruction to overflow.
+		h = 1
+	}
+	return h
+}
+
+// bodyHeight is bodyHeightFor the current header and footer, for callers
+// outside View that need the same number — scrolling the timeline has to
+// agree with drawing it about how many rows it has.
+func (m tuiModel) bodyHeight() int {
+	return m.bodyHeightFor(m.viewHeader(), m.viewFooter())
+}
+
 // inspectorContentHeight is how many rows the node pane actually has to
 // show: its fixed fields plus the worker's activity, capped so a very long
 // feed does not claim the whole body.
@@ -1098,7 +1147,7 @@ func (m tuiModel) inspectorHeight(bodyHeight int) int {
 	switch m.zoom {
 	case focusNode:
 		return bodyHeight
-	case focusRadio, focusTasks:
+	case focusRadio, focusTasks, focusTimeline:
 		return 0
 	}
 	if len(m.snap.Tasks) == 0 || bodyHeight < 14 {
@@ -1153,7 +1202,7 @@ func (m tuiModel) graphPaneWidth() int {
 	switch m.zoom {
 	case focusTasks:
 		return m.width
-	case focusNode, focusRadio:
+	case focusNode, focusRadio, focusTimeline:
 		return 0
 	}
 	// Boxes need room for two borders plus a readable label, so the graph
@@ -1666,14 +1715,20 @@ func (m tuiModel) viewFooter() string {
 // the graph navigates, the node scrolls — so the hints follow the focus
 // and stay one line.
 func (m tuiModel) footerKeys() string {
-	parts := []string{"1/2/3 pane", "4 brief", "5 timeline"}
+	parts := []string{"1-4 pane"}
 	switch m.focus {
 	case focusTasks:
 		parts = append(parts, "hjkl move", "b lanes", "< > width")
 	case focusNode:
 		parts = append(parts, "jk scroll", "+ - height")
 	case focusRadio:
-		parts = append(parts, "jk move", "f follow")
+		tab := "3 → brief"
+		if m.briefTab {
+			tab = "3 → radio"
+		}
+		parts = append(parts, "jk move", "f follow", tab)
+	case focusTimeline:
+		parts = append(parts, "jk scroll", "g/G oldest/newest")
 	}
 	zoomKey := "z zoom"
 	if m.zoom >= 0 {
@@ -1926,6 +1981,35 @@ func numberedPaneTitle(n int, label string, focused bool, width int) string {
 	return key + paneTitle(label, focused, width-2)
 }
 
+// tabbedPaneTitle is numberedPaneTitle for a pane with tabs: the active tab
+// reads as a title, the others stay dim.
+func tabbedPaneTitle(n int, tabs []string, active int, focused bool, width int) string {
+	key := styDim.Render(strconv.Itoa(n) + " ")
+	on := styTitle
+	if focused {
+		key = styCyan.Render(strconv.Itoa(n) + " ")
+		on = styCyanBold
+	}
+	var b strings.Builder
+	plain := 2
+	for i, t := range tabs {
+		if i > 0 {
+			b.WriteString(styDim.Render(" │ "))
+			plain += 3
+		}
+		if i == active {
+			b.WriteString(on.Render(t))
+		} else {
+			b.WriteString(styDim.Render(t))
+		}
+		plain += displayWidth(t)
+	}
+	if rule := width - plain - 1; rule > 0 {
+		b.WriteString(" " + styDim.Render(strings.Repeat("─", rule)))
+	}
+	return key + b.String()
+}
+
 func paneTitle(label string, focused bool, width int) string {
 	// The focused pane is where the keys go, so it gets the colour. Bold
 	// and underline alone had to be compared against the other titles to
@@ -1966,30 +2050,30 @@ func padRows(rows []string, width, height int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
 }
 
-// lowerPane is what occupies the radio pane's slot.
-type lowerPane int
-
-const (
-	lowerRadio lowerPane = iota
-	lowerBrief
-	lowerTimeline
-)
-
-// viewChannel is the lower right pane: the radio, the operator's brief, or
-// the run's timeline.
+// viewChannel is pane 3: the radio, or the operator's brief.
 func (m tuiModel) viewChannel(width, height int) string {
-	switch m.lower {
-	case lowerBrief:
+	if m.briefTab {
 		return m.viewBrief(width, height)
-	case lowerTimeline:
-		return m.viewTimeline(width, height)
 	}
 	return m.viewRadio(width, height)
 }
 
+// channelTitle is pane 3's title, naming both tabs with the one on screen
+// marked, so the title says that 3 has another view and what it is.
+func (m tuiModel) channelTitle(width int) string {
+	return tabbedPaneTitle(3, []string{fmt.Sprintf("Radio (%d)", len(m.snap.Messages)), "Brief"},
+		boolIndex(m.briefTab), m.focus == focusRadio, width)
+}
+
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func (m tuiModel) viewRadio(width, height int) string {
-	title := numberedPaneTitle(3, fmt.Sprintf("Radio (%d)", len(m.snap.Messages)),
-		m.focus == focusRadio, width)
+	title := m.channelTitle(width)
 
 	rows := make([]string, 0, height)
 	rows = append(rows, title)

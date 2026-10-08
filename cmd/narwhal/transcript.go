@@ -343,7 +343,7 @@ func renderTranscript(entries []transcriptEntry, width int) []string {
 	for _, e := range entries {
 		stamp := ""
 		if !e.at.IsZero() {
-			stamp = e.at.Format("15:04:05") + " "
+			stamp = clock(e.at) + " "
 		}
 		pad := strings.Repeat(" ", len(stamp)) + "  "
 		switch e.kind {
@@ -453,6 +453,17 @@ func firstSentence(s string) string {
 	}
 	return ""
 }
+
+// clock is how every pane prints a time: the wall clock of the person
+// reading it.
+//
+// The sources disagree on zone. Claude writes transcript timestamps in UTC
+// ("...Z"), the daemon stamps radio messages in its own local zone, and a
+// run read back from JSON keeps whichever offset it was written with. The
+// Node pane printed the transcript's UTC as it came, nine hours off the
+// Timeline beside it, and the same moment read as two different times
+// depending on the pane.
+func clock(t time.Time) string { return t.Local().Format("15:04:05") }
 
 // clipLines returns at most n non-empty lines, noting how many were cut.
 func clipLines(s string, n int) []string {

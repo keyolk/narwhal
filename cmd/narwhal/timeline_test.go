@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -40,14 +41,37 @@ func TestTimelineKeepsTheNewestThatFit(t *testing.T) {
 func TestTheTimelineSitsUnderTheGraph(t *testing.T) {
 	m := liveModel(t)
 	m.width, m.height = 160, 40
+	at := time.Date(2026, 10, 8, 10, 0, 0, 0, time.Local)
+	m.snap.Tasks[2].StartedAt, m.snap.Tasks[2].EndedAt = at, at.Add(time.Minute)
+	m.snap.Tasks[2].Outcome = "gamma found the leak"
 	m.snap.Messages = briefModel(t).snap.Messages
 	got := ansi.Strip(m.View())
 	g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "5 Timeline")
 	if g < 0 || tl < 0 || tl < g {
 		t.Fatalf("no timeline under the graph:\n%s", got)
 	}
-	if !strings.Contains(got, "@schema add the LockKey field") {
-		t.Errorf("timeline events missing:\n%s", got)
+	if !strings.Contains(got, "gamma found the leak") {
+		t.Errorf("task lifecycle missing from the timeline:\n%s", got)
+	}
+}
+
+// With the radio beside it, the timeline under the graph does not repeat
+// it: an instruction or urgent post appears once on screen, in the radio.
+func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
+	m := liveModel(t)
+	m.width, m.height = 160, 40
+	m.snap.Messages = briefModel(t).snap.Messages
+	got := ansi.Strip(m.View())
+	for _, msg := range []string{"@schema add the LockKey field", "nonce passes twice on replay"} {
+		if n := strings.Count(got, msg); n != 1 {
+			t.Errorf("%q is on screen %d times, want once:\n%s", msg, n, got)
+		}
+	}
+	// With the brief in the radio's place nothing else shows them, so the
+	// timeline keeps them.
+	m = press(m, "4")
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "» operator @schema add the LockKey field") {
+		t.Errorf("the timeline beside the brief dropped the operator's instruction:\n%s", got)
 	}
 }
 

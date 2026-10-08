@@ -64,7 +64,7 @@ func briefDecisions(s broker.Snapshot) []briefDecision {
 		}
 		at := ""
 		if !m.CreatedAt.IsZero() {
-			at = m.CreatedAt.Format("15:04")
+			at = m.CreatedAt.Local().Format("15:04")
 		}
 		switch {
 		case m.Priority == broker.PriorityUrgent:
@@ -169,7 +169,7 @@ func briefInstructions(s broker.Snapshot) []briefInstruction {
 			in.routed = len(in.addressed) > 0
 		}
 		if !m.CreatedAt.IsZero() {
-			in.at = m.CreatedAt.Format("15:04")
+			in.at = m.CreatedAt.Local().Format("15:04")
 		}
 		want := map[string]bool{}
 		for _, id := range in.addressed {

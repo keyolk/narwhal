@@ -307,14 +307,11 @@ func (m tuiModel) nodeLineCountAt(taskID string, width int) int {
 // agree with rendering about how many lines there are, and the count
 // depends on where the text wraps.
 func (m tuiModel) nodePaneWidth() int {
-	if m.zoom == focusNode {
+	if m.effectiveZoom() == focusNode {
 		return m.width - 1
 	}
-	w := m.width - m.graphPaneWidth() - 1
-	if w < 20 {
-		w = 20
-	}
-	return w - 1
+	// The activity feed is indented one cell inside the pane.
+	return max(20, m.width-m.columnWidth()-bandBorderCols) - 1
 }
 
 // pendingDeps returns the task's dependencies that have not finished, in

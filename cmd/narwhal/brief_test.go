@@ -35,41 +35,41 @@ func briefModel(t *testing.T) tuiModel {
 
 func briefText(m tuiModel) string { return ansi.Strip(m.viewBrief(110, 30)) }
 
-// Brief is pane 3's second tab: 3 goes to pane 3, and 3 again on it turns
+// Brief is pane 4's second tab: 4 goes to pane 4, and 4 again on it turns
 // to the brief and back. No key sends the focus to one pane while showing
 // another's content.
-func TestThreeTurnsPaneThreeBetweenRadioAndBrief(t *testing.T) {
+func TestFourTurnsPaneFourBetweenRadioAndBrief(t *testing.T) {
 	m := briefModel(t)
 	m.focus = focusTasks
-	m = press(m, "3")
+	m = press(m, "4")
 	if m.focus != focusRadio || m.briefTab {
-		t.Fatalf("3 from the graph: focus=%v brief=%v, want the radio", m.focus, m.briefTab)
+		t.Fatalf("4 from the graph: focus=%v brief=%v, want the radio", m.focus, m.briefTab)
 	}
-	m = press(m, "3")
+	m = press(m, "4")
 	if !m.briefTab || m.focus != focusRadio {
-		t.Fatalf("3 on pane 3: focus=%v brief=%v, want the brief", m.focus, m.briefTab)
+		t.Fatalf("4 on pane 4: focus=%v brief=%v, want the brief", m.focus, m.briefTab)
 	}
 	if got := ansi.Strip(m.viewChannel(100, 20)); !strings.Contains(got, "Needs a decision") {
-		t.Errorf("pane 3 is not the brief:\n%s", got)
+		t.Errorf("pane 4 is not the brief:\n%s", got)
 	}
-	m = press(m, "3")
+	m = press(m, "4")
 	if m.briefTab {
-		t.Error("3 again did not turn back to the radio")
+		t.Error("4 again did not turn back to the radio")
 	}
 	// Leaving and coming back keeps the tab.
-	m = press(m, "3", "1", "3")
+	m = press(m, "4", "1", "4")
 	if !m.briefTab {
-		t.Error("pane 3 forgot its tab")
+		t.Error("pane 4 forgot its tab")
 	}
 }
 
-// The title names both tabs, so it says that 3 has another view.
-func TestPaneThreeTitleNamesBothTabs(t *testing.T) {
+// The title names both tabs, so it says that 4 has another view.
+func TestPaneFourTitleNamesBothTabs(t *testing.T) {
 	m := briefModel(t)
 	for _, brief := range []bool{false, true} {
 		m.briefTab = brief
 		title := ansi.Strip(strings.SplitN(m.viewChannel(100, 10), "\n", 2)[0])
-		if !strings.Contains(title, "3 Radio (6) │ Brief") {
+		if !strings.Contains(title, "4 Radio (6) │ Brief") {
 			t.Errorf("brief=%v: title %q", brief, title)
 		}
 	}

@@ -49,17 +49,29 @@ const (
 	focusRadio
 	// focusTimeline is the run's history under the graph. It is a pane
 	// like the others — a number, a focus, a scroll — rather than a view
-	// that 5 swapped into the radio's slot, where the same history moved
-	// across the screen depending on which key was pressed last.
+	// swapped into the radio's slot, where the same history moved across
+	// the screen depending on which key was pressed last.
 	focusTimeline
 )
 
 // panes is the cycle order, which is the order of the numbers in the pane
-// titles: graph, node, radio, then the timeline under the graph.
-var panes = []focusPane{focusTasks, focusNode, focusRadio, focusTimeline}
+// titles: reading order, band by band — graph and node, then timeline and
+// radio. See layout.go.
+var panes = []focusPane{focusTasks, focusNode, focusTimeline, focusRadio}
 
-func (f focusPane) next() focusPane { return panes[(int(f)+1)%len(panes)] }
-func (f focusPane) prev() focusPane { return panes[(int(f)+len(panes)-1)%len(panes)] }
+// next and prev step through panes by position in the cycle, not by the
+// constant's value: the cycle follows the screen, the constants do not.
+func (f focusPane) next() focusPane { return panes[(f.slot()+1)%len(panes)] }
+func (f focusPane) prev() focusPane { return panes[(f.slot()+len(panes)-1)%len(panes)] }
+
+func (f focusPane) slot() int {
+	for i, p := range panes {
+		if p == f {
+			return i
+		}
+	}
+	return 0
+}
 
 // detailMode says what the detail pane is showing, or that it is closed.
 type detailMode int
@@ -160,9 +172,9 @@ type tuiModel struct {
 	now          time.Time
 	animated     bool // an animation tick is scheduled
 
-	// briefTab says pane 3 shows the operator's brief instead of the radio.
+	// briefTab says pane 4 shows the operator's brief instead of the radio.
 	// The two are tabs of one pane: both are the whole run's channel, one
-	// as it was said and one as it stands. 3 on a focused pane 3 switches.
+	// as it was said and one as it stands. 4 on a focused pane 4 switches.
 	briefTab bool
 	// timelineBack is how many events the timeline is scrolled back from
 	// the newest; 0 follows the run.
@@ -551,16 +563,16 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusNode
 		m.followZoom()
 	case "3":
-		// A number only ever names a place. Pane 3 has two tabs, so the
+		m.focus = focusTimeline
+		m.followZoom()
+	case "4":
+		// A number only ever names a place. Pane 4 has two tabs, so the
 		// key that names it also turns it once you are there; it never
-		// sends the focus anywhere but pane 3.
+		// sends the focus anywhere but pane 4.
 		if m.focus == focusRadio {
 			m.briefTab = !m.briefTab
 		}
 		m.focus = focusRadio
-		m.followZoom()
-	case "4":
-		m.focus = focusTimeline
 		m.followZoom()
 	case "z":
 		// Zoom the focused pane to the whole body, tmux-style. A second
@@ -844,13 +856,16 @@ func (m *tuiModel) scrollNode(delta int) {
 // offset without moving the screen. Derived the same way View derives it,
 // for the same reason graphPaneWidth is shared with navigation.
 func (m tuiModel) nodeActivityRows() int {
-	body := m.height - nodeChromeRows
-	if body < 1 {
-		body = 1
-	}
-	h := m.inspectorHeight(body)
-	if h == 0 {
+	l := m.layout()
+	// The height the pane is rendered at, title row included.
+	var h int
+	switch {
+	case l.zoom == focusNode:
+		h = l.top
+	case l.zoom >= 0 || l.single:
 		return 1
+	default:
+		h = l.top + 1
 	}
 	// The pane spends rows on its title, headline and fields before the
 	// feed starts; the label above the feed takes one more.
@@ -860,9 +875,6 @@ func (m tuiModel) nodeActivityRows() int {
 	}
 	return rows
 }
-
-// nodeChromeRows is the header and footer the body sits between.
-const nodeChromeRows = 3
 
 // nodeFieldRows is how many rows the summary above the feed occupies.
 func (m tuiModel) nodeFieldRows() int {
@@ -1027,21 +1039,12 @@ func (m tuiModel) View() string {
 	footer := m.viewFooter()
 	bodyHeight := m.bodyHeightFor(header, footer)
 
-	leftWidth := m.graphPaneWidth()
-	inspectHeight := m.inspectorHeight(bodyHeight)
-
 	// A zoomed pane is the body. Reading a long assignment or a busy
 	// channel means wanting one pane to be the screen for a moment, and
-	// the sizes come from the same two functions navigation uses so the
-	// cursor still lands where it looks like it should.
-	zoom := m.zoom
-	if zoom < 0 && m.focus == focusTimeline && !m.timelineFits(bodyHeight) {
-		// Pane 4 has no room under the graph here. Focusing it still shows
-		// it — across the body, as a zoom would — so 4 means the same
-		// thing on every terminal; leaving it restores the split.
-		zoom = focusTimeline
-	}
-	switch zoom {
+	// the sizes come from the same functions navigation uses so the cursor
+	// still lands where it looks like it should.
+	l := m.layout()
+	switch l.zoom {
 	case focusTimeline:
 		return pinFooter(header+"\n"+m.viewTimeline(m.width, bodyHeight), footer, m.height)
 	case focusTasks:
@@ -1051,43 +1054,7 @@ func (m tuiModel) View() string {
 	case focusRadio:
 		return pinFooter(header+"\n"+m.viewChannel(m.width, bodyHeight), footer, m.height)
 	}
-
-	rightWidth := m.width - leftWidth - 1
-	if rightWidth < 20 {
-		rightWidth = 20
-	}
-
-	// The right side is split: the top follows the graph cursor, the bottom
-	// is the radio. Moving the cursor in the graph used to change nothing on
-	// the right, so reading a node meant opening a detail view and backing
-	// out of it — for what is usually a one-glance question. The radio stays
-	// the whole channel rather than being filtered to the selected node:
-	// a channel is the thing everyone is talking on, and messages nobody
-	// @-mentions (PLAN_DONE, broadcasts) belong to no node at all.
-	radioHeight := bodyHeight - inspectHeight
-	if radioHeight < 3 {
-		radioHeight, inspectHeight = bodyHeight, 0
-	}
-
-	left := m.viewLeft(leftWidth, bodyHeight)
-	var right string
-	if inspectHeight > 0 {
-		// A blank line between the two panes. Stacked flush, the inspector's
-		// last field sat directly on the Radio rule and the two read as one
-		// list with a heading in the middle of it — the rule is a boundary
-		// and needs air on the side it is dividing.
-		right = lipgloss.JoinVertical(lipgloss.Left,
-			m.viewInspector(rightWidth, inspectHeight-1),
-			"",
-			m.viewChannel(rightWidth, radioHeight))
-	} else {
-		right = m.viewChannel(rightWidth, radioHeight)
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
-
-	// The panes only render the rows they have content for, so on a tall
-	// terminal the body stops short and the footer rides up with it. Pin
-	// it to the bottom edge the same way every other view does.
+	body := m.viewBands(l)
 	return pinFooter(header+"\n"+body, footer, m.height)
 }
 
@@ -1133,62 +1100,6 @@ func (m tuiModel) inspectorContentHeight() int {
 	return fixed + activity
 }
 
-// inspectorHeight splits the right pane between the node inspector and the
-// radio. The inspector holds a fixed summary plus as much worker activity
-// as fits, and the radio, which grows without bound, takes the rest. On a
-// short terminal it is dropped entirely rather than squeezing the radio to
-// nothing.
-//
-// Zoom and the user's own adjustment both resolve here rather than in
-// View, for the same reason graphPaneWidth is shared: two places computing
-// a size disagree eventually, and the disagreement shows up as a cursor
-// that moves somewhere the user cannot see.
-func (m tuiModel) inspectorHeight(bodyHeight int) int {
-	switch m.zoom {
-	case focusNode:
-		return bodyHeight
-	case focusRadio, focusTasks, focusTimeline:
-		return 0
-	}
-	if len(m.snap.Tasks) == 0 || bodyHeight < 14 {
-		return 0
-	}
-	// Split the body rather than taking a fixed nine rows. Nine was sized
-	// for a pane that showed three lines of "recent"; now that it holds
-	// the worker's activity it deserves a share of the screen, and a fixed
-	// height means a taller terminal only ever grows the radio.
-	want := bodyHeight * 2 / 5
-
-	// But not more than it can fill. Two fifths of a 63-row body is 25
-	// rows, and a node whose worker has not written anything yet uses five
-	// of them — the pane padded the other twenty and pushed the Radio rule
-	// a third of the way down the screen with nothing above it. That empty
-	// band is what makes the layout read as unfinished.
-	//
-	// The fields are a handful of lines; the activity feed is the part
-	// that grows. Ask for what there is to show plus a little slack, and
-	// let the radio have the rest.
-	if fits := m.inspectorContentHeight(); fits > 0 && want > fits {
-		want = fits
-	}
-	// The user's own adjustment applies on top, so + and - move the pane
-	// from wherever the content put it rather than from a share of the
-	// screen it was never going to fill.
-	want += m.heightDelta
-	// Enough for a title, a headline and a line of content; beyond that
-	// the radio must keep a readable remainder.
-	if want < 4 {
-		want = 4
-	}
-	if want > bodyHeight-5 {
-		want = bodyHeight - 5
-	}
-	if bodyHeight-want < 5 {
-		return 0
-	}
-	return want
-}
-
 // graphPaneWidth is the width the graph pane is rendered at. Navigation
 // needs it too: moving between sibling boxes means asking the layout which
 // boxes share a row, and the layout depends on how wide the pane is. If the
@@ -1199,12 +1110,18 @@ func (m tuiModel) inspectorHeight(bodyHeight int) int {
 // width, so navigation has to be computed at the full width as well — the
 // rows a box shares change when the pane gets wider.
 func (m tuiModel) graphPaneWidth() int {
-	switch m.zoom {
+	switch m.effectiveZoom() {
 	case focusTasks:
 		return m.width
 	case focusNode, focusRadio, focusTimeline:
 		return 0
 	}
+	return m.columnWidth()
+}
+
+// columnWidth is the inner width of the bands' left column, where the graph
+// and the timeline sit.
+func (m tuiModel) columnWidth() int {
 	// Boxes need room for two borders plus a readable label, so the graph
 	// pane gets a wider floor in box mode than the lane gutter needs.
 	w := m.width/3 + m.widthDelta
@@ -1722,9 +1639,9 @@ func (m tuiModel) footerKeys() string {
 	case focusNode:
 		parts = append(parts, "jk scroll", "+ - height")
 	case focusRadio:
-		tab := "3 → brief"
+		tab := "4 → brief"
 		if m.briefTab {
-			tab = "3 → radio"
+			tab = "4 → radio"
 		}
 		parts = append(parts, "jk move", "f follow", tab)
 	case focusTimeline:
@@ -2050,7 +1967,7 @@ func padRows(rows []string, width, height int) string {
 	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
 }
 
-// viewChannel is pane 3: the radio, or the operator's brief.
+// viewChannel is pane 4: the radio, or the operator's brief.
 func (m tuiModel) viewChannel(width, height int) string {
 	if m.briefTab {
 		return m.viewBrief(width, height)
@@ -2058,10 +1975,10 @@ func (m tuiModel) viewChannel(width, height int) string {
 	return m.viewRadio(width, height)
 }
 
-// channelTitle is pane 3's title, naming both tabs with the one on screen
-// marked, so the title says that 3 has another view and what it is.
+// channelTitle is pane 4's title, naming both tabs with the one on screen
+// marked, so the title says that 4 has another view and what it is.
 func (m tuiModel) channelTitle(width int) string {
-	return tabbedPaneTitle(3, []string{fmt.Sprintf("Radio (%d)", len(m.snap.Messages)), "Brief"},
+	return tabbedPaneTitle(4, []string{fmt.Sprintf("Radio (%d)", len(m.snap.Messages)), "Brief"},
 		boolIndex(m.briefTab), m.focus == focusRadio, width)
 }
 

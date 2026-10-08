@@ -10,52 +10,52 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
-// 4 focuses pane 4 where it is, under the graph; it does not move into
+// 3 focuses pane 3 where it is, under the graph; it does not move into
 // another pane's slot.
-func TestFourFocusesTheTimelineUnderTheGraph(t *testing.T) {
+func TestThreeFocusesTheTimelineUnderTheGraph(t *testing.T) {
 	m := liveModel(t)
 	m.width, m.height = 160, 40
 	m.snap.Messages = briefModel(t).snap.Messages
-	m = press(m, "4")
+	m = press(m, "3")
 	if m.focus != focusTimeline {
-		t.Fatalf("4: focus=%v", m.focus)
+		t.Fatalf("3: focus=%v", m.focus)
 	}
 	got := ansi.Strip(m.View())
-	if g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "4 Timeline"); g < 0 || tl < g {
-		t.Fatalf("pane 4 is not under the graph:\n%s", got)
+	if g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "3 Timeline"); g < 0 || tl < g {
+		t.Fatalf("pane 3 is not under the graph:\n%s", got)
 	}
-	if !strings.Contains(got, "3 Radio (6)") {
-		t.Errorf("focusing pane 4 replaced the radio:\n%s", got)
+	if !strings.Contains(got, "4 Radio (6)") {
+		t.Errorf("focusing pane 3 replaced the radio:\n%s", got)
 	}
 }
 
 // Tab reaches every pane in the order of their numbers.
 func TestTabReachesTheTimeline(t *testing.T) {
 	m := press(liveModel(t), "1")
-	for i, want := range []focusPane{focusNode, focusRadio, focusTimeline, focusTasks} {
+	for i, want := range []focusPane{focusNode, focusTimeline, focusRadio, focusTasks} {
 		if m = press(m, "tab"); m.focus != want {
 			t.Fatalf("tab %d: focus=%v, want %v", i+1, m.focus, want)
 		}
 	}
 }
 
-// Where pane 4 has no room under the graph, focusing it shows it across
-// the body, and leaving it brings the split back.
-func TestFourOnAShortTerminalShowsTheTimelineZoomed(t *testing.T) {
+// Where there is room for only one band, focusing pane 3 shows it across
+// the body, and leaving it brings the band back.
+func TestThreeOnAShortTerminalShowsTheTimelineZoomed(t *testing.T) {
 	m := liveModel(t)
 	m.width, m.height = 160, 14
 	m.snap.Messages = briefModel(t).snap.Messages
-	m = press(m, "4")
+	m = press(m, "3")
 	got := ansi.Strip(m.View())
-	if !strings.Contains(got, "4 Timeline") || strings.Contains(got, "1 Graph") {
-		t.Fatalf("pane 4 not shown across the body:\n%s", got)
+	if !strings.Contains(got, "3 Timeline") || strings.Contains(got, "1 Graph") {
+		t.Fatalf("pane 3 not shown across the body:\n%s", got)
 	}
 	if !strings.Contains(got, "» operator @schema add the LockKey field") {
-		t.Errorf("zoomed pane 4 left out the operator's instruction:\n%s", got)
+		t.Errorf("zoomed pane 3 left out the operator's instruction:\n%s", got)
 	}
 	m = press(m, "1")
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "1 Graph") || !strings.Contains(got, "3 Radio") {
-		t.Errorf("leaving pane 4 did not restore the split:\n%s", got)
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "1 Graph") || !strings.Contains(got, "4 Radio") {
+		t.Errorf("leaving pane 3 did not restore the band:\n%s", got)
 	}
 }
 
@@ -64,7 +64,7 @@ func TestTheTimelineScrolls(t *testing.T) {
 	m := liveModel(t)
 	m.width, m.height = 160, 14
 	m.snap.Messages = briefModel(t).snap.Messages
-	m = press(m, "4", "z")
+	m = press(m, "3", "z")
 	if rows := m.timelineRows(); rows >= len(broker.Timeline(m.snap)) {
 		t.Skipf("all %d events fit in %d rows", len(broker.Timeline(m.snap)), rows)
 	}
@@ -92,7 +92,7 @@ func TestTheTimelineSitsUnderTheGraph(t *testing.T) {
 	m.snap.Tasks[2].Outcome = "gamma found the leak"
 	m.snap.Messages = briefModel(t).snap.Messages
 	got := ansi.Strip(m.View())
-	g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "4 Timeline")
+	g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "3 Timeline")
 	if g < 0 || tl < 0 || tl < g {
 		t.Fatalf("no timeline under the graph:\n%s", got)
 	}
@@ -115,7 +115,7 @@ func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
 	}
 	// With the brief in the radio's place nothing else shows them, so the
 	// timeline keeps them.
-	m = press(m, "1", "3", "3")
+	m = press(m, "1", "4", "4")
 	if got := ansi.Strip(m.View()); !strings.Contains(got, "» operator @schema add the LockKey field") {
 		t.Errorf("the timeline beside the brief dropped the operator's instruction:\n%s", got)
 	}
@@ -125,7 +125,7 @@ func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
 func TestAShortTerminalGivesTheGraphItsColumn(t *testing.T) {
 	m := liveModel(t)
 	m.width, m.height = 160, 14
-	if got := ansi.Strip(m.View()); strings.Contains(got, "4 Timeline") {
+	if got := ansi.Strip(m.View()); strings.Contains(got, "3 Timeline") {
 		t.Errorf("timeline squeezed in on a short terminal:\n%s", got)
 	}
 }

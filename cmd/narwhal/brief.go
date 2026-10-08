@@ -6,7 +6,7 @@
 // acknowledgements, a worker's state has to be pieced together from its
 // last few posts, and an instruction from the operator scrolls away with
 // no sign of whether anyone picked it up. Brief answers those three
-// questions from the same snapshot, as the second tab of pane 3: `3` on
+// questions from the same snapshot, as the second tab of pane 4: `4` on
 // the focused pane switches between the radio and the brief.
 package main
 

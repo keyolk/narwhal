@@ -58,7 +58,7 @@ func TestTabCyclesEveryPane(t *testing.T) {
 	if m.focus != focusRadio {
 		t.Fatalf("initial focus = %v, want radio", m.focus)
 	}
-	for i, want := range []focusPane{focusTimeline, focusTasks, focusNode, focusRadio} {
+	for i, want := range []focusPane{focusTasks, focusNode, focusTimeline, focusRadio} {
 		m = press(m, "tab")
 		if m.focus != want {
 			t.Fatalf("tab %d focused %v, want %v", i+1, m.focus, want)
@@ -71,7 +71,7 @@ func TestShiftTabGoesBack(t *testing.T) {
 	m.focus = focusTasks
 
 	m = press(m, "shift+tab")
-	if m.focus != focusTimeline {
+	if m.focus != focusRadio {
 		t.Fatalf("shift+tab from the first pane went to %v, want the last", m.focus)
 	}
 }

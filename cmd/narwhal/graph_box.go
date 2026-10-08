@@ -134,6 +134,39 @@ func newCanvas(w, h int) *canvas {
 	return c
 }
 
+// wideTail fills the cell a double-width glyph spills into.
+//
+// The canvas is one rune per terminal cell, so that a column is a rune
+// index everywhere — navigation, pulse routing and span colouring all rely
+// on it. A Hangul or CJK glyph covers two cells, and the second used to
+// keep the blank it started with: printed, every such glyph was followed by
+// a space, a Korean detail line came out "미 들 웨", and everything after it
+// on the row shifted right through the box border. The marker holds the
+// cell and is dropped when the row is printed (see printable).
+const wideTail = '\x00'
+
+// printable turns canvas cells back into terminal text.
+func printable(s string) string {
+	if strings.IndexRune(s, wideTail) < 0 {
+		return s
+	}
+	return strings.ReplaceAll(s, string(wideTail), "")
+}
+
+// putText writes s from x on row y, one rune per cell, marking the second
+// cell of a double-width glyph. It returns the column after the text.
+func (c *canvas) putText(x, y int, s string) int {
+	for _, r := range s {
+		c.set(x, y, r)
+		w := runeCells(r)
+		for i := 1; i < w; i++ {
+			c.set(x+i, y, wideTail)
+		}
+		x += w
+	}
+	return x
+}
+
 func (c *canvas) set(x, y int, r rune) {
 	if x < 0 || y < 0 || x >= c.w || y >= c.h {
 		return
@@ -561,18 +594,9 @@ func drawBox(c *canvas, b placedBox) {
 	}
 	body = padRight(truncate(body, inner), inner)
 
-	x := b.x + 1
-	for _, r := range body {
-		c.set(x, b.y+1, r)
-		x += runeCells(r)
-	}
+	c.putText(b.x+1, b.y+1, body)
 	if b.detail != "" && b.h > 3 {
-		line := padRight(truncate(" "+fitDetail(b.detail, inner-1), inner), inner)
-		x = b.x + 1
-		for _, r := range line {
-			c.set(x, b.y+2, r)
-			x += runeCells(r)
-		}
+		c.putText(b.x+1, b.y+2, padRight(truncate(" "+fitDetail(b.detail, inner-1), inner), inner))
 	}
 }
 

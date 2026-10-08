@@ -142,3 +142,27 @@ func (m tuiModel) viewSteer() string {
 	}
 	return ""
 }
+
+// steerStatus is the footer's standing steer control: the key that opens
+// the command line, and what became of the last instruction sent.
+//
+// The command line only appeared once `i` was pressed, and its result for
+// a few seconds after; the rest of the time nothing on screen said the run
+// could be steered, or whether the last instruction had been picked up.
+// The Brief knew both and was one key away from everything else.
+func (m tuiModel) steerStatus() string {
+	out := "  " + styCyanBold.Render("i") + styDim.Render(" » steer")
+	ins := briefInstructions(m.snap)
+	if len(ins) == 0 {
+		return out
+	}
+	last := ins[len(ins)-1]
+	state := styYellow.Render("… waiting")
+	if len(last.answeredBy) > 0 {
+		state = styGreen.Render("✓ " + strings.Join(last.answeredBy, ","))
+	}
+	if last.routed {
+		state = styMagenta.Render("→"+strings.Join(last.addressed, ",")) + " " + state
+	}
+	return out + styDim.Render("  last: ") + truncate(last.text, 40) + "  " + state
+}

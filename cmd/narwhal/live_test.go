@@ -422,3 +422,34 @@ func TestWorkerQuestionLightsItsBox(t *testing.T) {
 		t.Error("an old question lit a box on first open")
 	}
 }
+
+// A Hangul detail line must take the cells it covers and no more: each
+// glyph used to print with a blank after it, spacing the text out and
+// pushing the box's right border off its column.
+func TestAKoreanDetailKeepsTheBoxSquare(t *testing.T) {
+	m := liveModel(t)
+	m.activity = map[string]agentLive{
+		"alpha-worker": {said: "미들웨어로 가면 replay 경로까지 막힌다.", last: time.Now()},
+	}
+	lines := strings.Split(graphText(m), "\n")
+	var detail, top string
+	for i, l := range lines {
+		if strings.Contains(l, "미들") {
+			detail, top = l, lines[i-2]
+			break
+		}
+	}
+	if detail == "" {
+		t.Fatalf("no Korean detail on the graph:\n%s", strings.Join(lines, "\n"))
+	}
+	if strings.Contains(detail, "미 들") {
+		t.Errorf("glyphs spaced out: %q", detail)
+	}
+	if strings.ContainsRune(detail, wideTail) {
+		t.Errorf("the cell marker reached the screen: %q", detail)
+	}
+	// The border after the text sits where the top border's corner does.
+	if dw, tw := displayWidth(detail), displayWidth(top); dw != tw {
+		t.Errorf("detail row is %d cells, the box top %d:\n%s\n%s", dw, tw, top, detail)
+	}
+}

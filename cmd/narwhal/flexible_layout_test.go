@@ -32,7 +32,6 @@ func flexModel(t *testing.T) tuiModel {
 func TestZoomGivesAPaneTheWholeBody(t *testing.T) {
 	m := flexModel(t)
 	m.focus = focusTasks
-	body := m.height - 3 // header and footer, roughly
 
 	m = press(m, "z")
 	if m.zoom != focusTasks {
@@ -41,7 +40,7 @@ func TestZoomGivesAPaneTheWholeBody(t *testing.T) {
 	if got := m.graphPaneWidth(); got != m.width {
 		t.Errorf("a zoomed graph is %d columns wide, want the full %d", got, m.width)
 	}
-	if got := m.inspectorHeight(body); got != 0 {
+	if got := m.nodeBandRows(); got != 0 {
 		t.Errorf("the node pane still has %d rows while the graph is zoomed", got)
 	}
 
@@ -96,10 +95,10 @@ func TestZoomFollowsTheFocus(t *testing.T) {
 	// stopped working.
 	m := flexModel(t)
 	m.focus = focusTasks
-	m = press(m, "z", "3")
+	m = press(m, "z", "4")
 
 	if m.focus != focusRadio {
-		t.Fatalf("3 did not focus the radio: %v", m.focus)
+		t.Fatalf("4 did not focus the radio: %v", m.focus)
 	}
 	if m.zoom != focusRadio {
 		t.Errorf("the zoom stayed on %v after the focus moved to the radio", m.zoom)
@@ -143,30 +142,30 @@ func TestResizeCannotStarveTheOtherPane(t *testing.T) {
 
 func TestHeightKeysResizeTheNodePane(t *testing.T) {
 	m := flexModel(t)
-	body := 30
-	before := m.inspectorHeight(body)
+	m.height = 33
+	before := m.nodeBandRows()
 	if before == 0 {
 		t.Fatal("setup: the node pane is not shown at this size")
 	}
 
 	m = press(m, "+")
-	if m.inspectorHeight(body) <= before {
-		t.Errorf("+ did not grow the node pane: %d", m.inspectorHeight(body))
+	if m.nodeBandRows() <= before {
+		t.Errorf("+ did not grow the node pane: %d", m.nodeBandRows())
 	}
 	m = press(m, "-", "-")
-	if m.inspectorHeight(body) >= before {
-		t.Errorf("- did not shrink the node pane: %d", m.inspectorHeight(body))
+	if m.nodeBandRows() >= before {
+		t.Errorf("- did not shrink the node pane: %d", m.nodeBandRows())
 	}
 }
 
 func TestHeightResizeLeavesTheRadioReadable(t *testing.T) {
 	m := flexModel(t)
-	body := 30
+	m.height = 33
 	for i := 0; i < 40; i++ {
 		m = press(m, "+")
 	}
-	if got := m.inspectorHeight(body); got > body-5 {
-		t.Errorf("the node pane took %d of %d rows, leaving no radio", got, body)
+	if l := m.layout(); l.bottom < minBottomBand {
+		t.Errorf("the top band took %d rows, leaving the radio %d", l.top, l.bottom)
 	}
 }
 

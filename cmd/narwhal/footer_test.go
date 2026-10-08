@@ -266,7 +266,8 @@ func TestNumberKeysSelectPanes(t *testing.T) {
 	}{
 		{"1", focusTasks},
 		{"2", focusNode},
-		{"3", focusRadio},
+		{"3", focusTimeline},
+		{"4", focusRadio},
 	} {
 		m = press(m, tc.key)
 		if m.focus != tc.want {

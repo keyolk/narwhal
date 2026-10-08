@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
@@ -58,13 +59,17 @@ func TestBothColumnsAreTheSameHeight(t *testing.T) {
 	// The symptom as the eye sees it: two columns of different length
 	// beside each other.
 	m := fillModel(t, 3)
-	body := m.height - 3
-	left := rowsOf(m.viewTasks(m.graphPaneWidth(), body))
-	inspect := m.inspectorHeight(body)
-	right := rowsOf(m.viewInspector(60, inspect-1)) + 1 +
-		rowsOf(m.viewRadio(60, body-inspect))
-	if left != right {
-		t.Errorf("left column is %d rows and right is %d", left, right)
+	// Every row of the body, in both bands, carries a border at the same
+	// three columns: the two columns end together.
+	l := m.layout()
+	lines := strings.Split(stripEscapes(m.viewBands(l)), "\n")
+	if want := l.top + l.bottom + 2*bandBorderRows; len(lines) != want {
+		t.Fatalf("the bands drew %d rows, want %d", len(lines), want)
+	}
+	for i, line := range lines {
+		if w := ansi.StringWidth(line); w != l.left+l.right+bandBorderCols {
+			t.Errorf("row %d is %d cells, want %d: %q", i, w, l.left+l.right+bandBorderCols, line)
+		}
 	}
 }
 
@@ -90,21 +95,17 @@ func TestTheNodePaneDoesNotTakeSpaceItCannotUse(t *testing.T) {
 	// above it, which is what reads as floating.
 	m := fillModel(t, 17)
 	m.height = 66
-	body := m.height - 3
+	m.boxMode = false
+	body := m.bodyHeight()
 
 	// A selected task with no worker output: headline, model, blocks,
-	// activity heading, one line saying there is nothing. Nowhere near
-	// two fifths of the screen.
-	want := m.inspectorHeight(body)
-	content := m.inspectorContentHeight()
-	if want > content {
-		t.Errorf("the node pane claims %d rows for %d rows of content on a "+
-			"%d-row body", want, content, body)
-	}
-	// And the number that matters to the eye: the Radio rule must not
-	// start a third of the way down an otherwise empty column.
-	if want > body/4 {
-		t.Errorf("an empty node pane took %d of %d body rows", want, body)
+	// activity heading, one line saying there is nothing. The band is
+	// sized to the larger of that and the graph, and no more.
+	got := m.nodeBandRows()
+	want := max(m.graphContentHeight(m.graphPaneWidth())-1, m.inspectorContentHeight()-1, minTopBand)
+	if got > want {
+		t.Errorf("the top band claims %d rows for %d rows of content on a "+
+			"%d-row body", got, want, body)
 	}
 }
 
@@ -115,8 +116,7 @@ func TestTheNodePaneStillGrowsForABusyWorker(t *testing.T) {
 	m.height = 66
 	m.taskCur = 0
 	giveNodeActivity(t, &m, "task-1", 200)
-	body := m.height - 3
-	if got := m.inspectorHeight(body); got < 12 {
+	if got := m.nodeBandRows(); got < 12 {
 		t.Errorf("a worker with 200 lines of activity got %d rows", got)
 	}
 }

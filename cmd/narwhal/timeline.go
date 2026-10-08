@@ -1,11 +1,11 @@
-// timeline.go shows the run's history in the radio pane's place: what
+// timeline.go draws pane 4, the run's history under the graph: what
 // started and finished, what the operator asked and where it went, and the
 // judge's calls that changed a task's course.
 //
 // Brief is the run as it stands; a decision drops off it once dealt with.
 // This is the same run told in order, so "what happened while I was away"
-// has an answer on screen. `5` shows it. It keeps to the newest events that
-// fit; `z` zooms for more, and `narwhal export` writes the whole of it.
+// has an answer on screen. It is a pane like the others: `4` focuses it,
+// j/k scroll it, `z` zooms it, and `narwhal export` writes the whole of it.
 package main
 
 import (
@@ -17,45 +17,32 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
-// viewLeft is the graph, with the timeline beneath it when the graph
-// leaves room.
+// minTimeline is the fewest rows worth giving pane 4 under the graph: a
+// title and a handful of events. Below it the graph keeps its column.
+const minTimeline = 6
+
+// viewLeft is the graph, with pane 4 beneath it when the graph leaves room.
 //
 // A graph is a handful of boxes; on a normal terminal it filled a tenth of
 // its column and padded the rest, while the run's history sat behind a key
 // nobody thinks to press. Giving the history the space the graph does not
 // use puts "what has happened" next to "what the run looks like", always.
 func (m tuiModel) viewLeft(width, height int) string {
-	graph := m.graphContentHeight(width)
-	// The timeline needs a title and a few events to be worth drawing;
-	// below that the graph keeps its whole column, and `5` still shows the
-	// timeline in the radio's place.
-	const minTimeline = 6
-	if !m.boxMode || graph+1+minTimeline > height || m.lower == lowerTimeline {
+	if !m.timelineFits(height) {
 		return m.viewTasks(width, height)
 	}
+	graph := m.graphContentHeight(width)
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.viewTasks(width, graph),
 		"",
-		m.viewTimelineBeside(width, height-graph-1))
+		m.renderTimeline(m.timelineEvents(), width, height-graph-1))
 }
 
-// viewTimelineBeside is the timeline as it sits under the graph, with the
-// radio on screen next to it: only what the radio cannot show — tasks
-// starting and ending, the judge's calls. The instructions and urgent posts
-// it would otherwise repeat are one glance to the right.
-func (m tuiModel) viewTimelineBeside(width, height int) string {
-	var own []broker.TimelineEvent
-	for _, e := range broker.Timeline(m.snap) {
-		if !e.Kind.FromRadio() {
-			own = append(own, e)
-		}
-	}
-	if m.lower == lowerRadio {
-		return m.renderTimeline(own, "Timeline · tasks & judge", width, height)
-	}
-	// The brief stands where the radio was, so nothing on screen shows
-	// what the operator asked or who raised an alarm; keep all of it.
-	return m.viewTimeline(width, height)
+// timelineFits reports whether pane 4 has room under the graph in a body
+// of this height. Where it does not, focusing it shows it zoomed.
+func (m tuiModel) timelineFits(bodyHeight int) bool {
+	return m.boxMode && m.zoom < 0 &&
+		m.graphContentHeight(m.graphPaneWidth())+1+minTimeline <= bodyHeight
 }
 
 // graphContentHeight is the rows the box graph needs: its title, its
@@ -64,24 +51,78 @@ func (m tuiModel) graphContentHeight(width int) int {
 	return 1 + len(m.boxRows(width)) + 1
 }
 
-// viewTimeline is the whole timeline, radio events included.
-func (m tuiModel) viewTimeline(width, height int) string {
-	return m.renderTimeline(broker.Timeline(m.snap), "Timeline", width, height)
+// timelineEvents is what pane 4 lists where it is drawn now.
+//
+// Under the graph, beside the radio, it leaves out the radio's own lines —
+// instructions, relays, urgent posts — which are one glance to the right,
+// and keeps what only the task states and verdicts record. Beside the
+// brief nothing else on screen shows those lines, and zoomed it is the
+// only pane, so there it lists everything.
+func (m tuiModel) timelineEvents() []broker.TimelineEvent {
+	all := broker.Timeline(m.snap)
+	if m.briefTab || m.timelineZoomed() {
+		return all
+	}
+	var own []broker.TimelineEvent
+	for _, e := range all {
+		if !e.Kind.FromRadio() {
+			own = append(own, e)
+		}
+	}
+	return own
 }
 
-func (m tuiModel) renderTimeline(events []broker.TimelineEvent, label string, width, height int) string {
-	// Focused only where it stands in for the radio; under the graph it is
-	// read-only and must not light up with the radio's focus.
-	rows := []string{numberedPaneTitle(5, fmt.Sprintf("%s (%d)", label, len(events)),
-		m.focus == focusRadio && m.lower == lowerTimeline, width)}
-	if len(events) == 0 {
+// timelineZoomed reports whether pane 4 is drawn across the body.
+func (m tuiModel) timelineZoomed() bool {
+	if m.zoom == focusTimeline {
+		return true
+	}
+	return m.zoom < 0 && m.focus == focusTimeline && !m.timelineFits(m.bodyHeight())
+}
+
+// timelineRows is how many events pane 4 shows at once where it is drawn.
+func (m tuiModel) timelineRows() int {
+	body := m.bodyHeight()
+	if m.timelineZoomed() {
+		return body - 1
+	}
+	return body - m.graphContentHeight(m.graphPaneWidth()) - 1 - 1
+}
+
+// timelineMaxBack is the furthest pane 4 can scroll back: to where its
+// oldest event is the top row.
+func (m tuiModel) timelineMaxBack() int {
+	return max(0, len(m.timelineEvents())-max(1, m.timelineRows()))
+}
+
+// viewTimeline is pane 4 zoomed across the body.
+func (m tuiModel) viewTimeline(width, height int) string {
+	return m.renderTimeline(broker.Timeline(m.snap), width, height)
+}
+
+func (m tuiModel) renderTimeline(events []broker.TimelineEvent, width, height int) string {
+	total := len(events)
+	label := fmt.Sprintf("Timeline (%d)", total)
+	if !m.briefTab && !m.timelineZoomed() {
+		// Says why the operator's instructions are not listed here.
+		label = fmt.Sprintf("Timeline · tasks & judge (%d)", total)
+	}
+	avail := max(1, height-1)
+	back := min(max(m.timelineBack, 0), max(0, total-avail))
+	end := total - back
+	start := max(0, end-avail)
+	if total > avail {
+		label += fmt.Sprintf("  %d-%d", start+1, end)
+		if back == 0 {
+			label += " ⌄"
+		}
+	}
+	rows := []string{numberedPaneTitle(4, label, m.focus == focusTimeline, width)}
+	if total == 0 {
 		rows = append(rows, styDim.Render("   nothing yet"))
 		return padRows(rows, width, height)
 	}
-	// Newest at the bottom, like the radio: the pane follows the run.
-	if avail := height - 1; avail > 0 && len(events) > avail {
-		events = events[len(events)-avail:]
-	}
+	events = events[start:end]
 	// The glyph says what kind of event it is, so the kind is not spelled
 	// out: under the graph the pane is a third of the screen wide, and the
 	// word "instruction" cost the line most of what the operator wrote.

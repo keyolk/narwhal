@@ -35,18 +35,43 @@ func briefModel(t *testing.T) tuiModel {
 
 func briefText(m tuiModel) string { return ansi.Strip(m.viewBrief(110, 30)) }
 
-func TestFourShowsTheBriefAndThreeTheRadio(t *testing.T) {
+// Brief is pane 3's second tab: 3 goes to pane 3, and 3 again on it turns
+// to the brief and back. No key sends the focus to one pane while showing
+// another's content.
+func TestThreeTurnsPaneThreeBetweenRadioAndBrief(t *testing.T) {
 	m := briefModel(t)
-	m = press(m, "4")
-	if m.lower != lowerBrief || m.focus != focusRadio {
-		t.Fatalf("4: lower=%v focus=%v", m.lower, m.focus)
-	}
-	if !strings.Contains(ansi.Strip(m.viewChannel(100, 20)), "Brief") {
-		t.Error("the lower pane is not the brief")
+	m.focus = focusTasks
+	m = press(m, "3")
+	if m.focus != focusRadio || m.briefTab {
+		t.Fatalf("3 from the graph: focus=%v brief=%v, want the radio", m.focus, m.briefTab)
 	}
 	m = press(m, "3")
-	if m.lower == lowerBrief {
-		t.Error("3 did not go back to the radio")
+	if !m.briefTab || m.focus != focusRadio {
+		t.Fatalf("3 on pane 3: focus=%v brief=%v, want the brief", m.focus, m.briefTab)
+	}
+	if got := ansi.Strip(m.viewChannel(100, 20)); !strings.Contains(got, "Needs a decision") {
+		t.Errorf("pane 3 is not the brief:\n%s", got)
+	}
+	m = press(m, "3")
+	if m.briefTab {
+		t.Error("3 again did not turn back to the radio")
+	}
+	// Leaving and coming back keeps the tab.
+	m = press(m, "3", "1", "3")
+	if !m.briefTab {
+		t.Error("pane 3 forgot its tab")
+	}
+}
+
+// The title names both tabs, so it says that 3 has another view.
+func TestPaneThreeTitleNamesBothTabs(t *testing.T) {
+	m := briefModel(t)
+	for _, brief := range []bool{false, true} {
+		m.briefTab = brief
+		title := ansi.Strip(strings.SplitN(m.viewChannel(100, 10), "\n", 2)[0])
+		if !strings.Contains(title, "3 Radio (6) │ Brief") {
+			t.Errorf("brief=%v: title %q", brief, title)
+		}
 	}
 }
 

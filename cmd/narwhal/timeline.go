@@ -36,7 +36,26 @@ func (m tuiModel) viewLeft(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.viewTasks(width, graph),
 		"",
-		m.viewTimeline(width, height-graph-1))
+		m.viewTimelineBeside(width, height-graph-1))
+}
+
+// viewTimelineBeside is the timeline as it sits under the graph, with the
+// radio on screen next to it: only what the radio cannot show — tasks
+// starting and ending, the judge's calls. The instructions and urgent posts
+// it would otherwise repeat are one glance to the right.
+func (m tuiModel) viewTimelineBeside(width, height int) string {
+	var own []broker.TimelineEvent
+	for _, e := range broker.Timeline(m.snap) {
+		if !e.Kind.FromRadio() {
+			own = append(own, e)
+		}
+	}
+	if m.lower == lowerRadio {
+		return m.renderTimeline(own, "Timeline · tasks & judge", width, height)
+	}
+	// The brief stands where the radio was, so nothing on screen shows
+	// what the operator asked or who raised an alarm; keep all of it.
+	return m.viewTimeline(width, height)
 }
 
 // graphContentHeight is the rows the box graph needs: its title, its
@@ -45,11 +64,15 @@ func (m tuiModel) graphContentHeight(width int) int {
 	return 1 + len(m.boxRows(width)) + 1
 }
 
+// viewTimeline is the whole timeline, radio events included.
 func (m tuiModel) viewTimeline(width, height int) string {
-	events := broker.Timeline(m.snap)
+	return m.renderTimeline(broker.Timeline(m.snap), "Timeline", width, height)
+}
+
+func (m tuiModel) renderTimeline(events []broker.TimelineEvent, label string, width, height int) string {
 	// Focused only where it stands in for the radio; under the graph it is
 	// read-only and must not light up with the radio's focus.
-	rows := []string{numberedPaneTitle(5, fmt.Sprintf("Timeline (%d)", len(events)),
+	rows := []string{numberedPaneTitle(5, fmt.Sprintf("%s (%d)", label, len(events)),
 		m.focus == focusRadio && m.lower == lowerTimeline, width)}
 	if len(events) == 0 {
 		rows = append(rows, styDim.Render("   nothing yet"))
@@ -75,7 +98,7 @@ func (m tuiModel) viewTimeline(width, height int) string {
 		} else if e.Kind == broker.TimelineStarted || e.Kind == broker.TimelineVerdict {
 			text = string(e.Kind) + " " + text
 		}
-		line := styDim.Render(e.At.Local().Format("15:04:05")) + " " +
+		line := styDim.Render(clock(e.At)) + " " +
 			style.Render(glyph) + " " + styCyan.Render(padRight(truncate(e.Who, whoW), whoW)) + " " +
 			style.Render(text)
 		// Styled before it is fitted, so the cut has to skip escapes.

@@ -2018,7 +2018,7 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 	// The time is what turns a list into a channel: it says whether two
 	// findings landed together or an hour apart, which the sequence number
 	// alone cannot.
-	stamp := msg.CreatedAt.Format("15:04:05")
+	stamp := clock(msg.CreatedAt)
 	prefix := fmt.Sprintf("%s %s %s ", stamp, prioCh, sender)
 
 	// A mention says the message is addressed at someone, which changes
@@ -2465,7 +2465,7 @@ func (m tuiModel) viewMessageDetail() string {
 	_, prioStyle := priorityGlyph(msg.Priority)
 	meta := styDim.Render("thread=") + styMagenta.Render(msg.ThreadID) +
 		styDim.Render("  priority=") + prioStyle.Render(string(msg.Priority)) +
-		styDim.Render("  "+msg.CreatedAt.Format("15:04:05"))
+		styDim.Render("  "+clock(msg.CreatedAt))
 
 	body := wrapText(msg.Content, m.width-2)
 	footer := styDim.Render("j/k scroll · n/p message · esc back · q close")

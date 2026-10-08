@@ -36,6 +36,18 @@ const (
 	TimelineAsked       TimelineKind = "asked"
 )
 
+// FromRadio reports whether the event is a radio message lifted into the
+// timeline, as opposed to something only the task states and verdicts
+// record. A view that shows the radio beside the timeline drops these, or
+// every instruction and urgent post is on screen twice.
+func (k TimelineKind) FromRadio() bool {
+	switch k {
+	case TimelineInstruction, TimelineRelay, TimelineUrgent:
+		return true
+	}
+	return false
+}
+
 // TimelineEvent is one line of a run's history.
 type TimelineEvent struct {
 	At   time.Time

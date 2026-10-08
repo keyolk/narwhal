@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -182,8 +183,27 @@ func TestRenderTranscriptMarksToolsAndText(t *testing.T) {
 	if !strings.Contains(joined, "· Starting the watcher") {
 		t.Errorf("assistant text is not marked:\n%s", joined)
 	}
-	if !strings.Contains(joined, "14:33:0") {
-		t.Errorf("no timestamps:\n%s", joined)
+	// The fixture is stamped 14:33Z; the feed shows the reader's clock.
+	if want := time.Date(2026, 8, 13, 14, 33, 7, 0, time.UTC).Local().Format("15:04:0"); !strings.Contains(joined, want) {
+		t.Errorf("no timestamps at %s:\n%s", want, joined)
+	}
+}
+
+// Transcripts are UTC and the radio is local. Every pane converts to the
+// reader's zone, or the Node pane and the Timeline beside it disagree by
+// the offset.
+func TestTimesAreShownInTheReadersZone(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("KST", 9*3600)
+	t.Cleanup(func() { time.Local = saved })
+
+	utc := time.Date(2026, 10, 8, 1, 55, 44, 0, time.UTC)
+	if got := clock(utc); got != "10:55:44" {
+		t.Errorf("clock(01:55:44Z) in KST = %s", got)
+	}
+	out := strings.Join(renderTranscript([]transcriptEntry{{at: utc, kind: "text", text: "hi"}}, 80), "\n")
+	if !strings.Contains(out, "10:55:44") {
+		t.Errorf("transcript feed not in the reader's zone:\n%s", out)
 	}
 }
 

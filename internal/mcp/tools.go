@@ -122,6 +122,10 @@ func toolDefinitions() []map[string]any {
 									"type":        "string",
 									"description": broker.CheckContract,
 								},
+								"criterion": map[string]any{
+									"type":        "string",
+									"description": broker.CriterionContract,
+								},
 							},
 							"required": []string{"assignment"},
 						},

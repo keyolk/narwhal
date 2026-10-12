@@ -518,6 +518,9 @@ type Task struct {
 	// only the follow-up's failures. See followup.go.
 	FollowUp   string
 	ReopenedAt int
+	// Criterion is a sentence a correct outcome must satisfy, written by
+	// the planner and judged by narwhal at task-done. See criterion.go.
+	Criterion string
 }
 
 // Dispatch is one attempt to execute a Task. A retry mints a new Dispatch;
@@ -535,6 +538,12 @@ type Dispatch struct {
 	EndedAt time.Time
 	Status  DispatchStatus
 	Output  string
+	// AnswerAsked and FoldAsked record that this dispatch's outcome was
+	// put to the judge at task-done, which happens once each. See
+	// answered.go.
+	AnswerAsked    bool
+	FoldAsked      bool
+	CriterionAsked bool
 }
 
 // Thread is a named conversation channel within a Run's radio layer.
@@ -803,6 +812,7 @@ func (t *Task) snapshot() TaskSnapshot {
 	ts.Check = t.Check
 	ts.CheckResult = t.CheckResult
 	ts.FollowUp, ts.ReopenedAt = t.FollowUp, t.ReopenedAt
+	ts.Criterion = t.Criterion
 	if !t.Artifacts.Empty() {
 		a := t.Artifacts.clone()
 		ts.Artifacts = &a
@@ -1256,6 +1266,9 @@ type TaskSnapshot struct {
 	// gets it. See followup.go.
 	FollowUp   string `json:"follow_up,omitempty"`
 	ReopenedAt int    `json:"reopened_at,omitempty"`
+	// Criterion is what a correct outcome must satisfy, judged by narwhal
+	// at task-done. See criterion.go.
+	Criterion string `json:"criterion,omitempty"`
 }
 
 // Usage is one task's measured cost.

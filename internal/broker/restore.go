@@ -113,6 +113,7 @@ func RestoreRun(s Snapshot) *Run {
 			CheckResult: ts.CheckResult,
 			FollowUp:    ts.FollowUp,
 			ReopenedAt:  ts.ReopenedAt,
+			Criterion:   ts.Criterion,
 		}
 		if ts.Artifacts != nil {
 			t.Artifacts = ts.Artifacts.clone()

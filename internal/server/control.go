@@ -104,6 +104,7 @@ type spawnWorkerSpec struct {
 	Deps       []string `json:"deps"`
 	Model      string   `json:"model"`
 	Check      string   `json:"check"`
+	Criterion  string   `json:"criterion"`
 }
 
 // handleSpawn creates a run (or adds to an existing one) and launches a
@@ -174,6 +175,7 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		task := run.AddTask(taskID, name, spec.Assignment, spec.Deps)
 		task.SetModel(spec.Model)
 		task.SetCheck(spec.Check)
+		task.SetCriterion(spec.Criterion)
 
 		note := "queued; the dispatcher will launch it shortly"
 		if task.CurrentState() != broker.TaskReady {

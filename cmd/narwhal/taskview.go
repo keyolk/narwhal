@@ -586,6 +586,25 @@ func (m tuiModel) taskSummaryLines(t broker.TaskSnapshot, width int) []string {
 		}
 	}
 
+	if c := strings.TrimSpace(t.Criterion); c != "" {
+		section("Criterion")
+		indent(renderMarkdown(c, inner, lipgloss.NewStyle()))
+		var last *broker.Verdict
+		for i := range m.snap.Verdicts {
+			if v := m.snap.Verdicts[i]; v.TaskID == t.ID && v.Question == broker.QuestionCriterion && v.Decided {
+				last = &m.snap.Verdicts[i]
+			}
+		}
+		switch {
+		case last == nil:
+			out = append(out, styDim.Render("  ↳ not judged yet — narwhal reads it against the outcome at task-done"))
+		case last.Action == broker.ActionReturned:
+			out = append(out, styYellow.Render(fmt.Sprintf("  ↳ not met (p=%.2f) — handed back once", last.P)))
+		default:
+			out = append(out, styGreen.Render(fmt.Sprintf("  ↳ met (p=%.2f)", last.P)))
+		}
+	}
+
 	if inputs := m.taskInputs(t.ID); len(inputs) > 0 {
 		section("Received")
 		var st feedState

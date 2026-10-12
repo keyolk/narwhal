@@ -37,7 +37,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku","check":"Name one specific finding and the file:line it is at. A finding with no location was not actually found."}'
+     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku","check":"Name one specific finding and the file:line it is at. A finding with no location was not actually found.","criterion":"Every finding names the file and line it is at."}'
 
    - id: unique task id (task-1, task-2, ...)
    - name: short human-readable name
@@ -53,6 +53,13 @@ Your job is to decompose the user's request into a task DAG.
      answered 8 where the answer was 0, every reported name started with a
      lowercase letter, and it finished 3/3 completed with nothing in the
      record to show it was wrong.
+   - criterion: (recommended on every task) %s
+
+     The difference from check: check is a test the worker runs and
+     reports on, and nothing verifies the report. criterion is read
+     against the outcome by narwhal itself. Write it as a property of the
+     text a correct outcome would contain — a location, a number that
+     matches a list, a stated choice with its reason — not as work to do.
 
 3. Create a synthesis task that DEPENDS on every investigation task
    ("deps": ["task-1","task-2",...]). Narwhal treats these deps as a
@@ -96,7 +103,7 @@ Your job is to decompose the user's request into a task DAG.
 - If the request is simple enough for one worker, create exactly one task.
 - Do NOT create more than 5 tasks.`,
 		runID, brokerURL, brokerURL, mainToken, prompt,
-		runID, broker.DepsContract, broker.CheckContract, runID)
+		runID, broker.DepsContract, broker.CheckContract, broker.CriterionContract, runID)
 }
 
 // BuildPlanInstructionsWithHistory is BuildPlanInstructions plus a digest of

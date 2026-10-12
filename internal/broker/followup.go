@@ -93,6 +93,13 @@ func (t *Task) inFollowUp() bool {
 // Dependents still running are left to the radio, where the reopened
 // task's work will reach them; the walk goes on through them, since what
 // builds on them was written from the same picture.
+//
+// Each finished dependent other than the run's answer task is first put to
+// the judge: could this instruction change anything its outcome rests on?
+// A confident no leaves it, and what builds only on it, finished — "add a
+// comment explaining the retry" need not wake the runbook writer. The
+// answer task is always reopened: whatever changed upstream, the answer is
+// what has to say so. Undecided, as everywhere, means reopen.
 func (r *Run) ReopenWithDependents(t *Task, instruction string) []string {
 	if !t.Reopen(instruction) {
 		return nil
@@ -106,20 +113,33 @@ func (r *Run) ReopenWithDependents(t *Task, instruction string) []string {
 	for _, c := range children {
 		sort.Strings(c)
 	}
+	ans := r.answerTask()
+	upstream := t.assignment()
 	out := []string{t.ID}
 	seen := map[string]bool{t.ID: true}
-	queue := []string{t.ID}
-	for len(queue) > 0 {
-		id := queue[0]
-		queue = queue[1:]
-		for _, c := range children[id] {
-			if seen[c] {
+	level := []string{t.ID}
+	for len(level) > 0 {
+		var next []*Task
+		for _, id := range level {
+			for _, c := range children[id] {
+				if seen[c] {
+					continue
+				}
+				seen[c] = true
+				if ct := r.GetTask(c); ct != nil {
+					next = append(next, ct)
+				}
+			}
+		}
+		affected := r.judgeAffected(next, ans, upstream, instruction)
+		level = nil
+		for i, ct := range next {
+			if !affected[i] {
 				continue
 			}
-			seen[c] = true
-			queue = append(queue, c)
-			if ct := r.GetTask(c); ct != nil && ct.reopen(upstreamNote(t.ID, instruction), TaskPending, false) {
-				out = append(out, c)
+			level = append(level, ct.ID)
+			if ct.reopen(upstreamNote(t.ID, instruction), TaskPending, false) {
+				out = append(out, ct.ID)
 			}
 		}
 	}

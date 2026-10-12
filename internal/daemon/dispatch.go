@@ -47,6 +47,9 @@ type Dispatcher struct {
 	// applied once rather than on every tick.
 	cursors map[string]broker.IntakeCursors
 	stop    chan struct{}
+	// stuck tracks which long-running workers have been judged. See
+	// stuck.go.
+	stuck stuckWatch
 	// done closes when the loop has returned, so Stop can wait for a tick
 	// that is mid-write.
 	done chan struct{}
@@ -149,6 +152,7 @@ func (d *Dispatcher) tick() {
 		harvestOrphanedOutcomes(runID, run)
 		d.reap(runID, run, l.ActiveWorkers())
 		d.dispatchReady(runID, run)
+		d.checkStuck(runID, run)
 		// Persist after the graph has settled for this tick, so a crash
 		// or a restart leaves the run readable rather than erasing it.
 		// The write is gated on an actual change, so an idle run costs

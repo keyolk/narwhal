@@ -138,7 +138,7 @@ func TestAShortTerminalGivesTheGraphItsColumn(t *testing.T) {
 func TestTheFooterCarriesTheSteerControl(t *testing.T) {
 	m := briefModel(t)
 	got := ansi.Strip(m.viewFooter())
-	for _, want := range []string{"i » steer", "last: everyone: gofmt before committing", "✓"} {
+	for _, want := range []string{"press i to tell the workers", "last: everyone: gofmt before committing", "✓"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("footer lacks %q:\n%s", want, got)
 		}
@@ -146,7 +146,7 @@ func TestTheFooterCarriesTheSteerControl(t *testing.T) {
 	if lines := strings.Split(got, "\n"); len(lines) != 2 {
 		t.Errorf("footer is %d lines, want 2:\n%s", len(lines), got)
 	}
-	if fresh := ansi.Strip(liveModel(t).viewFooter()); !strings.Contains(fresh, "i » steer") || strings.Contains(fresh, "last:") {
+	if fresh := ansi.Strip(liveModel(t).viewFooter()); !strings.Contains(fresh, "press i") || strings.Contains(fresh, "last:") {
 		t.Errorf("footer before any instruction:\n%s", fresh)
 	}
 }

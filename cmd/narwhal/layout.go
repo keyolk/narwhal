@@ -124,6 +124,7 @@ func framedBand(lw, rw, h int, left, right string) string {
 		return borderTitle(lines[0], w)
 	}
 	// Each column is its pane plus the cell of air before it.
+	lw, rw, h = max(lw, 0), max(rw, 0), max(h, 0)
 	lc, rc := lw+1, rw+1
 	var b strings.Builder
 	b.WriteString(styDim.Render("╭") + edge(ll, lc) + styDim.Render("┬") + edge(rl, rc) + styDim.Render("╮"))

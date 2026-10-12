@@ -178,6 +178,16 @@ type tuiModel struct {
 	// help shows the key reference over everything. See help.go.
 	help bool
 
+	// The home screen's request line. See home.go. homeCWD is where a new
+	// request runs, composing whether the line has the keys, starting the
+	// prompt being sent while the daemon answers, and homeErr why the last
+	// one did not start.
+	homeCWD    string
+	composing  bool
+	composeBuf []rune
+	starting   string
+	homeErr    error
+
 	// timelineSel is the selected timeline event, or timelineFollow to
 	// keep the newest selected as the run goes on.
 	timelineSel int
@@ -203,6 +213,7 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		client:      &http.Client{Timeout: 5 * time.Second},
 		focus:       focusRadio,
 		timelineSel: timelineFollow,
+		homeCWD:     launchDir(),
 		zoom:        -1,
 		followTail:  true,
 		nodeScroll:  nodeScrollTail,
@@ -330,11 +341,18 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	// its runs in a map, and Go randomizes map iteration, so an unsorted
 	// list reshuffles on every poll — the picker flickers and rows move out
 	// from under the cursor.
+	//
+	// Grouped first, as the home screen shows them — in progress, then
+	// abandoned, then history — so the cursor index and the rows on screen
+	// are the same order. Newest first within a group.
 	sorted := append([]store.LiveRun(nil), runs...)
 	sort.SliceStable(sorted, func(i, j int) bool {
-		a, b := sorted[i].StartedAt, sorted[j].StartedAt
-		if a != b {
-			return a > b
+		if gi, gj := runGroup(sorted[i]), runGroup(sorted[j]); gi != gj {
+			return gi < gj
+		}
+		a, b := runStartTime(sorted[i]), runStartTime(sorted[j])
+		if !a.Equal(b) {
+			return a.After(b)
 		}
 		return sorted[i].RunID > sorted[j].RunID
 	})
@@ -409,6 +427,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case runsMsg:
 		m.mergeRuns(msg)
 		return m, nil
+	case requestStartedMsg:
+		return m.requestStarted(msg)
 
 	case snapshotMsg:
 		// An error with no snapshot leaves what is on screen alone: a
@@ -505,9 +525,16 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.runCur = len(m.runs) - 1
 	case "enter", "l", "right":
+		if len(m.runs) == 0 {
+			return m, nil
+		}
 		cmd := m.selectRun(m.runCur)
 		m.picker = false
 		return m, cmd
+	case "n", "i", "/":
+		// Start a request. i and / as well, since they are what opens a
+		// line to type in everywhere else in the monitor.
+		m.composing, m.homeErr = true, nil
 	case "esc":
 		// esc backs out. From the top level there is nowhere further to go,
 		// so it quits rather than sitting inert.
@@ -522,6 +549,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// typed: an instruction written in Korean must arrive in Korean.
 	if m.steering {
 		return m.handleSteerKey(msg)
+	}
+	if m.composing {
+		return m.handleComposeKey(msg)
 	}
 
 	// Under a Korean input source the shortcut keys arrive as jamo (`q` -> `ㅂ`).
@@ -1021,7 +1051,7 @@ func (m tuiModel) View() string {
 		return m.viewHelp()
 	}
 	if m.picker {
-		return m.viewPicker()
+		return m.viewHome()
 	}
 	switch m.detail {
 	case detailMessage:
@@ -1139,7 +1169,9 @@ func (m tuiModel) columnWidth() int {
 	if w > m.width-2 {
 		w = m.width - 2
 	}
-	return w
+	// Never below one cell: a terminal narrower than the borders is drawn
+	// clipped, not with negative widths.
+	return max(w, 1)
 }
 
 // The palette. Colour carries meaning here rather than decorating: the
@@ -1404,126 +1436,60 @@ func abbreviatePath(p string) string {
 	return ".../" + strings.Join(parts[len(parts)-2:], "/")
 }
 
-func (m tuiModel) viewPicker() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s  %s\n\n",
-		styCyanBold.Render("Narwhal"),
-		styDim.Render(m.runCountLabel()))
-
-	if len(m.runs) == 0 {
-		// Through pinFooter like every other exit, so the empty case is
-		// clipped and its hints pinned the same way the populated one is.
-		return pinFooter(b.String()+styDim.Render("(no runs yet)"),
-			styDim.Render("j/k move · enter open · esc quit"), m.height)
-	}
-
-	// Each run draws two lines — the summary and its prompt — so the
-	// budget is in runs, not rows. Treating it as rows drew 41 lines into
-	// a 24-row terminal and scrolled the header off the top, which is how
-	// a list ends up with no title and no visible selection.
-	//
-	// The reserve covers the title, its blank line, and the key hints.
-	const linesPerRun = 2
-	visible := (m.height - 4) / linesPerRun
-	if visible < 1 {
-		visible = 1
-	}
-	start := scrollStart(m.runCur, visible, len(m.runs))
-
-	for i := start; i < len(m.runs) && i < start+visible; i++ {
-		r := m.runs[i]
-
-		// The run id is a timestamp — useless for telling runs apart. What
-		// identifies a run to the operator is when it started, where it is
-		// working, what it was asked to do, and how it turned out.
-		when := runStartTime(r).Format("01-02 15:04")
-		where := abbreviatePath(r.CWD)
-
-		// Which of these is still working is the first thing you need from
-		// the list, so it gets a glyph and a colour rather than a word
-		// alone: the list is mostly history, and a wall of identically dim
-		// rows makes the one live run — the only one you can still act on —
-		// disappear into it.
-		icon, originStyle := icons.runActive, styCyan
-		if !runIsWorking(r) {
-			icon, originStyle = icons.runDone, styGreen
-			// A finished run says how it finished. Failed tasks are the
-			// reason to open a run you would otherwise scroll past.
-			if r.Failed > 0 || r.State == string(broker.RunFailed) {
-				icon, originStyle = icons.runFailed, styRed
-			} else if r.State == string(broker.RunCanceled) {
-				icon, originStyle = icons.runCanceled, styDim
-			}
-		}
-
-		marker := "  "
-		if i == m.runCur {
-			marker = "▸ "
-		}
-
-		// Measure as plain text, then style the pieces. truncate() counts
-		// rune widths, so a styled string miscounts its escapes as content
-		// and a cut mid-escape bleeds into every row below.
-		head := fmt.Sprintf("%s%s %-11s  %-26s  ", marker, icon, when, where)
-		outcome := m.runOutcome(r)
-
-		if i == m.runCur {
-			// A reversed row reads better without competing colours inside
-			// it, so the selection styles the whole line at once.
-			b.WriteString(stySel.Render(
-				padRight(truncate(head+plainOutcome(r), m.width-1), m.width-1)) + "\n")
-		} else {
-			b.WriteString(originStyle.Render(marker+icon) +
-				styDim.Render(fmt.Sprintf(" %-11s  ", when)) +
-				styBlue.Render(fmt.Sprintf("%-26s", truncate(where, 26))) +
-				"  " + outcome + "\n")
-		}
-
-		prompt := runLabel(r)
-		// Indent, then cut to the pane. Cutting to m.width and *then*
-		// indenting pushed four columns past the right edge, which on a
-		// long planner prompt wrapped and swallowed the rows below it.
-		prompt = truncate("    "+prompt, m.width-1)
-
-		// A live run's prompt is what you are choosing between; a finished
-		// one's is a label on something already done.
-		if runIsWorking(r) {
-			b.WriteString(prompt + "\n")
-		} else {
-			b.WriteString(styDim.Render(prompt) + "\n")
-		}
-	}
-
-	return pinFooter(strings.TrimRight(b.String(), "\n"),
-		styDim.Render("j/k move · enter open · esc quit"), m.height)
-}
-
 func (m tuiModel) viewHeader() string {
 	icon, state := runGlyph(m.snap.State)
-	line := fmt.Sprintf("%s  %s  %s %s",
-		styCyanBold.Render("Narwhal"), styDim.Render(m.snap.RunID), icon, state)
-	// With several runs live, say which one this is — otherwise the view
-	// gives no hint that the others exist.
-	if len(m.runs) > 1 {
-		line += styDim.Render(fmt.Sprintf("  [%d/%d]", m.runCur+1, len(m.runs)))
+	if m.snap.State == broker.RunActive || m.snap.State == "" {
+		icon = styCyan.Render(spinnerAt(m.frame))
 	}
+	// Where you are, and the way back: this is one request of several.
+	line := styDim.Render("‹ ") + styCyanBold.Render("Narwhal") + styDim.Render(" › ") +
+		icon + " " + state + "  " + m.taskCounts()
 	if m.err != nil {
-		line += "  " + styRed.Render("(broker unreachable)")
+		line += "  " + styRed.Render("(daemon unreachable — showing the saved copy)")
 	}
 	if sum := verdictSummary(m.snap.Verdicts); sum != "" {
 		line += "  " + sum
 	}
-	prompt := m.snap.Prompt
-	if w := m.width - 2; w > 10 && len(prompt) > w {
-		prompt = prompt[:w-3] + "..."
+	// The id is what `narwhal show` takes, and with several runs the
+	// position says [ and ] have somewhere to go.
+	ref := m.runID()
+	if len(m.runs) > 1 {
+		ref += fmt.Sprintf(" [%d/%d]", m.runCur+1, len(m.runs))
 	}
+	line += styDim.Render("  " + ref)
+	line = ansi.Truncate(line, max(1, m.width), "…")
+	prompt := oneLine(m.snap.Prompt)
 	if prompt == "" {
 		return line
 	}
 	// The prompt is what the run is *for*, and it was the dimmest thing on
 	// screen. Leave it unstyled so it reads at full contrast against the
 	// furniture around it.
-	return line + "\n" + prompt
+	return line + "\n" + truncate(prompt, max(10, m.width-1))
+}
+
+// taskCounts is how far the run has got: done out of all, and what is
+// moving or broken. A count of zero is not news, so it is left out.
+func (m tuiModel) taskCounts() string {
+	counts := map[broker.TaskState]int{}
+	for _, t := range m.snap.Tasks {
+		counts[t.State]++
+	}
+	if len(m.snap.Tasks) == 0 {
+		return styDim.Render("planning…")
+	}
+	parts := []string{progressBar(counts[broker.TaskCompleted], counts[broker.TaskFailed], len(m.snap.Tasks), 8) +
+		" " + fmt.Sprintf("%d/%d done", counts[broker.TaskCompleted], len(m.snap.Tasks))}
+	if n := counts[broker.TaskDispatched]; n > 0 {
+		parts = append(parts, styCyan.Render(fmt.Sprintf("%d running", n)))
+	}
+	if n := counts[broker.TaskReady] + counts[broker.TaskPending]; n > 0 {
+		parts = append(parts, styDim.Render(fmt.Sprintf("%d waiting", n)))
+	}
+	if n := counts[broker.TaskFailed]; n > 0 {
+		parts = append(parts, styRedBold.Render(fmt.Sprintf("%d failed", n)))
+	}
+	return strings.Join(parts, styDim.Render(" · "))
 }
 
 // runGlyph returns the icon and colored label for a run state.
@@ -1581,44 +1547,13 @@ func pinFooter(body, hints string, height int) string {
 }
 
 func (m tuiModel) viewFooter() string {
-	counts := map[broker.TaskState]int{}
-	for _, t := range m.snap.Tasks {
-		counts[t.State]++
-	}
-	// Colour the number as well as the label. A count of zero is not news,
-	// so it stays dim and the eye skips it; a non-zero one is the thing
-	// you came to the footer for.
-	stat := func(label string, n int, style lipgloss.Style) string {
-		if n == 0 {
-			return styDim.Render(fmt.Sprintf("%s %d", label, n))
-		}
-		return style.Render(label) + " " + style.Bold(true).Render(strconv.Itoa(n))
-	}
-	stats := strings.Join([]string{
-		stat("done", counts[broker.TaskCompleted], styGreen),
-		stat("running", counts[broker.TaskDispatched], styCyan),
-		stat("ready", counts[broker.TaskReady], styYellow),
-		stat("failed", counts[broker.TaskFailed], styRed),
-	}, "  ")
-
-	tail := m.steerStatus()
-	if m.followTail {
-		// This says the view is tracking new messages, which is a live
-		// state — dim made it read as a label nobody had to notice.
-		tail += "  " + styCyan.Render("[following]")
-	}
-	// The command line takes the key-hint row rather than adding one, so
-	// opening it does not shift the panes above.
-	// One row however long the last instruction was: a wrapped footer
-	// takes its extra line from the panes.
-	top := stats + tail
-	if m.width > 0 {
-		top = ansi.Truncate(top, m.width, "…")
-	}
-	if line := m.viewSteer(); line != "" {
-		return top + "\n" + line
-	}
-	return top + "\n" + styDim.Render(m.footerKeys())
+	// The steering line, then the keys. The line is always there: a run
+	// that can be steered says so and what became of the last instruction,
+	// and one that cannot says why — the command line used to appear only
+	// once i was pressed, and nothing on screen said the run could be
+	// steered at all. One row however long the last instruction was: a
+	// wrapped footer takes its extra line from the panes.
+	return m.steerBar() + "\n" + styDim.Render(m.footerKeys())
 }
 
 // footerKeys lists the keys that do something where the cursor is.
@@ -1655,7 +1590,7 @@ func (m tuiModel) footerKeys() string {
 	if m.zoom >= 0 {
 		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
 	}
-	parts = append(parts, zoomKey, "i steer", "? help", "q quit")
+	parts = append(parts, zoomKey, "i steer", "esc home", "? help")
 	return strings.Join(parts, " · ")
 }
 

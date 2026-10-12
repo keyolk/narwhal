@@ -19,6 +19,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -127,42 +128,63 @@ func (m *tuiModel) steerNote(text string, failed bool) {
 	m.steerMsg, m.steerFailed, m.steerAt = text, failed, time.Now()
 }
 
-// viewSteer is the footer while the command line is open or a result is
-// still fresh, and "" otherwise.
-func (m tuiModel) viewSteer() string {
+// canSteer reports whether instructions to this run would reach anyone:
+// it has a daemon to post through, and work still going.
+func (m tuiModel) canSteer() bool {
+	if m.live.BrokerURL == "" {
+		return false
+	}
+	switch m.snap.State {
+	case broker.RunDone, broker.RunFailed, broker.RunCanceled:
+		return false
+	}
+	return true
+}
+
+// steerBar is the run view's standing input line.
+//
+// Typing, it is the line being typed. Otherwise it says how to start, and
+// what became of the last instruction — where it was routed and who has
+// answered — which the Brief knew and kept one key away. A run that cannot
+// be steered says why instead of taking keystrokes into nowhere.
+func (m tuiModel) steerBar() string {
+	w := max(1, m.width)
+	fit := func(s string) string { return ansi.Truncate(s, w, "…") }
 	if m.steering {
-		return styCyanBold.Render("» ") + string(m.steerBuf) + styCyan.Render("▏") +
-			styDim.Render("   enter send · esc cancel · @task to address · ! urgent")
+		return fit(styCyanBold.Render("» ") + string(m.steerBuf) + styCyan.Render("▏") +
+			styDim.Render("   enter send · esc cancel · @task addresses one · ! urgent"))
 	}
 	if m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor {
 		if m.steerFailed {
-			return styRedBold.Render("✗ ") + styRed.Render(m.steerMsg)
+			return fit(styRedBold.Render("✗ ") + styRed.Render(m.steerMsg))
 		}
-		return styGreenBold.Render("✓ ") + styDim.Render("sent: ") + truncate(m.steerMsg, m.width-10)
+		return fit(styGreenBold.Render("✓ ") + styDim.Render("sent: ") + m.steerMsg)
 	}
-	return ""
-}
-
-// steerStatus is the footer's standing steer control: the key that opens
-// the command line, and what became of the last instruction sent.
-//
-// The command line only appeared once `i` was pressed, and its result for
-// a few seconds after; the rest of the time nothing on screen said the run
-// could be steered, or whether the last instruction had been picked up.
-// The Brief knew both and was one key away from everything else.
-func (m tuiModel) steerStatus() string {
-	out := "  " + styCyanBold.Render("i") + styDim.Render(" » steer")
+	if !m.canSteer() {
+		why := "this request has finished"
+		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {
+			why = "its daemon is gone, so instructions would reach no one"
+		}
+		return fit(styDim.Render("» " + why + " · esc for home, n there for a new request"))
+	}
+	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
+		styDim.Render(" to tell the workers something")
 	ins := briefInstructions(m.snap)
 	if len(ins) == 0 {
-		return out
+		return fit(left + styDim.Render(" — @task addresses one, ! makes it urgent"))
 	}
 	last := ins[len(ins)-1]
-	state := styYellow.Render("… waiting")
+	state := styYellow.Render("… no reply yet")
 	if len(last.answeredBy) > 0 {
 		state = styGreen.Render("✓ " + strings.Join(last.answeredBy, ","))
 	}
 	if last.routed {
 		state = styMagenta.Render("→"+strings.Join(last.addressed, ",")) + " " + state
 	}
-	return out + styDim.Render("  last: ") + truncate(last.text, 40) + "  " + state
+	right := styDim.Render("last: ") + truncate(last.text, 40) + "  " + state
+	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
+	if gap < 2 {
+		return fit(left + "  " + right)
+	}
+	return left + strings.Repeat(" ", gap) + right
 }

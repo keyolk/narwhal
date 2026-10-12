@@ -22,6 +22,9 @@ type graphNode struct {
 	task  broker.TaskSnapshot
 	layer int // dependency depth; every dep sits in a strictly lower layer
 	col   int // gutter lane, stable across frames
+	// edges are the deps drawn: the task's existing deps less any implied
+	// by another of them. See drawnDeps.
+	edges []string
 }
 
 // graphLayout is a laid-out DAG ready to render.
@@ -95,9 +98,10 @@ func layoutGraph(tasks []broker.TaskSnapshot) graphLayout {
 	//
 	// A lane is occupied while the task holding it still has dependents
 	// waiting to be placed; the edge has to stay drawable until then.
+	edges := drawnDeps(byID)
 	pending := make(map[string]int, len(tasks)) // task → dependents not yet placed
 	for _, t := range tasks {
-		for _, d := range existingDeps(t.Deps, byID) {
+		for _, d := range edges[t.ID] {
 			pending[d]++
 		}
 	}
@@ -114,7 +118,7 @@ func layoutGraph(tasks []broker.TaskSnapshot) graphLayout {
 	}
 
 	for _, id := range ordered {
-		deps := existingDeps(byID[id].Deps, byID)
+		deps := edges[id]
 		// Placing this node consumes one pending edge from each dep.
 		for _, d := range deps {
 			pending[d]--
@@ -145,13 +149,65 @@ func layoutGraph(tasks []broker.TaskSnapshot) graphLayout {
 		}
 		lanes[col] = id
 
-		n := graphNode{task: byID[id], layer: layerOf[id], col: col}
+		n := graphNode{task: byID[id], layer: layerOf[id], col: col, edges: deps}
 		out.nodes = append(out.nodes, n)
 		out.index[id] = n
 
 		if col+1 > out.width {
 			out.width = col + 1
 		}
+	}
+	return out
+}
+
+// drawnDeps is each task's deps as the graph draws them: existing ones
+// only, and without any a task also reaches through another of its deps.
+//
+// A planner routinely makes the synthesis depend on every task, including
+// the root the others already depend on. The edge from the root to the
+// synthesis says nothing the picture does not already show through the
+// tasks between them, and drawing it took a line around the whole middle
+// row. The dependency is still real — the dep gate and the task view use
+// the task's own deps — it is only not drawn.
+func drawnDeps(byID map[string]broker.TaskSnapshot) map[string][]string {
+	reach := map[string]map[string]bool{}
+	var reachable func(id string, onPath map[string]bool) map[string]bool
+	reachable = func(id string, onPath map[string]bool) map[string]bool {
+		if r, ok := reach[id]; ok {
+			return r
+		}
+		r := map[string]bool{}
+		if onPath[id] {
+			return r // a cycle: stop rather than loop
+		}
+		onPath[id] = true
+		for _, d := range existingDeps(byID[id].Deps, byID) {
+			r[d] = true
+			for x := range reachable(d, onPath) {
+				r[x] = true
+			}
+		}
+		delete(onPath, id)
+		reach[id] = r
+		return r
+	}
+	out := make(map[string][]string, len(byID))
+	for id, t := range byID {
+		deps := existingDeps(t.Deps, byID)
+		var kept []string
+		for _, d := range deps {
+			implied := false
+			for _, other := range deps {
+				if other != d && reachable(other, map[string]bool{})[d] {
+					implied = true
+					break
+				}
+			}
+			if !implied {
+				kept = append(kept, d)
+			}
+		}
+		out[id] = kept
 	}
 	return out
 }
@@ -217,7 +273,7 @@ const (
 func (g graphLayout) render() []graphRow {
 	remaining := make(map[string]int, len(g.nodes))
 	for _, n := range g.nodes {
-		for _, d := range n.task.Deps {
+		for _, d := range n.edges {
 			if _, ok := g.index[d]; ok {
 				remaining[d]++
 			}
@@ -231,7 +287,7 @@ func (g graphLayout) render() []graphRow {
 	for i, n := range g.nodes {
 		incoming := map[int]bool{}
 		inherited := false
-		for _, d := range n.task.Deps {
+		for _, d := range n.edges {
 			dep, ok := g.index[d]
 			if !ok {
 				continue
@@ -249,7 +305,7 @@ func (g graphLayout) render() []graphRow {
 		// ends here is drawn as an elbow rather than a tee. Deciding from
 		// the pre-consumption state made every fan-in lane look like it
 		// continued downward.
-		for _, d := range n.task.Deps {
+		for _, d := range n.edges {
 			if dep, ok := g.index[d]; ok {
 				remaining[d]--
 				if remaining[d] == 0 && dep.col != n.col {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -232,5 +233,66 @@ func TestMergeGlyphProducesCrossings(t *testing.T) {
 	}
 	if got := mergeGlyph('│', '│'); got != '│' {
 		t.Fatalf("identical glyphs should stay put, got %q", got)
+	}
+}
+
+// A synthesis that depends on the root as well as on everything under it —
+// the usual planner output — is drawn through the middle row, not with a
+// line around it. s1791819873389-1 drew its root-to-synthesis edge as a
+// loop past the right of the row.
+func TestAnImpliedEdgeIsNotDrawn(t *testing.T) {
+	tasks := []broker.TaskSnapshot{
+		{ID: "task-1", State: broker.TaskCompleted},
+		{ID: "task-2", Deps: []string{"task-1"}},
+		{ID: "task-3", Deps: []string{"task-1"}},
+		{ID: "task-4", Deps: []string{"task-1"}},
+		{ID: "synthesis", Deps: []string{"task-1", "task-2", "task-3", "task-4"}},
+	}
+	g := layoutGraph(tasks)
+	if got := g.index["synthesis"].edges; len(got) != 3 || slices.Contains(got, "task-1") {
+		t.Errorf("synthesis draws edges from %v, want task-2..4 only", got)
+	}
+	if got := g.index["synthesis"].task.Deps; len(got) != 4 {
+		t.Errorf("the task's own deps were changed: %v", got)
+	}
+	var lines []string
+	for _, r := range g.renderBoxes(46, taskIconPlain) {
+		lines = append(lines, r.text)
+	}
+	right := 0
+	for _, l := range lines {
+		if strings.Contains(l, "task-4") {
+			right = strings.LastIndex(l, "│")
+		}
+	}
+	for _, l := range lines {
+		if n := len([]rune(strings.TrimRight(l, " "))); n > right+1 {
+			t.Errorf("a line runs past the row's right edge:\n%s", strings.Join(lines, "\n"))
+			break
+		}
+	}
+}
+
+// Two parents in a layer whose children overlap put their bars on
+// different rows, so each bar's corners stay corners — not a ┌ in the
+// middle of another bar.
+func TestOverlappingFanOutsTakeSeparateRows(t *testing.T) {
+	tasks := []broker.TaskSnapshot{
+		{ID: "a", State: broker.TaskCompleted},
+		{ID: "x", State: broker.TaskCompleted},
+		{ID: "b", Deps: []string{"a"}},
+		{ID: "c", Deps: []string{"a"}},
+		{ID: "d", Deps: []string{"x"}},
+		{ID: "syn", Deps: []string{"b", "c", "x"}},
+	}
+	var lines []string
+	for _, r := range layoutGraph(tasks).renderBoxes(60, taskIconPlain) {
+		lines = append(lines, r.text)
+	}
+	got := strings.Join(lines, "\n")
+	for _, bad := range []string{"─┌", "┐─", "─└", "┘─"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("a corner sits inside another line (%q):\n%s", bad, got)
+		}
 	}
 }

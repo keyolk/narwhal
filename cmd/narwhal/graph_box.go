@@ -364,7 +364,7 @@ func (g graphLayout) renderBoxesDetailed(width int, iconFor func(broker.TaskStat
 
 	for _, ch := range placed {
 		var ps []placedBox
-		for _, d := range ch.node.task.Deps {
+		for _, d := range ch.node.edges {
 			if p, ok := pos[d]; ok {
 				ps = append(ps, p)
 			}
@@ -382,7 +382,7 @@ func (g graphLayout) renderBoxesDetailed(width int, iconFor func(broker.TaskStat
 	var parents []placedBox
 	seenParent := map[string]bool{}
 	for _, b := range placed {
-		for _, d := range b.node.task.Deps {
+		for _, d := range b.node.edges {
 			p, ok := pos[d]
 			if !ok || drawn[d+"\x00"+b.node.task.ID] {
 				continue
@@ -476,7 +476,7 @@ func alignUnderParents(placed []placedBox, width, gapX int) {
 		// Where the parents are. A box with several parents belongs over
 		// their midpoint, which is also where a fan-in bar is drawn.
 		lo, hi, found := 0, 0, false
-		for _, d := range b.node.task.Deps {
+		for _, d := range b.node.edges {
 			p, ok := pos[d]
 			if !ok || p.y >= b.y {
 				continue
@@ -924,8 +924,6 @@ func routeFanOut(c *canvas, parent placedBox, children []placedBox) {
 		return
 	}
 
-	c.vline(px, py+1, bar)
-
 	lo, hi := px, px
 	for _, ch := range children {
 		x := ch.tap()
@@ -936,20 +934,50 @@ func routeFanOut(c *canvas, parent placedBox, children []placedBox) {
 			hi = x
 		}
 	}
+	// Two parents in one layer whose children overlap would lay their bars
+	// on the same row, and the two read as one line — which drop belongs
+	// to which parent could not be told. Where the row already carries
+	// another bar across this span, take the other row of the band.
+	if barTaken(c, lo, hi, bar) {
+		for _, alt := range []int{bar + 1, bar - 1} {
+			if alt > py && alt < top && !barTaken(c, lo, hi, alt) {
+				bar = alt
+				break
+			}
+		}
+	}
+
+	c.vline(px, py+1, bar)
 	c.hline(lo, hi, bar)
 
 	// Drops into each child, then the junction glyphs. Junctions are
 	// written last so a corner is not downgraded to a plain line by a
-	// later drop crossing the same cell.
+	// later drop crossing the same cell — and merged, not written, so an
+	// edge already passing through the cell keeps its arms. settleJoints
+	// drops any arm the merge adds that nothing reaches back to.
 	for _, ch := range children {
 		x := ch.tap()
 		c.vline(x, bar+1, ch.y-1)
 		c.set(ch.tap(), ch.y, []rune(jTeeUp)[0])
 	}
 	for _, ch := range children {
-		c.set(ch.tap(), bar, barJunction(ch.tap(), lo, hi))
+		c.join(ch.tap(), bar, barJunction(ch.tap(), lo, hi))
 	}
-	c.set(px, bar, sourceJunction(px, lo, hi))
+	c.join(px, bar, sourceJunction(px, lo, hi))
+}
+
+// barTaken reports whether a horizontal stroke already runs anywhere on
+// row y between lo and hi.
+func barTaken(c *canvas, lo, hi, y int) bool {
+	if y < 0 || y >= c.h {
+		return true
+	}
+	for x := max(lo, 0); x <= hi && x < c.w; x++ {
+		if a, ok := glyphArms[c.cells[y][x]]; ok && (a[2] || a[3]) {
+			return true
+		}
+	}
+	return false
 }
 
 // barJunction is the glyph where a child's drop meets the shared bar.

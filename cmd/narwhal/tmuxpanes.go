@@ -93,7 +93,20 @@ func (m tuiModel) openTmuxPanes() tea.Cmd {
 	if len(plan) == 0 {
 		return func() tea.Msg { return noticeMsg{err: fmt.Errorf("no task is working — nothing to open")} }
 	}
+	name := plan[0][3]
 	return func() tea.Msg {
+		// The window may still be open from an earlier w. A second one of
+		// the same name would leave every -t ambiguous, so go to it.
+		if out, err := runTmux([]string{"tmux", "list-windows", "-F", "#{window_name}"}); err == nil {
+			for _, w := range strings.Split(out, "\n") {
+				if strings.TrimSpace(w) == name {
+					if out, err := runTmux([]string{"tmux", "select-window", "-t", name}); err != nil {
+						return noticeMsg{err: fmt.Errorf("select-window: %v %s", err, strings.TrimSpace(out))}
+					}
+					return noticeMsg{text: "window " + name + " is already open — switched to it (close it and press w to rebuild)"}
+				}
+			}
+		}
 		for _, c := range plan {
 			if out, err := runTmux(c); err != nil {
 				return noticeMsg{err: fmt.Errorf("%s: %v %s", strings.Join(c[:2], " "), err, strings.TrimSpace(out))}

@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // 3 focuses pane 3 where it is, under the graph; it does not move into
@@ -59,26 +57,31 @@ func TestThreeOnAShortTerminalShowsTheTimelineZoomed(t *testing.T) {
 	}
 }
 
-// j/k scroll pane 4; scrolled back, it stays put as events arrive.
-func TestTheTimelineScrolls(t *testing.T) {
+// j/k move the selection in pane 3; past the newest it follows again.
+func TestTheTimelineSelectionMoves(t *testing.T) {
 	m := liveModel(t)
-	m.width, m.height = 160, 14
+	m.width, m.height = 160, 40
 	m.snap.Messages = briefModel(t).snap.Messages
 	m = press(m, "3", "z")
-	if rows := m.timelineRows(); rows >= len(broker.Timeline(m.snap)) {
-		t.Skipf("all %d events fit in %d rows", len(broker.Timeline(m.snap)), rows)
+	n := len(m.timelineEvents())
+	if n < 3 {
+		t.Fatalf("setup: %d events", n)
 	}
 	m = press(m, "k")
-	if m.timelineBack != 1 {
-		t.Fatalf("k: back=%d, want 1", m.timelineBack)
+	if m.timelineSel != n-2 {
+		t.Fatalf("k: sel=%d, want %d", m.timelineSel, n-2)
 	}
 	m = press(m, "g")
-	if m.timelineBack != m.timelineMaxBack() || m.timelineBack == 0 {
-		t.Fatalf("g: back=%d, max=%d", m.timelineBack, m.timelineMaxBack())
+	if m.timelineSel != 0 {
+		t.Fatalf("g: sel=%d", m.timelineSel)
 	}
 	m = press(m, "G")
-	if m.timelineBack != 0 {
-		t.Fatalf("G: back=%d", m.timelineBack)
+	if m.timelineSel != timelineFollow {
+		t.Fatalf("G: sel=%d", m.timelineSel)
+	}
+	m = press(m, "k", "j")
+	if m.timelineSel != timelineFollow {
+		t.Fatalf("j onto the newest did not follow again: %d", m.timelineSel)
 	}
 }
 

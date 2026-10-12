@@ -132,8 +132,8 @@ func TestARewriteOfTheSameLengthIsNoticed(t *testing.T) {
 func TestTheRenderIsReusedUntilSomethingChanges(t *testing.T) {
 	path := transcriptFile(t, 20)
 
-	first := globalTranscripts.render(path, 80)
-	second := globalTranscripts.render(path, 80)
+	first := globalTranscripts.render(path, 80, nil)
+	second := globalTranscripts.render(path, 80, nil)
 	if len(first) == 0 {
 		t.Fatal("nothing rendered")
 	}
@@ -143,14 +143,14 @@ func TestTheRenderIsReusedUntilSomethingChanges(t *testing.T) {
 	}
 
 	// A new width has to re-render: the lines wrap differently.
-	narrow := globalTranscripts.render(path, 40)
+	narrow := globalTranscripts.render(path, 40, nil)
 	if len(narrow) > 0 && len(first) > 0 && &narrow[0] == &first[0] {
 		t.Error("a resized pane reused a render made at another width")
 	}
 
 	// And an append has to re-render, or the new lines never appear.
 	appendTo(t, path, transcriptBody(20, 22))
-	grown := globalTranscripts.render(path, 40)
+	grown := globalTranscripts.render(path, 40, nil)
 	if len(grown) <= len(narrow) {
 		t.Errorf("after an append the render is %d lines, was %d", len(grown), len(narrow))
 	}
@@ -222,7 +222,7 @@ func TestTheCacheIsSafeUnderConcurrentReaders(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for j := 0; j < 40; j++ {
-				for _, l := range globalTranscripts.render(path, 60+n) {
+				for _, l := range globalTranscripts.render(path, 60+n, nil) {
 					_ = len(l)
 				}
 				for _, e := range globalTranscripts.read(path) {

@@ -70,7 +70,7 @@ func (m tuiModel) inspectorHeadline(t broker.TaskSnapshot, width int) string {
 		line += "  " + styCyan.Render(sparkline(a.spark))
 	}
 	if m.workerSessionID(t.ID) != "" {
-		hint := styCyanBold.Render("s") + styDim.Render(" session · ") + styCyanBold.Render("a") + styDim.Render(" attach")
+		hint := styCyanBold.Render("enter") + styDim.Render(" open · ") + styCyanBold.Render("a") + styDim.Render(" attach")
 		if lipgloss.Width(line)+2+lipgloss.Width(hint) <= width {
 			line += "  " + hint
 		}
@@ -245,7 +245,7 @@ func (m tuiModel) activityLabel(start, end, total int) string {
 func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
 	if sid := m.workerSessionID(taskID); sid != "" {
 		if lines := globalTranscripts.renderNarrative(
-			transcriptPath(m.live.CWD, sid), width); len(lines) > 0 {
+			transcriptPath(m.live.CWD, sid), width, m.taskInputs(taskID)); len(lines) > 0 {
 			return lines
 		}
 	}
@@ -258,7 +258,7 @@ func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
 func (m tuiModel) sessionActivityLines(taskID string, width int) []string {
 	if sid := m.workerSessionID(taskID); sid != "" {
 		if lines := globalTranscripts.render(
-			transcriptPath(m.live.CWD, sid), width); len(lines) > 0 {
+			transcriptPath(m.live.CWD, sid), width, m.taskInputs(taskID)); len(lines) > 0 {
 			return lines
 		}
 	}

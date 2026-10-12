@@ -64,6 +64,17 @@ func radioSummary(content string) (text string, isProtocol bool) {
 		return s, true
 	}
 
+	// The router's relay repeats the operator's instruction, which is the
+	// line just above it. What it adds is where the instruction went.
+	if strings.HasPrefix(content, broker.RelayPrefix) {
+		rest := strings.TrimSpace(strings.TrimPrefix(content, broker.RelayPrefix))
+		if to, _, ok := strings.Cut(strings.TrimPrefix(rest, "from the operator, for "), ": "); ok &&
+			strings.HasPrefix(rest, "from the operator, for ") {
+			return "relayed your instruction to " + to, true
+		}
+		return rest, true
+	}
+
 	// The coordinator's completion-gate notice. It is not a parsed request
 	// type — it is posted as prose with a marker prefix — but it shows up
 	// on every gated run, so it gets the same treatment.

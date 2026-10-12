@@ -256,7 +256,7 @@ func TestSessionViewShowsActivityWhileTheWorkerRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := m.viewSessionDetail()
+	out := m.viewTaskView()
 	if !strings.Contains(out, "send worklog") {
 		t.Errorf("the running worker's activity is not shown:\n%s", out)
 	}

@@ -79,7 +79,6 @@ type detailMode int
 const (
 	detailClosed detailMode = iota
 	detailMessage
-	detailTask
 	// detailSession shows a worker's full Claude session output. The task
 	// detail summarizes; this is where you actually watch a worker work.
 	detailSession
@@ -176,9 +175,12 @@ type tuiModel struct {
 	// The two are tabs of one pane: both are the whole run's channel, one
 	// as it was said and one as it stands. 4 on a focused pane 4 switches.
 	briefTab bool
-	// timelineBack is how many events the timeline is scrolled back from
-	// the newest; 0 follows the run.
-	timelineBack int
+	// help shows the key reference over everything. See help.go.
+	help bool
+
+	// timelineSel is the selected timeline event, or timelineFollow to
+	// keep the newest selected as the run goes on.
+	timelineSel int
 
 	// steering is the open command line, steerBuf what has been typed into
 	// it, and steerMsg the result of the last send. See steer.go.
@@ -197,18 +199,19 @@ type tuiModel struct {
 // one to open; the picker is shown when the caller did not single one out.
 func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker bool) tuiModel {
 	m := tuiModel{
-		interval:   interval,
-		client:     &http.Client{Timeout: 5 * time.Second},
-		focus:      focusRadio,
-		zoom:       -1,
-		followTail: true,
-		nodeScroll: nodeScrollTail,
-		boxMode:    true,
-		runs:       runs,
-		runCur:     cur,
-		picker:     picker,
-		width:      100,
-		height:     30,
+		interval:    interval,
+		client:      &http.Client{Timeout: 5 * time.Second},
+		focus:       focusRadio,
+		timelineSel: timelineFollow,
+		zoom:        -1,
+		followTail:  true,
+		nodeScroll:  nodeScrollTail,
+		boxMode:     true,
+		runs:        runs,
+		runCur:      cur,
+		picker:      picker,
+		width:       100,
+		height:      30,
 	}
 	if cur >= 0 && cur < len(runs) {
 		m.live = runs[cur]
@@ -422,13 +425,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// was selected and put the cursor back on it, the same way the run
 		// picker anchors on a run id rather than a row number.
 		selected, hadSelection := m.selectedTask()
-		before := len(m.timelineEvents())
 		m.snap = msg.snap
-		if m.timelineBack > 0 {
-			// Scrolled back, the pane stays on the events it was showing
-			// as new ones arrive below; at 0 it follows the newest.
-			m.timelineBack += len(m.timelineEvents()) - before
-		}
 		m.agents = msg.agents
 		if hadSelection {
 			m.restoreTaskCursor(selected.ID)
@@ -533,6 +530,19 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// above, no key is ever meant as a literal character.
 	msg = normalizeCJKKey(msg)
 
+	if m.help {
+		// Any key closes the reference: it is read, not used.
+		m.help = false
+		if msg.String() == "ctrl+c" {
+			m.quit = true
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+	if msg.String() == "?" {
+		m.help = true
+		return m, nil
+	}
 	if m.picker {
 		return m.handlePickerKey(msg)
 	}
@@ -633,28 +643,15 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.moveCursor(-10)
 	case "enter":
-		// Detail shows whichever pane you opened it from.
-		switch m.focus {
-		case focusRadio:
-			if len(m.snap.Messages) > 0 {
-				m.detail = detailMessage
-				m.detailScroll = 0
-			}
-		case focusTasks:
-			if len(m.snap.Tasks) > 0 {
-				m.detail = detailTask
-				m.detailScroll = 0
-			}
-		}
+		// Enter opens what the cursor is on, wherever it is. See
+		// navigation.go for where each pane leads.
+		m.openFromFocus()
 	case "s":
-		// Open the selected task's Claude session output. Reachable from
-		// either pane: when the radio has focus, the task cursor still
-		// points at something, and watching a worker is the common reason
-		// to reach for the keyboard at all.
-		if len(m.snap.Tasks) > 0 {
-			m.detail = detailSession
-			m.detailScroll = 0
-			m.sessionTail = true
+		// The selected task's view, from any pane: when another pane has
+		// focus the graph cursor still points at a task, and watching a
+		// worker is the common reason to reach for the keyboard at all.
+		if t, ok := m.selectedTask(); ok {
+			m.openTask(t.ID, time.Time{})
 		}
 	case "a":
 		// Attach to the worker's live Claude session. s shows what the
@@ -743,22 +740,20 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "g", "home":
 		m.detailScroll = 0
 		m.sessionTail = false
+	case "G", "end":
+		// To the newest, and stay there as it grows.
+		m.sessionTail = true
+		m.detailScroll = 1 << 30
 	case "f":
 		// Re-arm session following, matching what f does on the radio list.
 		if m.detail == detailSession {
 			m.sessionTail = true
 		}
-	case "s":
-		// Toggle between a task's summary and its session output without
-		// closing the detail view.
-		switch m.detail {
-		case detailTask:
-			m.detail = detailSession
-			m.detailScroll = 0
-			m.sessionTail = true
-		case detailSession:
-			m.detail = detailTask
-			m.detailScroll = 0
+	case "s", "enter":
+		// From a message, to the task it came from or went to, at the
+		// moment it was posted.
+		if m.detail == detailMessage {
+			m.openMessageTask()
 		}
 	case "a":
 		// Attach from the detail view too: this is where you find out the
@@ -781,7 +776,7 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 				m.followTail = false
 			}
-		case detailTask, detailSession:
+		case detailSession:
 			if m.taskCur < len(m.snap.Tasks)-1 {
 				m.taskCur++
 				m.detailScroll = 0
@@ -796,7 +791,7 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.detailScroll = 0
 				m.followTail = false
 			}
-		case detailTask, detailSession:
+		case detailSession:
 			if m.taskCur > 0 {
 				m.taskCur--
 				m.detailScroll = 0
@@ -889,8 +884,7 @@ func (m tuiModel) nodeFieldRows() int {
 func (m *tuiModel) moveCursor(delta int) {
 	switch m.focus {
 	case focusTimeline:
-		// Down is newer, and back counts from the newest.
-		m.timelineBack -= delta
+		m.moveTimeline(delta)
 	case focusTasks:
 		m.taskCur += delta
 	case focusRadio:
@@ -903,7 +897,7 @@ func (m *tuiModel) moveCursor(delta int) {
 func (m *tuiModel) jumpTo(i int) {
 	switch m.focus {
 	case focusTimeline:
-		m.timelineBack = len(m.timelineEvents())
+		m.timelineSel = 0
 	case focusTasks:
 		m.selectNode(i)
 	case focusRadio:
@@ -916,7 +910,7 @@ func (m *tuiModel) jumpTo(i int) {
 func (m *tuiModel) jumpToEnd() {
 	switch m.focus {
 	case focusTimeline:
-		m.timelineBack = 0
+		m.timelineSel = timelineFollow
 	case focusTasks:
 		m.selectNode(len(m.snap.Tasks) - 1)
 	case focusRadio:
@@ -1003,11 +997,11 @@ func (m *tuiModel) clampCursors() {
 	if n := len(m.snap.Messages); n > 0 && m.radioCur >= n {
 		m.radioCur = n - 1
 	}
-	if most := m.timelineMaxBack(); m.timelineBack > most {
-		m.timelineBack = most
+	if n := len(m.timelineEvents()); m.timelineSel >= n {
+		m.timelineSel = n - 1
 	}
-	if m.timelineBack < 0 {
-		m.timelineBack = 0
+	if m.timelineSel < timelineFollow {
+		m.timelineSel = timelineFollow
 	}
 }
 
@@ -1023,16 +1017,17 @@ func (m tuiModel) View() string {
 	if m.quit {
 		return ""
 	}
+	if m.help {
+		return m.viewHelp()
+	}
 	if m.picker {
 		return m.viewPicker()
 	}
 	switch m.detail {
 	case detailMessage:
 		return m.viewMessageDetail()
-	case detailTask:
-		return m.viewTaskDetail()
 	case detailSession:
-		return m.viewSessionDetail()
+		return m.viewTaskView()
 	}
 
 	header := m.viewHeader()
@@ -1176,9 +1171,10 @@ var (
 	// Bold variants for the few places where a colour has to carry across
 	// a pane of text — a running count, an urgent message, a focused pane
 	// title — without a second colour competing with it.
-	styGreenBold = styGreen.Bold(true)
-	styCyanBold  = styCyan.Bold(true)
-	styRedBold   = styRed.Bold(true)
+	styGreenBold  = styGreen.Bold(true)
+	styYellowBold = styYellow.Bold(true)
+	styCyanBold   = styCyan.Bold(true)
+	styRedBold    = styRed.Bold(true)
 	// styThought is a worker's extended thinking: the same weight as its
 	// prose, set apart so private reasoning is not mistaken for what it
 	// told its peers.
@@ -1631,33 +1627,35 @@ func (m tuiModel) viewFooter() string {
 // without becoming a wall nobody reads. What each pane offers differs —
 // the graph navigates, the node scrolls — so the hints follow the focus
 // and stay one line.
+//
+// It names what enter does here first, because that is the key that leads
+// somewhere and it does something different in every pane. The rest of the
+// keys are behind ?, which lists them all; a footer that tried to was a
+// line nobody read to the end.
 func (m tuiModel) footerKeys() string {
-	parts := []string{"1-4 pane"}
+	var parts []string
 	switch m.focus {
 	case focusTasks:
-		parts = append(parts, "hjkl move", "b lanes", "< > width")
+		parts = append(parts, "enter open task", "hjkl move", "b lanes", "< > width")
 	case focusNode:
-		parts = append(parts, "jk scroll", "+ - height")
+		parts = append(parts, "enter open task", "jk scroll", "+ - height")
 	case focusRadio:
 		tab := "4 → brief"
 		if m.briefTab {
 			tab = "4 → radio"
 		}
+		if !m.briefTab {
+			parts = append(parts, "enter open message")
+		}
 		parts = append(parts, "jk move", "f follow", tab)
 	case focusTimeline:
-		parts = append(parts, "jk scroll", "g/G oldest/newest")
+		parts = append(parts, "enter open event", "jk select", "g/G oldest/newest")
 	}
 	zoomKey := "z zoom"
 	if m.zoom >= 0 {
 		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
 	}
-	parts = append(parts, zoomKey, "enter detail", "s session", "a attach", "i steer")
-	if len(m.runs) > 1 {
-		parts = append(parts, "[ ] run")
-	} else {
-		parts = append(parts, "esc runs")
-	}
-	parts = append(parts, "q quit")
+	parts = append(parts, zoomKey, "i steer", "? help", "q quit")
 	return strings.Join(parts, " · ")
 }
 
@@ -2026,7 +2024,8 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 	// how you read the rest of it — so it is kept as its own coloured
 	// fragment rather than folded into the body.
 	mention := ""
-	if len(msg.Mentions) > 0 {
+	if len(msg.Mentions) > 0 && !strings.HasPrefix(msg.Content, broker.RelayPrefix) {
+		// A relay's summary already says where it went.
 		mention = "→" + strings.Join(msg.Mentions, ",") + " "
 	}
 
@@ -2069,9 +2068,15 @@ func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string
 		// full pane for.
 		body = styRedBold.Render(body)
 	}
+	senderStyle := styBlue
+	if msg.Sender == "main" {
+		// The operator's own words, in the colour they carry everywhere.
+		senderStyle = styYellowBold
+		body = styYellow.Render(body)
+	}
 	return fmt.Sprintf("%s %s %s %s",
 		styDim.Render(stamp), prioStyle.Render(prioCh),
-		styBlue.Render(sender), styledMention+body)
+		senderStyle.Render(sender), styledMention+body)
 }
 
 func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
@@ -2110,105 +2115,6 @@ func (m tuiModel) selectedTask() (broker.TaskSnapshot, bool) {
 	return m.taskByID(rows[cur].id), true
 }
 
-// viewSessionDetail shows what a worker is doing, as a live activity feed
-// read from its Claude session transcript.
-//
-// The transcript rather than the captured stdout log, because the log is
-// empty for the entire time you would want to watch: a `--print` worker
-// buffers its output until it exits. The transcript is appended as the
-// session happens, so a running worker's tool calls and reasoning show up
-// within a second. Once the worker finishes, its final answer is appended
-// to the feed — that is what the log holds, and it is the last thing said
-// rather than a separate view.
-func (m tuiModel) viewSessionDetail() string {
-	t, ok := m.selectedTask()
-	if !ok {
-		return "no tasks"
-	}
-
-	icon, style := taskIconStyle(t.State)
-	head := fmt.Sprintf("%s  %s %s  %s",
-		styCyanBold.Render("Session"), style.Render(icon),
-		styTitle.Render(t.ID), style.Bold(true).Render(string(t.State)))
-
-	meta := []string{"agent=worker-" + t.ID}
-	if t.Model != "" {
-		meta = append(meta, "model="+t.Model)
-	}
-	if t.Dispatches > 0 {
-		meta = append(meta, fmt.Sprintf("dispatches=%d", t.Dispatches))
-	}
-
-	width := m.width - 2
-	var body []string
-
-	entries := m.workerActivity(t.ID)
-	if len(entries) > 0 {
-		meta = append(meta, fmt.Sprintf("%d events", len(entries)))
-		// Through the cache: this view scrolls too, and re-rendering the
-		// whole feed per frame is the same 2.4ms the node pane paid.
-		body = m.sessionActivityLines(t.ID, width)
-	}
-
-	// The final answer only exists once the worker has exited. Append it
-	// rather than showing it instead: it is the end of the same story.
-	//
-	// Two sources say it, and they outlive each other. claude-output.txt is
-	// this machine's stdout capture — richer, but gone if the session
-	// directory was cleaned or the run was adopted from elsewhere. The
-	// snapshot outcome is what the worker declared at task-done and now
-	// survives persistence, so it is the one still there after a restart.
-	final := m.workerOutputLines(t.ID)
-	if len(final) == 0 && t.Outcome != "" {
-		final = strings.Split(t.Outcome, "\n")
-	}
-	if len(final) > 0 {
-		if len(body) > 0 {
-			body = append(body, "")
-		}
-		body = append(body, styGreen.Render("── final answer ──"))
-		for _, l := range final {
-			body = append(body, wrapText(l, width)...)
-		}
-	}
-
-	if len(body) == 0 {
-		// Say which is true rather than leaving a blank pane.
-		var reason string
-		switch {
-		case t.Dispatches == 0:
-			reason = "not dispatched yet — nothing to show"
-		case t.State == broker.TaskDispatched:
-			reason = "the worker has started but has not written its first event yet"
-		default:
-			reason = "no transcript found. This run predates session pinning, so " +
-				"the worker's session cannot be located; only its final output " +
-				"would be available, at " + m.sessionLogPath(t.ID)
-		}
-		body = wrapText(reason, width)
-	}
-
-	avail := m.height - 5
-	if avail < 1 {
-		avail = 1
-	}
-	// Following pins the view to the end as the worker works.
-	if m.sessionTail && len(body) > avail {
-		m.detailScroll = len(body) - avail
-	}
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
-
-	follow := "  [following]"
-	if !m.sessionTail {
-		follow = ""
-	}
-	footer := styDim.Render("j/k scroll · n/p task · f follow · a attach · esc back · q close")
-
-	return pinFooter(head+pos+styDim.Render(follow)+"\n"+
-		styDim.Render(strings.Join(meta, "  "))+"\n\n"+
-		strings.Join(body[scroll:end], "\n"), footer, m.height)
-}
-
 // workerActivity reads the selected worker's session transcript.
 func (m tuiModel) workerActivity(taskID string) []transcriptEntry {
 	sid := m.workerSessionID(taskID)
@@ -2216,75 +2122,6 @@ func (m tuiModel) workerActivity(taskID string) []transcriptEntry {
 		return nil
 	}
 	return readTranscript(transcriptPath(m.live.CWD, sid))
-}
-
-// viewTaskDetail shows the selected task's state, its place in the graph,
-// and its full assignment — which the graph pane can only show truncated.
-// If the task has a running or completed worker, the tail of its
-// claude-output.txt is appended so the operator can see what the worker is
-// actually doing without leaving the monitor.
-func (m tuiModel) viewTaskDetail() string {
-	rows := m.graphRows()
-	if len(rows) == 0 {
-		return "no tasks"
-	}
-	cur := m.taskCur
-	if cur >= len(rows) {
-		cur = len(rows) - 1
-	}
-	t := m.taskByID(rows[cur].id)
-
-	icon, style := taskIconStyle(t.State)
-	head := fmt.Sprintf("%s  %s %s  %s",
-		styCyanBold.Render("Task"), style.Render(icon),
-		styTitle.Render(t.ID), style.Bold(true).Render(string(t.State)))
-
-	var meta []string
-	if t.Name != "" && t.Name != t.ID {
-		meta = append(meta, "name="+t.Name)
-	}
-	meta = append(meta, fmt.Sprintf("dispatches=%d", t.Dispatches))
-	if len(t.Deps) > 0 {
-		meta = append(meta, "waits on "+strings.Join(t.Deps, ", "))
-	}
-	// Downstream tasks are not stored on the task, so derive them.
-	var blocks []string
-	for _, other := range m.snap.Tasks {
-		for _, d := range other.Deps {
-			if d == t.ID {
-				blocks = append(blocks, other.ID)
-				break
-			}
-		}
-	}
-	sort.Strings(blocks)
-	if len(blocks) > 0 {
-		meta = append(meta, "blocks "+strings.Join(blocks, ", "))
-	}
-
-	body := wrapText(t.Assignment, m.width-2)
-
-	// Append the last few things the worker did. This is a preview — `s`
-	// opens the full activity feed. The tail comes from the transcript, so
-	// it says something while the worker is still running; the captured
-	// log only exists after it exits.
-	if tail := m.workerActivityTail(t.ID, m.width-2); len(tail) > 0 {
-		body = append(body, "",
-			styCyan.Render("── recent activity")+
-				styDim.Render(" (press s for the full session) ──"))
-		body = append(body, tail...)
-	}
-
-	footer := styDim.Render("j/k scroll · n/p task · s session · esc back · q close")
-
-	avail := m.height - 5
-	if avail < 1 {
-		avail = 1
-	}
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
-
-	return pinFooter(head+pos+"\n"+styDim.Render(strings.Join(meta, "  "))+"\n\n"+
-		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
 // sessionLogPath returns where the launcher writes a worker's Claude output:
@@ -2411,27 +2248,6 @@ func (m tuiModel) workerOutputLines(taskID string) []string {
 	return strings.Split(text, "\n")
 }
 
-// workerActivityTail renders the last few things a worker did, for the
-// preview inside the task detail. It falls back to the final output for
-// runs old enough to have no transcript.
-func (m tuiModel) workerActivityTail(taskID string, width int) []string {
-	const tail = 12
-	if entries := m.workerActivity(taskID); len(entries) > 0 {
-		if len(entries) > tail {
-			entries = entries[len(entries)-tail:]
-		}
-		return renderTranscript(entries, width)
-	}
-	lines := m.workerOutputLines(taskID)
-	if len(lines) == 0 {
-		return nil
-	}
-	if len(lines) > tail {
-		lines = lines[len(lines)-tail:]
-	}
-	return lines
-}
-
 // scrollWindow clamps a scroll offset to a body length and returns the
 // visible range plus a position indicator.
 func scrollWindow(scroll, avail, total int) (int, int, string) {
@@ -2450,35 +2266,6 @@ func scrollWindow(scroll, avail, total int) (int, int, string) {
 		pos = styDim.Render(fmt.Sprintf("  [%d-%d/%d]", scroll+1, end, total))
 	}
 	return scroll, end, pos
-}
-
-func (m tuiModel) viewMessageDetail() string {
-	if len(m.snap.Messages) == 0 {
-		return "no messages"
-	}
-	msg := m.snap.Messages[m.radioCur]
-
-	head := fmt.Sprintf("%s  %s  %s → %s",
-		styCyanBold.Render("Message"), styDim.Render(fmt.Sprintf("seq %d", msg.Seq)),
-		styBlue.Render(msg.Sender), mentionsLabel(msg.Mentions))
-	// The thread says which conversation this belongs to and the priority
-	// says how to read it; both were dim enough to skip.
-	_, prioStyle := priorityGlyph(msg.Priority)
-	meta := styDim.Render("thread=") + styMagenta.Render(msg.ThreadID) +
-		styDim.Render("  priority=") + prioStyle.Render(string(msg.Priority)) +
-		styDim.Render("  "+clock(msg.CreatedAt))
-
-	body := wrapText(msg.Content, m.width-2)
-	footer := styDim.Render("j/k scroll · n/p message · esc back · q close")
-
-	avail := m.height - 4
-	if avail < 3 {
-		avail = 3
-	}
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
-
-	return pinFooter(head+pos+"\n"+meta+"\n\n"+
-		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
 func mentionsLabel(m []string) string {
@@ -2521,7 +2308,12 @@ func scrollStart(cur, visible, total int) int {
 }
 
 // shortName trims the worker- prefix so the sender column stays narrow.
+// shortName is how a sender reads on the radio: a worker by its task, and
+// the operator as "you", which is who is reading.
 func shortName(s string) string {
+	if s == "main" {
+		return "you"
+	}
 	return strings.TrimPrefix(s, "worker-")
 }
 

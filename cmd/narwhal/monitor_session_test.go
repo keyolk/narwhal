@@ -59,7 +59,7 @@ func TestSessionViewShowsAgentAndModel(t *testing.T) {
 	m := sessionModel(t, "task-1", []string{"line"})
 	m = press(m, "s")
 	out := m.View()
-	for _, want := range []string{"worker-task-1", "haiku"} {
+	for _, want := range []string{"task-1", "haiku"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("session view missing %q:\n%s", want, out)
 		}
@@ -98,19 +98,21 @@ func TestSessionViewFollowsNewOutputUntilYouScroll(t *testing.T) {
 	}
 }
 
-func TestSKeyTogglesBetweenTaskAndSession(t *testing.T) {
+// enter on a task and s both open the one task view: its summary and its
+// session are one screen now, so there is nothing for s to toggle.
+func TestEnterAndSOpenTheSameTaskView(t *testing.T) {
 	m := sessionModel(t, "task-1", []string{"line"})
-	m = press(m, "1", "enter") // task detail
-	if m.detail != detailTask {
-		t.Fatalf("expected task detail, got %v", m.detail)
+	m = press(m, "1", "enter")
+	if m.detail != detailSession {
+		t.Fatalf("enter on a task: detail %v, want the task view", m.detail)
+	}
+	m = press(m, "esc", "s")
+	if m.detail != detailSession {
+		t.Fatalf("s: detail %v, want the task view", m.detail)
 	}
 	m = press(m, "s")
 	if m.detail != detailSession {
-		t.Fatalf("s should switch to the session view, got %v", m.detail)
-	}
-	m = press(m, "s")
-	if m.detail != detailTask {
-		t.Fatalf("s should switch back to the task view, got %v", m.detail)
+		t.Fatalf("s in the task view left it: %v", m.detail)
 	}
 }
 
@@ -125,13 +127,5 @@ func TestSessionViewWalksTasksWithNP(t *testing.T) {
 	}
 	if m.detail != detailSession {
 		t.Fatalf("n should stay in the session view, got %v", m.detail)
-	}
-}
-
-func TestTaskDetailPointsAtTheSessionView(t *testing.T) {
-	m := sessionModel(t, "task-1", []string{"some output"})
-	m = press(m, "1", "enter")
-	if out := m.View(); !strings.Contains(out, "press s") {
-		t.Fatalf("task detail does not mention the session view:\n%s", out)
 	}
 }

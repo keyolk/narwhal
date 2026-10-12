@@ -334,43 +334,10 @@ func shortenPath(p string) string {
 // for reading its inputs. Assistant text is kept in full — it is the
 // worker explaining itself, which is the most informative part.
 func renderTranscript(entries []transcriptEntry, width int) []string {
-	// Three kinds of line, three weights. A tool call is what the worker
-	// *did* and carries the colour; its result is evidence and recedes;
-	// the worker's own prose is what it *thinks* and reads at full
-	// contrast. Undifferentiated, the feed was a wall of grey where the
-	// actions and the reasoning looked alike.
 	var out []string
+	var st feedState
 	for _, e := range entries {
-		stamp := ""
-		if !e.at.IsZero() {
-			stamp = clock(e.at) + " "
-		}
-		pad := strings.Repeat(" ", len(stamp)) + "  "
-		switch e.kind {
-		case "tool":
-			out = append(out, styDim.Render(stamp)+styCyan.Render("→ ")+
-				styCyan.Render(truncate(e.text, width-len(stamp)-2)))
-		case "result":
-			for _, l := range clipLines(e.text, 2) {
-				out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
-			}
-		case "thinking":
-			for i, l := range wrapText(e.text, width-len(stamp)-2) {
-				if i == 0 {
-					out = append(out, styDim.Render(stamp)+styMagenta.Render("∴ ")+styThought.Render(l))
-					continue
-				}
-				out = append(out, pad+styThought.Render(l))
-			}
-		default:
-			for i, l := range wrapText(e.text, width-len(stamp)-2) {
-				if i == 0 {
-					out = append(out, styDim.Render(stamp)+styGreen.Render("· ")+l)
-					continue
-				}
-				out = append(out, pad+l)
-			}
-		}
+		out = append(out, renderEntry(e, width, &st)...)
 	}
 	return out
 }
@@ -383,10 +350,11 @@ func renderTranscript(entries []transcriptEntry, width int) []string {
 // worker the paragraphs that say what it is doing and why were a few lines
 // lost among dozens of Read/Grep/Bash rows — the pane answered "what did it
 // touch" and buried "what is it thinking". The full feed is still behind
-// `s`; this one is for reading along.
+// `enter`; this one is for reading along.
 func renderNarrative(entries []transcriptEntry, width int) []string {
 	var out []string
 	var tools []string
+	var st feedState
 	flush := func() {
 		if len(tools) == 0 {
 			return
@@ -396,15 +364,18 @@ func renderNarrative(entries []transcriptEntry, width int) []string {
 		tools = nil
 	}
 	for _, e := range entries {
-		switch e.kind {
-		case "tool":
+		switch {
+		case e.kind == "tool":
 			tools = append(tools, toolName(e.text))
-		case "result":
+		case e.kind == "result":
 			// Evidence for the call it answers; the folded line already
 			// says the call happened.
+		case e.kind == "text" && e.user && st.sawPrompt:
+			// A watcher waking the worker: the narrative reads as what
+			// the worker did about it, not that the bell rang.
 		default:
 			flush()
-			out = append(out, renderTranscript([]transcriptEntry{e}, width)...)
+			out = append(out, renderEntry(e, width, &st)...)
 		}
 	}
 	flush()

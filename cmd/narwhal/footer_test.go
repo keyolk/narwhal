@@ -50,8 +50,7 @@ func TestDetailHintsSitOnTheLastRow(t *testing.T) {
 		mode detailMode
 		hint string
 	}{
-		{"task", detailTask, "esc back"},
-		{"session", detailSession, "esc back"},
+		{"task", detailSession, "esc back"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m.detail = tc.mode
@@ -358,8 +357,7 @@ func TestNoViewOverflowsItsTerminal(t *testing.T) {
 			d    detailMode
 		}{
 			{"main", detailClosed},
-			{"task", detailTask},
-			{"session", detailSession},
+			{"task", detailSession},
 			{"message", detailMessage},
 		} {
 			m.detail = mode.d

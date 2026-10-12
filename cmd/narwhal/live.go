@@ -338,6 +338,9 @@ func (m tuiModel) liveDetail(id string) string {
 	}
 	a, ok := m.activity[id]
 	switch {
+	case ok && a.said != "" && a.tool != "":
+		// Both, and the box picks: see fitDetail.
+		return a.said + detailAlt + a.tool
 	case ok && a.said != "":
 		return a.said
 	case ok && a.tool != "":
@@ -346,6 +349,12 @@ func (m tuiModel) liveDetail(id string) string {
 		return "starting…"
 	}
 }
+
+// detailAlt separates a box's preferred detail from a shorter stand-in.
+// A sentence cut to the width of a narrow box — "The re" — says nothing,
+// where the tool name it is doing fits and says something. The box knows
+// its width; liveDetail does not, so it hands over both.
+const detailAlt = "\x1f"
 
 // isHot reports whether a task acted, or was spoken to, within hotWindow.
 func (m tuiModel) isHot(id string) bool {

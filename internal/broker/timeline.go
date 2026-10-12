@@ -56,6 +56,10 @@ type TimelineEvent struct {
 	// empty for the run itself.
 	Who  string
 	Text string
+	// Seq is the radio message the event was lifted from, or 0 for one
+	// the task states and verdicts record. It lets a view open the message
+	// itself rather than a one-line echo of it.
+	Seq int64
 }
 
 // Timeline returns the run's history, oldest first.
@@ -72,6 +76,13 @@ func Timeline(s Snapshot) []TimelineEvent {
 			return
 		}
 		out = append(out, TimelineEvent{At: at, Kind: kind, Who: who, Text: oneLine(text)})
+	}
+	addMsg := func(m *Message, kind TimelineKind, who, text string) {
+		n := len(out)
+		add(m.CreatedAt, kind, who, text)
+		if len(out) > n {
+			out[n].Seq = m.Seq
+		}
 	}
 
 	if s.StartedAt > 0 {
@@ -98,12 +109,12 @@ func Timeline(s Snapshot) []TimelineEvent {
 		}
 		switch {
 		case m.Sender == "main":
-			add(m.CreatedAt, TimelineInstruction, "operator", m.Content)
+			addMsg(m, TimelineInstruction, "operator", m.Content)
 		case m.Sender == "coordinator" && strings.HasPrefix(m.Content, RelayPrefix):
-			add(m.CreatedAt, TimelineRelay, "coordinator",
+			addMsg(m, TimelineRelay, "coordinator",
 				strings.TrimSpace(strings.TrimPrefix(m.Content, RelayPrefix)))
 		case m.Priority == PriorityUrgent && !IsProtocol(m.Content):
-			add(m.CreatedAt, TimelineUrgent, strings.TrimPrefix(m.Sender, "worker-"), m.Content)
+			addMsg(m, TimelineUrgent, strings.TrimPrefix(m.Sender, "worker-"), m.Content)
 		}
 	}
 

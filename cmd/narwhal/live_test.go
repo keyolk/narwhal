@@ -317,7 +317,7 @@ func TestNodeHeadlineOffersTheSessionKeys(t *testing.T) {
 	m.activity = map[string]agentLive{"alpha-worker": {spark: []int{0, 1, 3, 1}}}
 
 	got := ansi.Strip(m.inspectorHeadline(m.taskByID("alpha-worker"), 100))
-	if !strings.Contains(got, "s session · a attach") {
+	if !strings.Contains(got, "enter open · a attach") {
 		t.Errorf("headline does not offer the session keys: %q", got)
 	}
 	if !strings.ContainsAny(got, "▁▃█") {

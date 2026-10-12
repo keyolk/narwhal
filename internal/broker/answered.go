@@ -223,3 +223,51 @@ func (r *Run) JudgeFolded(t *Task, answer string) string {
 		"call completes the task either way.", strings.Join(left, ", "),
 		map[bool]string{true: "its", false: "their"}[len(left) == 1], map[bool]string{true: "it", false: "they"}[len(left) == 1])
 }
+
+// QuestionStuck names the judgement made on a worker that has run long.
+const QuestionStuck = "stuck"
+
+// ActionFlagged is a stuck worker reported to the operator. Nothing else
+// is done to it: whether to steer, wait or cancel is the operator's call.
+const ActionFlagged = "flagged"
+
+// StuckThreshold is the P(stuck) at or above which a running worker is
+// reported to the operator.
+//
+// Calibrated 2026-10-13 on the last twenty actions of every worker
+// transcript on disk (10) and two built to be stuck — one failing command
+// twenty times, one search-and-read loop. The stuck ones scored 0.97 and
+// 0.98; every real worker scored 0.06–0.23, including a synthesis that
+// drained the radio 26 times while its peers worked. A report the operator
+// did not need is noise on the radio, so only a confident yes is raised.
+const StuckThreshold = 0.8
+
+const stuckQuestion = "TASK is a worker's assignment. RECENT is its last actions, oldest first, each " +
+	"a tool call and the start of what came back. Is the worker stuck — repeating the same action " +
+	"with the same result, or going in circles, without getting closer to finishing TASK? Waiting on " +
+	"peers by draining or watching the radio while they work is not stuck."
+
+// JudgeStuck asks whether a running worker is stuck on its recent actions,
+// and if it is, says so to the operator on the radio. It reports whether
+// the worker was flagged.
+func (r *Run) JudgeStuck(t *Task, recent []string) bool {
+	if r.currentJudge() == nil || len(recent) == 0 || t.CurrentState() != TaskDispatched {
+		return false
+	}
+	state := "TASK:\n" + clip(t.assignment(), 800) + "\n\nRECENT:\n" + clip(strings.Join(recent, "\n"), 4000)
+	v := r.ask(t.ID, QuestionStuck, state, stuckQuestion)
+	flagged := v.Decided && v.P >= StuckThreshold
+	if flagged {
+		v.Action = ActionFlagged
+	} else if v.Decided {
+		v.Action = ActionComplete
+	}
+	r.recordVerdict(v)
+	if flagged {
+		r.PostMessage(WorklogThread, "coordinator", []string{"main"}, PriorityUrgent,
+			fmt.Sprintf("%s worker-%s looks stuck (p=%.2f): its last actions repeat without getting closer "+
+				"to the task. Its latest: %s. Steer it with @%s, or cancel the run.",
+				RelayPrefix, t.ID, v.P, clip(recent[len(recent)-1], 200), t.ID))
+	}
+	return flagged
+}

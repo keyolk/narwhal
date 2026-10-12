@@ -175,6 +175,12 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
 			return m, cmd
 		}
+	case "o", "O":
+		if m.flowSel < len(steps) {
+			m.openOutputs("")
+			m.outputsRun = steps[m.flowSel].RunID
+			return m, nil
+		}
 	case "r":
 		if m.flowSel < len(steps) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
@@ -244,7 +250,7 @@ func (m tuiModel) flowGeometry() flowGeom {
 		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
 	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
-	keys := "j/k step · l/tab read the step · z widen · enter open run · r result · n next step · e notes · x export · c close · esc home"
+	keys := "j/k step · l/tab read the step · z widen · enter open run · o outputs · r result · n next step · e notes · x export · c close · esc home"
 	if m.flowDetail {
 		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · 1-9 open a PR or file · h/tab back to steps · z widen · n next step · esc home"
 	}

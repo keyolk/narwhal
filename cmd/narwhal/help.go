@@ -43,6 +43,8 @@ func (m tuiModel) viewHelp() string {
 		key("f", "follow the newest again    esc  back"),
 		"",
 		section("Results and the next step"),
+		key("o", "outputs: every file, report and answer the run produced, each readable in place"),
+		key("", "there: j/k choose · J/K page · enter/o whole in $PAGER · y copy. O from Activity"),
 		key("r", "the run's result: its answer, what it produced, each task's conclusion"),
 		key("", "there: e write the report · y copy the answer · 1-9 open a PR or a file"),
 		key("n", "in a run, result or flow: the next step, planned with what came before"),

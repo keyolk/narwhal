@@ -405,6 +405,12 @@ func pagerCmd(path string, temp bool) tea.Cmd {
 // to the detail handler.
 func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
+	case "O":
+		// This run's outputs, this task's first. See outputs.go.
+		if t, ok := m.selectedTask(); ok {
+			m.openOutputs(t.ID)
+		}
+		return m, nil, true
 	case "tab", "l", "right":
 		m.switchTaskTab(1)
 		return m, nil, true
@@ -432,6 +438,8 @@ func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.detailScroll = 0
 		case "G", "end":
 			m.detailScroll = 1 << 20
+		case "o":
+			m.openOutputs(t.ID)
 		case "enter":
 			m.summaryAskOpen = !m.summaryAskOpen
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":

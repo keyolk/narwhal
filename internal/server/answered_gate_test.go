@@ -35,3 +35,24 @@ func TestANonAnswerIsHandedBackAtTaskDone(t *testing.T) {
 		t.Errorf("state = %s", task.CurrentState())
 	}
 }
+
+// A criterion travels from task creation to the gate.
+func TestATasksCriterionIsSetAtCreation(t *testing.T) {
+	b := broker.New()
+	run := b.CreateRun("r-crit", "p", t.TempDir(), "main")
+	srv := New(b, broker.NewAgentRegistry())
+	addr, err := srv.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	body := `{"id":"task-1","name":"x","assignment":"a","criterion":"names the file and line"}`
+	resp, err := http.Post(addr+"/api/v1/run/r-crit/task", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if got := run.GetTask("task-1").Criterion; got != "names the file and line" {
+		t.Errorf("criterion = %q", got)
+	}
+}

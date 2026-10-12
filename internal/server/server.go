@@ -185,6 +185,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 			// completes. Set by the planner, before any worker has an
 			// answer to defend — see broker/check.go.
 			Check string `json:"check"`
+			// Criterion is what a correct outcome must satisfy, judged
+			// by narwhal at task-done — see broker/criterion.go.
+			Criterion string `json:"criterion"`
 		}
 		if err := decodeBody(r, &req); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -193,6 +196,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request, parts []strin
 		t := run.AddTask(req.ID, req.Name, req.Assignment, req.Deps)
 		t.SetModel(req.Model)
 		t.SetCheck(req.Check)
+		t.SetCriterion(req.Criterion)
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"id":    t.ID,
 			"state": string(t.State),
@@ -643,7 +647,10 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 
 		// Whether the outcome answers the task, once per dispatch, after
 		// the gates that may still change it. See broker/answered.go.
-		hint := run.JudgeAnswered(task, req.Outcome)
+		hint := run.JudgeCriterion(task, req.Outcome)
+		if hint == "" {
+			hint = run.JudgeAnswered(task, req.Outcome)
+		}
 		if hint == "" {
 			hint = run.JudgeFolded(task, req.Outcome)
 		}

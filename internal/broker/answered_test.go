@@ -148,3 +148,29 @@ func TestASynthesisThatLeavesAPeerOutIsHandedBack(t *testing.T) {
 		t.Errorf("a non-synthesis was judged: %q", hint)
 	}
 }
+
+// A criterion the outcome does not meet hands task-done back once, quoting
+// it; a task without one is never asked.
+func TestAnOutcomeThatMissesItsCriterionIsHandedBack(t *testing.T) {
+	j := &answerJudge{p: 0.02, decided: true}
+	r, task := answeredRun(t, j)
+	if hint := r.JudgeCriterion(task, "the token leaks somewhere in logging"); hint != "" || len(j.asked) != 0 {
+		t.Fatalf("a task with no criterion was judged: %q", hint)
+	}
+	task.SetCriterion("Every finding names the file and line it is at.")
+	hint := r.JudgeCriterion(task, "the token leaks somewhere in logging")
+	if !strings.Contains(hint, "Every finding names the file and line") {
+		t.Fatalf("hint = %q", hint)
+	}
+	if !strings.Contains(j.asked[0], "OUTCOME:\nthe token leaks") {
+		t.Errorf("the judge did not see the outcome: %q", j.asked[0])
+	}
+	if hint := r.JudgeCriterion(task, "same"); hint != "" {
+		t.Errorf("handed back twice: %q", hint)
+	}
+	if s := r.Snapshot(); s.Tasks[0].Criterion == "" {
+		t.Error("the criterion is not in the snapshot")
+	} else if restored := RestoreRun(s); restored.GetTask("a").Criterion == "" {
+		t.Error("the criterion did not survive a restart")
+	}
+}

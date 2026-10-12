@@ -50,6 +50,14 @@ const SynthesisContract = "A run with more than one worker usually wants a " +
 // Written for a caller that has not read broker/check.go: the value of a
 // check is that it can come out wrong, and a check chosen after the answer
 // exists is chosen to agree with it.
+// CriterionContract is what a planner is told about a task's criterion.
+const CriterionContract = "A criterion: one sentence a correct OUTCOME must satisfy, judged by " +
+	"narwhal against the outcome text alone when the worker calls task-done — e.g. \"every finding " +
+	"names the file and line it is at\", \"states which database was chosen and gives a measured " +
+	"reason\", \"says whether go test ./... passed and quotes its result\". It must be checkable " +
+	"by reading the outcome, without the repository. A task whose outcome does not satisfy it is " +
+	"handed back once with the criterion. Unlike check, the worker does not answer it; narwhal does."
+
 const CheckContract = "An end condition: something cheap to test that would " +
 	"come out WRONG if this task got the wrong answer. task-done hands it " +
 	"back and the task completes on the call that answers it. Write it from " +

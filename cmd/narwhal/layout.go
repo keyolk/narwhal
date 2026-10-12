@@ -17,9 +17,13 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // paneLayout is where everything goes in the main view. It is computed in
@@ -77,10 +81,94 @@ func (m tuiModel) layout() paneLayout {
 	return l
 }
 
-// viewBands draws the main view's body: the graph, and the pane being
-// read under a title that names the others.
+// viewBands draws the main view's body: the graph with the run's result
+// under it, and the pane being read under a title that names the others.
 func (m tuiModel) viewBands(l paneLayout) string {
-	return framedBand(l.left, l.right, l.top, m.viewTasks(l.left, l.top+1), m.viewReader(l.right, l.top+1))
+	return framedBand(l.left, l.right, l.top, m.viewLeft(l.left, l.top+1), m.viewReader(l.right, l.top+1))
+}
+
+// resultMinRows is the least room under the graph worth giving the result:
+// a rule, a heading line and a few lines of answer.
+const resultMinRows = 6
+
+// viewLeft is the left column: the graph at the height its drawing needs,
+// and in what is left under it, where the run has got to — its answer so
+// far and what it produced. A graph of five tasks is a dozen rows, and the
+// column below it was empty on every terminal tall enough to read in.
+func (m tuiModel) viewLeft(w, h int) string {
+	graphH := min(h, m.graphContentHeight(w))
+	rest := h - graphH
+	if rest < resultMinRows {
+		return m.viewTasks(w, h)
+	}
+	return m.viewTasks(w, graphH) + "\n" + padRows(m.resultSummary(w, rest), w, rest)
+}
+
+// resultSummary is the run's result in brief: its answer's opening lines,
+// or why there is none yet, and a count of what it produced.
+func (m tuiModel) resultSummary(w, h int) []string {
+	res := m.snap.Result()
+	if res.AnswerFrom == "" && m.runIsLive() {
+		// A composed answer — each finished task's outcome under its id —
+		// is the result once the run is over. While it works, it is only
+		// the tasks that happen to be done, which the graph above already
+		// shows; how far the run has got says more.
+		res.Answer = ""
+	}
+	lines := []string{styDim.Render(strings.Repeat("─", w))}
+	head := styTitle.Render("Result")
+	if res.AnswerFrom != "" {
+		head += styDim.Render("  from " + res.AnswerFrom)
+	}
+	lines = append(lines, head)
+	if strings.TrimSpace(res.Answer) == "" {
+		done := 0
+		for _, t := range m.snap.Tasks {
+			if t.State == broker.TaskCompleted || t.State == broker.TaskFailed {
+				done++
+			}
+		}
+		lines = append(lines, styDim.Render(fmt.Sprintf("  no answer yet — %d of %d tasks finished", done, len(m.snap.Tasks))))
+	}
+	counts := outputCounts(runOutputs(m.snap, 0))
+	room := h - len(lines) - 1
+	if counts != "" {
+		room--
+	}
+	if strings.TrimSpace(res.Answer) != "" && room > 0 {
+		body := renderMarkdown(res.Answer, w-2, lipgloss.NewStyle())
+		if len(body) > room {
+			body = append(body[:max(0, room-1)], styDim.Render("… r reads it all"))
+		}
+		for _, l := range body {
+			lines = append(lines, "  "+l)
+		}
+	}
+	if counts != "" {
+		lines = append(lines, "", styDim.Render("  "+counts+" · o to read them"))
+	}
+	return lines
+}
+
+// outputCounts says how many of each kind a run produced, in list order:
+// "1 file · 3 reports · 5 answers".
+func outputCounts(outs []output) string {
+	n := map[outputKind]int{}
+	for _, o := range outs {
+		n[o.kind]++
+	}
+	var parts []string
+	for k := outFile; k <= outAnswer; k++ {
+		if n[k] == 0 {
+			continue
+		}
+		label := outputLabels[k]
+		if n[k] > 1 {
+			label += "s"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", n[k], label))
+	}
+	return strings.Join(parts, " · ")
 }
 
 // viewReader is the right column: the chosen pane, its own title replaced

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // The run view is the graph beside one pane being read, in one frame; the
@@ -78,5 +80,37 @@ func TestTheBorderTitleKeepsTheFocusColour(t *testing.T) {
 	top := strings.Split(m.viewBands(m.layout()), "\n")[0]
 	if !strings.Contains(top, styCyanBold.Render("Task")) {
 		t.Errorf("the focused title lost its colour: %q", top)
+	}
+}
+
+// Under the graph, in the room its drawing does not use, the run's result:
+// how far it has got while it works, its answer and what it produced once
+// it has one.
+func TestTheResultSitsUnderTheGraph(t *testing.T) {
+	m := fixtureRun(t)
+	m.width, m.height = 160, 40
+	m.live.BrokerURL = "http://127.0.0.1:1"
+	got := ansi.Strip(m.View())
+	if !strings.Contains(got, "no answer yet — 2 of 4 tasks finished") {
+		t.Errorf("a working run's result does not say how far it has got:\n%s", got)
+	}
+	for i := range m.snap.Tasks {
+		if m.snap.Tasks[i].ID == "synthesis" {
+			m.snap.Tasks[i].State = broker.TaskCompleted
+			m.snap.Tasks[i].Name = "synthesis"
+			m.snap.Tasks[i].Outcome = "LockKey is validated in one middleware"
+		}
+	}
+	got = ansi.Strip(m.View())
+	if !strings.Contains(got, "Result  from synthesis") || !strings.Contains(got, "LockKey is validated in one middleware") {
+		t.Errorf("the answer is not under the graph:\n%s", got)
+	}
+	if !strings.Contains(got, "3 answers · o to read them") {
+		t.Errorf("what the run produced is not counted:\n%s", got)
+	}
+	// On a short terminal the graph keeps the column.
+	m.height = 16
+	if got := ansi.Strip(m.View()); strings.Contains(got, "Result") {
+		t.Errorf("the result squeezed the graph on a short terminal:\n%s", got)
 	}
 }

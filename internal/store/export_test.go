@@ -312,8 +312,8 @@ func TestTheSynthesisAnswerLeadsTheDocument(t *testing.T) {
 	}
 }
 
-// The export says in what order the run happened, not only what each task
-// concluded: the urgent post, then the failure, each in its own line.
+// The export tells the run as the monitor does, in scenes: each task's
+// course, the urgent post, and where the run stands.
 func TestTheExportCarriesTheTimeline(t *testing.T) {
 	md := ExportMarkdown(exportFixture(t))
 	i := strings.Index(md, "## Timeline")
@@ -325,9 +325,10 @@ func TestTheExportCarriesTheTimeline(t *testing.T) {
 		section = section[:j]
 	}
 	for _, want := range []string{
-		"started **task-1**",
-		"completed **task-1** — 4 of 7 SANs are covered",
-		"urgent **task-1** — the apne2 gateway advertises a host",
+		"✓ **task-1 investigate 완료**\n  - 4 of 7 SANs are covered",
+		"**task-2 synthesis 재시도 대기**\n  - 직전 시도: worker exited without calling task-done",
+		"task-1: the apne2 gateway advertises a host",
+		"now   ▸ **1/2 완료**",
 	} {
 		if !strings.Contains(section, want) {
 			t.Errorf("timeline lacks %q:\n%s", want, section)

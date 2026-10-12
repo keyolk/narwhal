@@ -81,6 +81,9 @@ func RestoreRun(s Snapshot) *Run {
 	// applied", and the channel is treated as read to its end.
 	r.intakeCursor = s.IntakeCursor
 	r.verdicts = append([]Verdict(nil), s.Verdicts...)
+	for k, v := range s.SceneNotes {
+		r.SetSceneNote(k, v)
+	}
 	r.flow, r.parentRun = s.Flow, s.ParentRun
 	if r.intakeCursor == 0 && len(s.Messages) > 0 {
 		for _, m := range s.Messages {

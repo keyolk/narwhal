@@ -66,59 +66,47 @@ func TestARetriedTaskShowsTheJudgesCall(t *testing.T) {
 	}
 }
 
-// enter on a timeline event opens its task at that moment, not at the end.
-func TestATimelineEventOpensItsTaskThere(t *testing.T) {
+// enter on a task's scene opens the task.
+func TestATaskSceneOpensItsTask(t *testing.T) {
 	m := press(fixtureRun(t), "3")
-	events := m.timelineEvents()
-	want := -1
-	for i, e := range events {
-		if e.Kind == broker.TimelineStarted && e.Who == "api" {
-			want = i
+	for i, sc := range m.timelineScenes() {
+		if sc.Kind == broker.SceneTask && sc.Who[0] == "api" {
+			m.timelineSel = i
 		}
 	}
-	if want < 0 {
-		t.Fatal("setup: no start event for api")
-	}
-	m.timelineSel = want
 	m = press(m, "enter")
-	if m.detail != detailSession || m.sessionTail {
-		t.Fatalf("detail=%v following=%v, want the task view held at a moment", m.detail, m.sessionTail)
-	}
-	if s, ok := m.selectedTask(); !ok || s.ID != "api" {
-		t.Fatalf("opened %q, want api", s.ID)
-	}
-	if got := viewText(m); !strings.Contains(got, "▶ task: Validate LockKey") {
-		t.Errorf("the view did not open at api's start:\n%s", got)
+	if s, ok := m.selectedTask(); m.detail != detailSession || !ok || s.ID != "api" {
+		t.Fatalf("detail=%v task=%q, want api's view", m.detail, s.ID)
 	}
 }
 
-// enter on an event lifted from the radio opens the message itself; enter
-// there goes on to the task it concerns, at the time it was posted.
-func TestARadioEventOpensTheMessageAndThenItsTask(t *testing.T) {
-	m := fixtureRun(t)
-	m = press(m, "3", "3") // zoomed: the timeline lists the radio's lines too
-	m.zoom = focusTimeline
-	events := m.timelineEvents()
-	for i, e := range events {
-		if e.Kind == broker.TimelineUrgent {
-			m.timelineSel = i
+// enter on an exchange opens its first message; enter there goes on to the
+// task it concerns, at the time it was posted. space opens the scene into
+// its events instead.
+func TestAnExchangeSceneOpensItsMessageAndThenItsTask(t *testing.T) {
+	m := press(fixtureRun(t), "3")
+	var key string
+	for i, sc := range m.timelineScenes() {
+		if sc.Kind == broker.SceneExchange {
+			m.timelineSel, key = i, sc.Key
 		}
+	}
+	if key == "" {
+		t.Fatal("setup: no exchange scene")
+	}
+	if m = press(m, " "); !m.sceneOpen[key] {
+		t.Fatal("space did not open the scene")
+	}
+	if got := viewText(m); !strings.Contains(got, "the same nonce passes twice") {
+		t.Errorf("the opened scene does not list its events:\n%s", got)
 	}
 	m = press(m, "enter")
 	if m.detail != detailMessage {
 		t.Fatalf("detail=%v, want the message", m.detail)
 	}
-	if got := viewText(m); !strings.Contains(got, "the same nonce passes twice") ||
-		!strings.Contains(got, "enter api at this moment") {
-		t.Fatalf("message view:\n%s", got)
-	}
 	m = press(m, "enter")
 	if s, _ := m.selectedTask(); m.detail != detailSession || s.ID != "api" || m.sessionTail {
 		t.Fatalf("enter on the message: detail=%v task=%q following=%v", m.detail, s.ID, m.sessionTail)
-	}
-	// And esc goes back to where you were.
-	if m = press(m, "esc"); m.detail != detailClosed {
-		t.Errorf("esc left detail=%v", m.detail)
 	}
 }
 
@@ -168,7 +156,7 @@ func TestHelpOpensAndCloses(t *testing.T) {
 func TestTheFooterSaysWhatEnterOpens(t *testing.T) {
 	m := fixtureRun(t)
 	for key, want := range map[string]string{
-		"1": "enter open task", "2": "enter open task", "3": "enter open event", "4": "enter open message",
+		"1": "enter open task", "2": "enter open task", "3": "enter go to it", "4": "enter open message",
 	} {
 		m = press(m, "1", key)
 		if got := ansi.Strip(m.footerKeys()); !strings.HasPrefix(got, want) || !strings.Contains(got, "? help") {

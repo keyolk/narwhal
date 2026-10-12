@@ -1,6 +1,8 @@
-// timeline.go draws pane 3, the run's history under the graph: what
-// started and finished, what the operator asked and where it went, and the
-// judge's calls that changed a task's course.
+// timeline.go draws pane 3, the run's history told as scenes: each task's
+// course, the workers' exchanges, the operator's instructions and where
+// they went, and where the run stands now. See broker/scenes.go. space
+// opens a scene into the events it was made of; enter goes to its task or
+// message.
 //
 // Brief is the run as it stands; a decision drops off it once dealt with.
 // This is the same run told in order, so "what happened while I was away"
@@ -10,6 +12,8 @@ package main
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -17,15 +21,16 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
-// timelineEvents is what pane 3 lists: everything, the radio's own lines —
-// instructions, relays, urgent posts — included.
-//
-// It used to leave those out while it sat beside the radio, which showed
-// them one glance away. The two are tabs of one column now and never on
-// screen together, so a timeline without them would be the run's history
-// with the operator's part missing.
+// timelineEvents is every event of the run's history, oldest first: what
+// the scenes are made of, and what an opened scene lists.
 func (m tuiModel) timelineEvents() []broker.TimelineEvent {
 	return broker.Timeline(m.snap)
+}
+
+// timelineScenes is what pane 3 lists: the run told as scenes, ending with
+// where it stands. See broker/scenes.go.
+func (m tuiModel) timelineScenes() []broker.Scene {
+	return broker.Scenes(m.snap, time.Now())
 }
 
 // timelineZoomed reports whether pane 3 is drawn across the body.
@@ -33,7 +38,7 @@ func (m tuiModel) timelineZoomed() bool {
 	return m.effectiveZoom() == focusTimeline
 }
 
-// timelineRows is how many events pane 3 shows at once where it is drawn.
+// timelineRows is how many rows pane 3 shows at once where it is drawn.
 func (m tuiModel) timelineRows() int {
 	l := m.layout()
 	switch {
@@ -45,95 +50,170 @@ func (m tuiModel) timelineRows() int {
 	return l.top
 }
 
-// timelineFollow selects the newest event and keeps it selected as more
-// arrive; any other value of timelineSel is a fixed event.
+// timelineFollow selects the newest scene and keeps it selected as more
+// arrive; any other value of timelineSel is a fixed scene.
 const timelineFollow = -1
 
-// selectedEvent resolves the selection against the events on screen.
-func (m tuiModel) selectedEvent(events []broker.TimelineEvent) (int, bool) {
-	if len(events) == 0 {
+// selectedScene resolves the selection against the scenes.
+func (m tuiModel) selectedScene(n int) (int, bool) {
+	if n == 0 {
 		return 0, false
 	}
-	if m.timelineSel == timelineFollow || m.timelineSel >= len(events) {
-		return len(events) - 1, true
+	if m.timelineSel == timelineFollow || m.timelineSel >= n {
+		return n - 1, true
 	}
 	return max(m.timelineSel, 0), true
 }
 
-// moveTimeline steps the selection; stepping past the newest follows again.
+// moveTimeline steps the selection; stepping onto the newest follows again.
 func (m *tuiModel) moveTimeline(delta int) {
-	events := m.timelineEvents()
-	cur, ok := m.selectedEvent(events)
+	n := len(m.timelineScenes())
+	cur, ok := m.selectedScene(n)
 	if !ok {
 		return
 	}
 	cur += delta
-	if cur >= len(events)-1 {
+	if cur >= n-1 {
 		m.timelineSel = timelineFollow
 		return
 	}
 	m.timelineSel = max(cur, 0)
 }
 
-// viewTimeline is pane 3 zoomed across the body.
-func (m tuiModel) viewTimeline(width, height int) string {
-	return m.renderTimeline(m.timelineEvents(), width, height)
+// toggleScene opens the selected scene into its events, or closes it.
+func (m *tuiModel) toggleScene() {
+	scenes := m.timelineScenes()
+	i, ok := m.selectedScene(len(scenes))
+	if !ok {
+		return
+	}
+	if m.sceneOpen == nil {
+		m.sceneOpen = map[string]bool{}
+	}
+	k := scenes[i].Key
+	m.sceneOpen[k] = !m.sceneOpen[k]
+	if m.timelineSel == timelineFollow {
+		m.timelineSel = i
+	}
 }
 
-func (m tuiModel) renderTimeline(events []broker.TimelineEvent, width, height int) string {
-	total := len(events)
-	label := fmt.Sprintf("Timeline (%d)", total)
-	if !m.briefTab && !m.timelineZoomed() {
-		// Says why the operator's instructions are not listed here.
-		label = fmt.Sprintf("Timeline · tasks & judge (%d)", total)
+// viewTimeline is pane 3 zoomed across the body.
+func (m tuiModel) viewTimeline(width, height int) string {
+	return m.renderTimeline(width, height)
+}
+
+// sceneLines draws one scene: its time, mark and title, then the note the
+// daemon wrote for it, then what the rules could say, then — opened — the
+// events it was made of.
+func (m tuiModel) sceneLines(sc broker.Scene, width int) []string {
+	glyph, style := sceneStyle(sc)
+	at := styDim.Render("   now  ")
+	if sc.Kind != broker.SceneNow {
+		at = styDim.Render(clock(sc.At())[:5] + "   ")
 	}
+	title := style.Render(glyph) + " " + styTitle.Render(sc.Title)
+	if sc.Kind == broker.SceneNow {
+		title = style.Render(glyph) + " " + style.Render(sc.Title)
+	}
+	out := []string{at + title}
+	pad := strings.Repeat(" ", 10)
+	inner := max(10, width-10)
+	if sc.Note != "" {
+		for _, l := range wrapText(sc.Note, inner) {
+			out = append(out, pad+l)
+		}
+	}
+	for i, l := range sc.Lines {
+		// A finished task's first line is its outcome, which the note
+		// says better when there is one.
+		if sc.Note != "" && sc.Kind == broker.SceneTask && i == 0 && sc.Outcome != "" {
+			continue
+		}
+		out = append(out, pad+styDim.Render(truncate(l, inner)))
+	}
+	if m.sceneOpen[sc.Key] {
+		for _, e := range sc.Events {
+			g, st := timelineGlyph(e.Kind)
+			text := e.Text
+			if text == "" || e.Kind == broker.TimelineStarted || e.Kind == broker.TimelineVerdict {
+				text = strings.TrimSpace(string(e.Kind) + " " + text)
+			}
+			out = append(out, pad+styDim.Render(clock(e.At)+" ")+st.Render(g)+" "+
+				styCyan.Render(truncate(e.Who, 12))+" "+styDim.Render(truncate(oneLine(text), max(4, inner-26))))
+		}
+	}
+	return out
+}
+
+// sceneStyle is a scene's mark and colour.
+func sceneStyle(sc broker.Scene) (string, lipgloss.Style) {
+	switch sc.Mark {
+	case "✓":
+		return sc.Mark, styGreen
+	case "✗":
+		return sc.Mark, styRedBold
+	case "⚠":
+		return sc.Mark, styYellow
+	case "▸":
+		return sc.Mark, styCyan
+	case "»":
+		return sc.Mark, styYellow
+	case "◆":
+		return sc.Mark, styTitle
+	}
+	return "·", styDim
+}
+
+func (m tuiModel) renderTimeline(width, height int) string {
+	scenes := m.timelineScenes()
+	sel, _ := m.selectedScene(len(scenes))
+	focused := m.focus == focusTimeline
+
+	// Every scene's lines, with where each starts, so the window can be
+	// placed on the selected one.
+	var lines []string
+	starts := make([]int, len(scenes)+1)
+	for i, sc := range scenes {
+		starts[i] = len(lines)
+		block := m.sceneLines(sc, width-1)
+		if focused && i == sel {
+			for j := range block {
+				block[j] = styCyanBold.Render("▌") + block[j]
+			}
+		} else {
+			for j := range block {
+				block[j] = " " + block[j]
+			}
+		}
+		lines = append(lines, block...)
+		if i < len(scenes)-1 {
+			lines = append(lines, "")
+		}
+	}
+	starts[len(scenes)] = len(lines)
+
 	avail := max(1, height-1)
-	sel, _ := m.selectedEvent(events)
-	// Following, the newest sit at the bottom; a fixed selection is kept
-	// in the middle of the window, so there is context either side of it.
+	total := len(lines)
 	start := max(0, total-avail)
-	if m.timelineSel != timelineFollow {
-		start = min(max(0, sel-avail/2), max(0, total-avail))
+	if m.timelineSel != timelineFollow && len(scenes) > 0 {
+		// The selected scene in view, with what came before it above.
+		start = min(max(0, starts[sel]-avail/3), max(0, total-avail))
+		if end := starts[sel+1]; end > start+avail {
+			start = max(0, min(starts[sel], end-avail))
+		}
 	}
 	end := min(total, start+avail)
-	if total > avail {
-		label += fmt.Sprintf("  %d-%d", start+1, end)
-	}
+
+	label := fmt.Sprintf("Timeline (%d)", max(0, len(scenes)-1))
 	if m.timelineSel == timelineFollow {
 		label += " ⌄"
 	}
-	rows := []string{numberedPaneTitle(3, label, m.focus == focusTimeline, width)}
-	if total == 0 {
-		rows = append(rows, styDim.Render("   nothing yet"))
-		return padRows(rows, width, height)
+	rows := []string{numberedPaneTitle(3, label, focused, width)}
+	if len(scenes) == 0 {
+		return padRows(append(rows, styDim.Render("   nothing yet")), width, height)
 	}
-	focused := m.focus == focusTimeline
-	window := events[start:end]
-	// The glyph says what kind of event it is, so the kind is not spelled
-	// out: under the graph the pane is a third of the screen wide, and the
-	// word "instruction" cost the line most of what the operator wrote.
-	whoW := 0
-	for _, e := range window {
-		whoW = max(whoW, displayWidth(e.Who))
-	}
-	whoW = min(whoW, 10)
-	for i, e := range window {
-		glyph, style := timelineGlyph(e.Kind)
-		text := e.Text
-		if text == "" {
-			text = string(e.Kind)
-		} else if e.Kind == broker.TimelineStarted || e.Kind == broker.TimelineVerdict {
-			text = string(e.Kind) + " " + text
-		}
-		line := styDim.Render(clock(e.At)) + " " +
-			style.Render(glyph) + " " + styCyan.Render(padRight(truncate(e.Who, whoW), whoW)) + " " +
-			style.Render(text)
-		if focused && start+i == sel {
-			// The selection is what enter opens, so it reads as one bar.
-			line = stySel.Render(padRight(ansi.Truncate(ansi.Strip(line), width, "…"), width))
-		}
-		// Styled before it is fitted, so the cut has to skip escapes.
-		rows = append(rows, ansi.Truncate(line, width, "…"))
+	for _, l := range lines[start:end] {
+		rows = append(rows, ansi.Truncate(l, width, "…"))
 	}
 	return padRows(rows, width, height)
 }

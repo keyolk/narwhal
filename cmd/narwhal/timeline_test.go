@@ -33,7 +33,7 @@ func TestThreeShowsTheTimeline(t *testing.T) {
 	if !strings.Contains(got, "1 Graph") || strings.Contains(got, "Radio (6)") {
 		t.Fatalf("pane 3 is not beside the graph in the radio's place:\n%s", got)
 	}
-	if !strings.Contains(lineContaining(got, "» operator"), "@schema add the LockKey field") {
+	if !strings.Contains(lineContaining(got, "지시:"), "@schema add the LockKey field") {
 		t.Errorf("the timeline left out the operator's instruction:\n%s", got)
 	}
 }

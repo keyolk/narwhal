@@ -250,6 +250,8 @@ type tuiModel struct {
 	// timelineSel is the selected timeline event, or timelineFollow to
 	// keep the newest selected as the run goes on.
 	timelineSel int
+	// sceneOpen is the timeline's scenes opened into their events, by key.
+	sceneOpen map[string]bool
 
 	// steering is the open command line, steerBuf what has been typed into
 	// it, and steerMsg the result of the last send. See steer.go.
@@ -817,6 +819,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		m.moveCursor(-10)
+	case " ":
+		// In the timeline, a scene opens into the events it was made of.
+		if m.focus == focusTimeline {
+			m.toggleScene()
+		}
 	case "enter":
 		// Enter opens what the cursor is on, wherever it is. See
 		// navigation.go for where each pane leads.
@@ -1214,7 +1221,7 @@ func (m *tuiModel) clampCursors() {
 	if n := len(m.snap.Messages); n > 0 && m.radioCur >= n {
 		m.radioCur = n - 1
 	}
-	if n := len(m.timelineEvents()); m.timelineSel >= n {
+	if n := len(m.timelineScenes()); m.timelineSel >= n {
 		m.timelineSel = n - 1
 	}
 	if m.timelineSel < timelineFollow {
@@ -1797,7 +1804,7 @@ func (m tuiModel) footerKeys() string {
 		}
 		parts = append(parts, "jk move", "f follow", tab)
 	case focusTimeline:
-		parts = append(parts, "enter open event", "jk select", "l next tab")
+		parts = append(parts, "enter go to it", "space open into events", "jk scene", "l next tab")
 	}
 	zoomKey := "z zoom"
 	if m.zoom >= 0 {

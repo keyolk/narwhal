@@ -177,7 +177,7 @@ func (m tuiModel) viewReader(w, h int) string {
 	var pane string
 	switch m.readerPane() {
 	case focusTimeline:
-		pane = m.renderTimeline(m.timelineEvents(), w, h)
+		pane = m.renderTimeline(w, h)
 	case focusRadio:
 		pane = m.viewChannel(w, h)
 	default:

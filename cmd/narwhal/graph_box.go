@@ -123,6 +123,10 @@ type canvas struct {
 }
 
 func newCanvas(w, h int) *canvas {
+	// A pane narrower than its borders asks for a negative width; that is
+	// an empty canvas, not a crash. The terminal is that narrow on the
+	// first frame, before it has reported its size.
+	w, h = max(w, 0), max(h, 0)
 	c := &canvas{w: w, h: h, cells: make([][]rune, h)}
 	for y := range c.cells {
 		row := make([]rune, w)

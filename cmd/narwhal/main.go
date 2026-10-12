@@ -43,9 +43,12 @@ func main() {
 		broker.SetHarnessVersion(version)
 	}
 
+	// With no command, the home screen: every request and a line to start
+	// one. Usage was what this printed, which is the one thing a person
+	// starting the program does not need first.
 	if len(os.Args) < 2 {
-		printUsage()
-		os.Exit(1)
+		homeCmd()
+		return
 	}
 
 	switch os.Args[1] {
@@ -286,6 +289,9 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, `narwhal — graph-engineered multi-agent runtime with passive awareness
 
 Usage:
+  narwhal       Home: every request, newest and in-progress first, and a line
+                to start a new one. Open a request to see its graph and steer it.
+
   narwhal run   --prompt "..." [--workers N] [--cwd DIR] [--timeout DUR]
                 Flat parallel workers on one prompt.
 

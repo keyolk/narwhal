@@ -40,28 +40,20 @@ func colourModel(t *testing.T) tuiModel {
 	return m
 }
 
-func TestFooterColoursOnlyNonZeroCounts(t *testing.T) {
-	// A count of zero is not news. Colouring it too would make the footer
-	// four bright numbers where only one of them matters.
+func TestHeaderCountsOnlyWhatMatters(t *testing.T) {
+	// A count of zero is not news. Listing it too made the line four
+	// numbers where only one of them mattered.
 	m := colourModel(t)
 	m.snap.Tasks = []broker.TaskSnapshot{
 		{ID: "a", State: broker.TaskCompleted},
 		{ID: "b", State: broker.TaskDispatched},
 	}
-
-	footer := m.viewFooter()
-	line := strings.Split(footer, "\n")[0]
-
-	if !strings.Contains(line, "\x1b[32m") && !strings.Contains(line, "\x1b[1;32m") {
-		t.Errorf("a non-zero done count is not green: %q", line)
+	line := strings.Split(m.viewHeader(), "\n")[0]
+	if !strings.Contains(line, "1/2 done") || !strings.Contains(line, styCyan.Render("1 running")) {
+		t.Errorf("progress missing: %q", line)
 	}
-	// "failed 0" must be dim, i.e. rendered inside a faint sequence.
-	idx := strings.Index(line, "failed")
-	if idx < 0 {
-		t.Fatalf("no failed count: %q", line)
-	}
-	if !strings.Contains(line[:idx], "\x1b[2m") {
-		t.Errorf("a zero failed count was not dimmed: %q", line)
+	if strings.Contains(line, "failed") {
+		t.Errorf("a zero failed count was shown: %q", line)
 	}
 }
 

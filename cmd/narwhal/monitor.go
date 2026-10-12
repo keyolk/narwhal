@@ -79,6 +79,9 @@ func daemonRunLister() ([]store.LiveRun, error) {
 	return runs, nil
 }
 
+// homeCmd is `narwhal` with no arguments: the monitor, on its home screen.
+func homeCmd() { monitorCmd(nil) }
+
 func monitorCmd(args []string) {
 	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
 	runID := fs.String("run", "", "run id to monitor (default: newest live run)")
@@ -93,16 +96,11 @@ func monitorCmd(args []string) {
 		return
 	}
 
-	if len(entries) == 0 {
-		fmt.Fprintf(os.Stderr, "no live runs.\n%s", store.SummarizeRuns(entries))
-		os.Exit(1)
-	}
-
-	// With an explicit --run, open it directly. Without one, open the
-	// newest run but start on the picker when several are live — an
-	// interactive session creates a run per request, so silently choosing
-	// one of several would hide the rest.
-	cur, picker := 0, len(entries) > 1
+	// With an explicit --run, open it directly. Without one, start on the
+	// home screen: an interactive session creates a run per request, so
+	// silently choosing one would hide the rest — and with none, home is
+	// where a first one is started.
+	cur, picker := 0, true
 	if *runID != "" {
 		found := false
 		for i, e := range entries {

@@ -29,7 +29,7 @@ func TestPickerHintsSitOnTheLastRow(t *testing.T) {
 	if n != 24 {
 		t.Errorf("rendered %d lines for a 24-row terminal", n)
 	}
-	if !strings.Contains(last, "esc quit") {
+	if !strings.Contains(last, "q quit") {
 		t.Errorf("last line is not the hints: %q", last)
 	}
 }
@@ -115,21 +115,16 @@ func TestPickerDistinguishesLiveFromFinished(t *testing.T) {
 	m.runCur = -1
 	out := m.View()
 
-	liveRow := lineContaining(out, "still working")
-	doneRow := lineContaining(out, "already finished")
-	if liveRow == "" || doneRow == "" {
+	if lineContaining(out, "still working") == "" || lineContaining(out, "already finished") == "" {
 		t.Fatalf("rows missing:\n%s", out)
-	}
-	if liveRow == doneRow {
-		t.Fatal("live and finished prompts rendered identically")
 	}
 	// The live prompt is what you are choosing between; the finished one
 	// is a label on something already done.
-	if !strings.Contains(doneRow, "\x1b[") {
-		t.Errorf("the finished prompt is not dimmed: %q", doneRow)
+	if !strings.Contains(out, styDim.Render("already finished")) {
+		t.Errorf("the finished prompt is not dimmed:\n%q", lineContaining(out, "already finished"))
 	}
-	if strings.Contains(liveRow, "\x1b[2m") {
-		t.Errorf("the live prompt was dimmed like history: %q", liveRow)
+	if strings.Contains(out, styDim.Render("still working")) {
+		t.Errorf("the live prompt was dimmed like history:\n%q", lineContaining(out, "still working"))
 	}
 }
 
@@ -145,8 +140,8 @@ func TestPickerMarksRunStateWithAGlyph(t *testing.T) {
 	m.runCur = -1
 	out := m.View()
 
-	if !strings.Contains(lineContaining(out, "08-14"), icons.runActive) &&
-		!strings.Contains(out, icons.runActive) {
+	// A live request's glyph is the spinner, moving.
+	if !strings.Contains(lineContaining(out, "working"), spinnerAt(m.frame)) {
 		t.Errorf("no live glyph in the picker:\n%s", out)
 	}
 	if !strings.Contains(out, icons.runDone) {
@@ -173,7 +168,7 @@ func TestMainViewHintsSitOnTheLastRow(t *testing.T) {
 	if n != 40 {
 		t.Errorf("rendered %d lines for a 40-row terminal", n)
 	}
-	if !strings.Contains(last, "q quit") {
+	if !strings.Contains(last, "? help") {
 		t.Errorf("last line is not the hints: %q", last)
 	}
 }

@@ -213,6 +213,9 @@ type tuiModel struct {
 	// summaryAskOpen unfolds a long request on Summary.
 	taskTab        int
 	summaryAskOpen bool
+	// pinnedTask is the one task a pane opened by w shows; leaving its
+	// view quits. See tmuxpanes.go.
+	pinnedTask string
 
 	// flowDetail puts j/k on the step's detail rather than the step list,
 	// and flowZoom gives the detail the full width.
@@ -834,6 +837,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.picker = true
 		}
+	case "w":
+		// The working tasks as tmux panes. See tmuxpanes.go.
+		return m, m.openTmuxPanes()
 	case "u":
 		// Up to the run's flow, however many steps it has: where its
 		// notes are written and its steps' results read side by side.
@@ -880,6 +886,10 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "q", "esc":
+		if m.pinnedTask != "" {
+			m.quit = true
+			return m, tea.Quit
+		}
 		m.detail = detailClosed
 	case "ctrl+c":
 		m.quit = true
@@ -2106,6 +2116,11 @@ func (m tuiModel) taskByID(id string) broker.TaskSnapshot {
 // selectedTask returns the task the cursor points at, and ok=false when the
 // graph is empty.
 func (m tuiModel) selectedTask() (broker.TaskSnapshot, bool) {
+	if m.pinnedTask != "" {
+		// A pane pinned to one task shows that task whatever the cursor.
+		t := m.taskByID(m.pinnedTask)
+		return t, t.ID != ""
+	}
 	rows := m.graphRows()
 	if len(rows) == 0 {
 		return broker.TaskSnapshot{}, false

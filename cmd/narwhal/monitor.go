@@ -91,6 +91,7 @@ func monitorCmd(args []string) {
 	runID := fs.String("run", "", "run id to monitor (default: newest live run)")
 	interval := fs.Duration("interval", 1*time.Second, "poll interval")
 	list := fs.Bool("list", false, "list live runs and exit")
+	task := fs.String("task", "", "with --run: open on this task's activity, following it — what a pane opened by w runs")
 	fs.Parse(args)
 
 	entries := store.Discover(daemonRunLister)
@@ -120,7 +121,15 @@ func monitorCmd(args []string) {
 		}
 	}
 
-	p := tea.NewProgram(newTUIModel(entries, cur, *interval, picker), tea.WithAltScreen())
+	m := newTUIModel(entries, cur, *interval, picker)
+	if *task != "" {
+		if *runID == "" {
+			fmt.Fprintln(os.Stderr, "--task needs --run")
+			os.Exit(1)
+		}
+		m.followTask(*task)
+	}
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
 		os.Exit(1)

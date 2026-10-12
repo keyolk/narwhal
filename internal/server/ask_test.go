@@ -139,3 +139,27 @@ func postJSONGet(t *testing.T, url string) map[string]any {
 	_ = json.NewDecoder(resp.Body).Decode(&out)
 	return out
 }
+
+// The planner asks as "main"; its question is the plan's.
+func TestThePlannersQuestionIsThePlans(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("r-plan", "p", t.TempDir(), "main")
+	run.CreateStandardThreads()
+	main := reg.Register("main", "r-plan", true)
+	srv := New(b, reg)
+	addr, err := srv.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+	postJSON(t, addr+"/api/v1/agents/"+main.Token+"/ask", map[string]any{"question": "sendbird or delight?", "assumed": "sendbird"})
+	qs := run.Questions()
+	if len(qs) != 1 || qs[0].TaskID != broker.PlanAsker {
+		t.Fatalf("questions = %+v", qs)
+	}
+	if got := run.ApplyAnswer(qs[0]); got != nil {
+		t.Errorf("an answer to the planner reopened %v", got)
+	}
+}

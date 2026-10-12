@@ -755,6 +755,10 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 		return
 	}
 	taskID := strings.TrimPrefix(agent.ID, "worker-")
+	if agent.ID == "main" {
+		// The planner, asking before it decomposes.
+		taskID = broker.PlanAsker
+	}
 	q := run.Ask(taskID, req.Question, req.Assumed, req.Blocking)
 	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
 		fmt.Sprintf("%s %s asks (#%d): %s", broker.RelayPrefix, taskID, q.ID, q.Text))

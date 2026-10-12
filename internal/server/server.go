@@ -18,6 +18,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,10 +68,27 @@ func (s *Server) Start() (string, error) {
 // baseURL returns the address the server is listening on. Empty before Start.
 func (s *Server) baseURL() string { return s.addr }
 
-// Shutdown stops the server.
+// shutdownGrace is how long Shutdown waits for requests in flight — a
+// long-poll watch, a task-done blocked on its peers — before closing them.
+var shutdownGrace = 5 * time.Second
+
+// Shutdown stops the server, giving requests in flight shutdownGrace to
+// finish and then closing them.
+//
+// It passed a nil context, which http.Server.Shutdown dereferences as soon
+// as it has to wait: with no request in flight it returned at once, and
+// with one it panicked. Tests hit it intermittently — whether a
+// connection was still active when the test ended was timing — and the
+// daemon, which always has long polls open, on every shutdown.
 func (s *Server) Shutdown() {
-	if s.server != nil {
-		_ = s.server.Shutdown(nil)
+	if s.server == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	defer cancel()
+	if err := s.server.Shutdown(ctx); err != nil {
+		// Grace ran out: close what is left rather than leave it running.
+		_ = s.server.Close()
 	}
 }
 

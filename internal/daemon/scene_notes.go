@@ -95,8 +95,12 @@ func (d *Dispatcher) noteScenes(runID string, run *broker.Run) {
 			return
 		}
 		for _, sc := range due {
-			if note := strings.TrimSpace(notes[sc.Key]); note != "" {
+			rd := notes[sc.Key]
+			if note := strings.TrimSpace(rd.Note); note != "" {
 				run.SetSceneNote(sc.Key, note)
+			}
+			if sc.Kind == broker.SceneTask && len(sc.Who) == 1 && (len(rd.Decisions) > 0 || len(rd.Unverified) > 0) {
+				run.SetTaskReasons(sc.Who[0], broker.TaskReasons{Decisions: rd.Decisions, Unverified: rd.Unverified})
 			}
 		}
 	}()
@@ -126,7 +130,11 @@ func notePrompt(scenes []broker.Scene) string {
 		"- 파일명·task id·숫자 같은 고유한 사실은 남긴다.\n" +
 		"- 원문에 없는 결과나 이후 일어난 일은 쓰지 않는다. 요청만 있었으면 요청했다고 쓴다.\n" +
 		"- 인사·군더더기·추측은 쓰지 않는다.\n" +
-		"출력은 JSON 객체 하나뿐이다: 키는 장면 id, 값은 그 문장. 다른 텍스트는 쓰지 않는다.\n")
+		"task 장면(\"결과:\"가 있는 장면)은 결과 원문에서 두 가지를 더 뽑는다:\n" +
+		"  decisions: 결과를 좌우한 판단·선택 (무엇을 왜 그렇게 정했나). 원문에 있는 것만, 최대 3개, 각 한 문장.\n" +
+		"  unverified: 원문이 스스로 확인하지 않았다·실측 안 했다·미루었다·가정했다고 밝힌 것. 원문에 있는 것만, 최대 3개.\n" +
+		"출력은 JSON 객체 하나뿐이다. 키는 장면 id. 값은 task 장면이면 " +
+		"{\"note\": 문장, \"decisions\": [...], \"unverified\": [...]}, 그 밖의 장면이면 문장 하나. 다른 텍스트는 쓰지 않는다.\n")
 	for _, sc := range scenes {
 		fmt.Fprintf(&b, "\n### 장면 id: %s\n제목: %s\n", sc.Key, sc.Title)
 		for _, e := range sc.Events {
@@ -149,7 +157,7 @@ func notePrompt(scenes []broker.Scene) string {
 // Claude Code is started with no tools, settings or MCP servers: it only
 // writes text, and each of those adds to a start-up that dominates the
 // call.
-func haikuNotes(ctx context.Context, scenes []broker.Scene) (map[string]string, error) {
+func haikuNotes(ctx context.Context, scenes []broker.Scene) (map[string]sceneReading, error) {
 	cmd := exec.CommandContext(ctx, "ccproxy", "claude", "--print", "--model", "haiku",
 		"--restricted", "--strict-mcp-config", "--tools", "", "--no-session-persistence", "--no-chrome")
 	cmd.Stdin = strings.NewReader(notePrompt(scenes))
@@ -161,13 +169,32 @@ func haikuNotes(ctx context.Context, scenes []broker.Scene) (map[string]string, 
 	return parseNotes(out.String())
 }
 
+// sceneReading is what the model said about one scene: its note, and for a
+// task, the decisions and unverified points read out of its outcome.
+type sceneReading struct {
+	Note       string   `json:"note"`
+	Decisions  []string `json:"decisions"`
+	Unverified []string `json:"unverified"`
+}
+
+// UnmarshalJSON takes a scene's value as a sentence or an object.
+func (r *sceneReading) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		r.Note = s
+		return nil
+	}
+	type plain sceneReading
+	return json.Unmarshal(b, (*plain)(r))
+}
+
 // parseNotes reads the model's JSON, tolerating a fence or prose around it.
-func parseNotes(s string) (map[string]string, error) {
+func parseNotes(s string) (map[string]sceneReading, error) {
 	i, j := strings.Index(s, "{"), strings.LastIndex(s, "}")
 	if i < 0 || j < i {
 		return nil, fmt.Errorf("no JSON in the model's answer: %q", cut(s, 200))
 	}
-	var notes map[string]string
+	var notes map[string]sceneReading
 	if err := json.Unmarshal([]byte(s[i:j+1]), &notes); err != nil {
 		return nil, fmt.Errorf("the model's answer: %w", err)
 	}

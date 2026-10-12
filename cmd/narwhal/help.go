@@ -50,6 +50,7 @@ func (m tuiModel) viewHelp() string {
 		key("r", "the run's result: its answer, what it produced, each task's conclusion"),
 		key("", "there: e write the report · y copy the answer · 1-9 open a PR or a file"),
 		key("n", "in a run, result or flow: the next step, planned with what came before"),
+		key("Q", "the workers' questions: answer them together (enter answer · y as assumed · S send all)"),
 		key("i", "in a flow: resume the selected step — its workers continue with your instruction"),
 		key("l", "in a flow: into the step's list — what it was asked and produced; j/k choose, J/K read"),
 		key("", "unaddressed, a finished run's instruction goes to the task that wrote its answer"),

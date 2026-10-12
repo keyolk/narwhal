@@ -244,7 +244,12 @@ func TestTheTimelineLinksToThePreviousStep(t *testing.T) {
 	if events[0].Kind != broker.TimelineFollows || events[0].Run != "p1" {
 		t.Fatalf("first event: %+v", events[0])
 	}
-	m.focus, m.zoom, m.timelineSel = focusTimeline, focusTimeline, 0
+	m.focus, m.zoom = focusTimeline, focusTimeline
+	for i, it := range m.timelineItems() {
+		if it.scene != nil && it.scene.Kind == broker.SceneRun {
+			m.timelineSel = i
+		}
+	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m = next.(tuiModel); m.live.RunID != "p1" {
 		t.Errorf("enter on 'continues' went to %q", m.live.RunID)

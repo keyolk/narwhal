@@ -266,6 +266,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request, parts []str
 		s.handleTaskAction(w, r, agent, run, parts[2:])
 	case "judge":
 		s.handleJudge(w, r, agent, run)
+	case "ask":
+		s.handleAsk(w, r, agent, run)
 	default:
 		http.NotFound(w, r)
 	}
@@ -725,4 +727,61 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// askWait bounds how long a blocking ask holds its call open. The script's
+// own curl timeout is a little longer, so the server answers first.
+var askWait = 30 * time.Minute
+
+// handleAsk records a worker's question for the operator. A blocking one
+// holds the call until it is answered, so the worker — inside its tool
+// call — goes on with the answer. See broker/questions.go.
+func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker.Agent, run *broker.Run) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Question string `json:"question"`
+		Assumed  string `json:"assumed"`
+		Blocking bool   `json:"blocking"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.Question) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "question is required"})
+		return
+	}
+	taskID := strings.TrimPrefix(agent.ID, "worker-")
+	if agent.ID == "main" {
+		// The planner, asking before it decomposes.
+		taskID = broker.PlanAsker
+	}
+	q := run.Ask(taskID, req.Question, req.Assumed, req.Blocking)
+	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
+		fmt.Sprintf("%s %s asks (#%d): %s", broker.RelayPrefix, taskID, q.ID, q.Text))
+	if !req.Blocking {
+		writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": "recorded",
+			"hint": "Carry on with your assumption. If the operator answers otherwise, you will be told — " +
+				"or, once your task is done, reopened with the answer."})
+		return
+	}
+	ch, done := run.AwaitAnswer(q.ID)
+	if !done {
+		select {
+		case <-ch:
+		case <-time.After(askWait):
+			writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": "unanswered",
+				"hint": "No answer yet. Go on with your assumption and say in your outcome that it is " +
+					"unconfirmed; if the operator answers otherwise, your task will be reopened with it."})
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
+	a, _ := run.Question(q.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "status": "answered", "answer": a.Answer,
+		"as_assumed": !a.Differs()})
 }

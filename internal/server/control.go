@@ -75,6 +75,10 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, parts []s
 		s.handleControlSend(w, r)
 	case "cancel":
 		s.handleControlCancel(w, r)
+	case "questions":
+		s.handleControlQuestions(w, r)
+	case "answer":
+		s.handleControlAnswer(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -792,4 +796,64 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		resp["flow_error"] = flowErr
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+// handleControlQuestions lists a run's questions, open ones first.
+func (s *Server) handleControlQuestions(w http.ResponseWriter, r *http.Request) {
+	run := s.broker.GetRun(r.URL.Query().Get("run_id"))
+	if run == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"questions": run.Questions(), "open": len(run.OpenQuestions())})
+}
+
+// handleControlAnswer records the operator's answers to several questions
+// at once and carries each to its task: told, unblocked, or reopened. See
+// broker/questions.go.
+func (s *Server) handleControlAnswer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+		return
+	}
+	var req struct {
+		RunID   string `json:"run_id"`
+		Answers []struct {
+			ID        int    `json:"id"`
+			Answer    string `json:"answer"`
+			AsAssumed bool   `json:"as_assumed"`
+		} `json:"answers"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	run := s.broker.GetRun(req.RunID)
+	if run == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
+		return
+	}
+	var errs []string
+	var reopened []string
+	answered := 0
+	for _, a := range req.Answers {
+		q, err := run.Answer(a.ID, a.Answer, a.AsAssumed)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		answered++
+		reopened = append(reopened, run.ApplyAnswer(q)...)
+	}
+	if len(reopened) > 0 {
+		switch run.CurrentState() {
+		case broker.RunDone, broker.RunFailed, broker.RunCanceled:
+			run.SetState(broker.RunActive)
+		}
+		if s.control != nil {
+			s.control.LauncherFor(run.ID, run.Snapshot().CWD)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"answered": answered, "reopened": reopened, "errors": errs,
+		"open": len(run.OpenQuestions())})
 }

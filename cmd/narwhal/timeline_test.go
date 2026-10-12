@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // timedLiveModel is liveModel with its tasks' times recorded, so pane 3 has
@@ -54,9 +56,9 @@ func TestTheTimelineSelectionMoves(t *testing.T) {
 	m.width, m.height = 160, 40
 	m.snap.Messages = briefModel(t).snap.Messages
 	m = press(m, "3", "z")
-	n := len(m.timelineEvents())
+	n := len(m.timelineItems())
 	if n < 3 {
-		t.Fatalf("setup: %d events", n)
+		t.Fatalf("setup: %d entries", n)
 	}
 	m = press(m, "k")
 	if m.timelineSel != n-2 {
@@ -101,5 +103,29 @@ func TestTheFooterCarriesTheSteerControl(t *testing.T) {
 	}
 	if fresh := ansi.Strip(liveModel(t).viewFooter()); !strings.Contains(fresh, "press i") || strings.Contains(fresh, "last:") {
 		t.Errorf("footer before any instruction:\n%s", fresh)
+	}
+}
+
+// The timeline leads with the result and what each task's outcome rests on;
+// i on a line opens a steer to that task, quoting the line.
+func TestATimelineLineIsCorrectedFromWhereItIs(t *testing.T) {
+	m := fixtureRun(t)
+	m.snap.TaskReasons = map[string]broker.TaskReasons{
+		"schema": {Unverified: []string{"old fixtures were not re-decoded"}},
+	}
+	m = press(m, "3")
+	got := ansi.Strip(m.View())
+	r, why, flow := strings.Index(got, "결과"), strings.Index(got, "근거"), strings.Index(got, "미검증 ⚠ old fixtures were not re-decoded")
+	if r < 0 || why < r || flow < why {
+		t.Fatalf("the timeline does not lead with the result and its grounds:\n%s", got)
+	}
+	for i, it := range m.timelineItems() {
+		if it.reason != nil && it.reason.Kind == broker.ReasonUnverified {
+			m.timelineSel = i
+		}
+	}
+	m = press(m, "i")
+	if !m.steering || !strings.HasPrefix(string(m.steerBuf), "@schema [미검증: old fixtures were not re-decoded] → ") {
+		t.Errorf("i on the line: steering=%v buf=%q", m.steering, string(m.steerBuf))
 	}
 }

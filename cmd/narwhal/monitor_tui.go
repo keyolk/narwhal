@@ -218,9 +218,12 @@ type tuiModel struct {
 	outputsView  bool
 	outputSel    int
 	outputScroll int
-	// outputsRun is the run shown when it is not the watched one: a flow
-	// step's, opened from the flow view, which esc returns to.
-	outputsRun string
+	// outputsRuns are the flow steps' runs when Outputs was opened from a
+	// flow, every step listed; nil for the watched run alone.
+	outputsRuns []string
+	// outputDetails is what gh and git said about each PR, branch and
+	// commit listed, by output key.
+	outputDetails map[string]outputDetail
 
 	// pinnedTask is the one task a pane opened by w shows; leaving its
 	// view quits. See tmuxpanes.go.
@@ -517,6 +520,12 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case noticeMsg:
 		m.setNotice(msg.text, msg.err)
+		return m, nil
+	case outputDetailMsg:
+		if m.outputDetails == nil {
+			m.outputDetails = map[string]outputDetail{}
+		}
+		m.outputDetails[msg.key] = outputDetail{text: msg.text, err: msg.err}
 		return m, nil
 
 	case snapshotMsg:
@@ -851,7 +860,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "o", "O":
 		// Everything the run produced, readable in place. See outputs.go.
-		m.openOutputs("")
+		return m, m.openOutputs("")
 	case "w":
 		// The working tasks as tmux panes. See tmuxpanes.go.
 		return m, m.openTmuxPanes()

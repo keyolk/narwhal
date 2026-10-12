@@ -1,5 +1,5 @@
-// outputs.go is every output of a run in one place, each readable where it
-// is listed.
+// outputs.go is every output of a run — or of a whole flow — in one place,
+// each readable where it is listed.
 //
 // A run's real product was rarely where its result pointed. The plan run
 // on disk wrote a 22KB PLAN.md and its answer was a sentence naming it;
@@ -8,22 +8,28 @@
 // the task's outcome, its artifacts, its radio posts or a file on disk to
 // open, and the route to each was different.
 //
-// The Outputs view lists them together — files the tasks recorded, the
-// reports they posted to the results thread, and each task's answer — and
-// shows the selected one rendered beside the list. o opens it from a run,
-// its result, a flow or a task's Summary; O from anywhere in a task.
+// The Outputs view lists them together and shows the selected one beside
+// the list. What "shows" means depends on what it is, so each kind is read
+// its own way (outputs_view.go): a markdown file rendered, code with line
+// numbers, a PR as gh describes it, a commit as git shows it, a branch as
+// the commits it adds. The keys follow the kind too — o opens a PR in the
+// browser but a commit's diff in $PAGER, e edits a file, enter on an
+// answer goes to the task that gave it.
+//
+// o opens it from a run, its result, a task's Summary, or a flow, where it
+// lists every step's outputs; O from anywhere in a task.
 package main
 
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -33,76 +39,119 @@ type outputKind int
 
 const (
 	outFile   outputKind = iota // a file a task recorded
+	outPR                       // a pull request
+	outBranch                   // a branch pushed
+	outCommit                   // a commit made
 	outReport                   // a post to the results thread
 	outAnswer                   // a task's outcome
 )
 
-var outputLabels = map[outputKind]string{outFile: "file", outReport: "report", outAnswer: "answer"}
+var outputLabels = map[outputKind]string{
+	outFile: "file", outPR: "PR", outBranch: "branch", outCommit: "commit", outReport: "report", outAnswer: "answer",
+}
 
 // output is one readable thing a run produced.
 type output struct {
 	kind  outputKind
+	run   string // the run it came from
+	step  int    // its run's step in the flow, 0-based; 0 for a lone run
+	cwd   string // its run's directory, where git commands run
 	task  string // the task that produced it
 	title string
-	path  string // for a file
-	text  string // for a report or an answer
+	path  string // a file's path
+	ref   string // a PR's URL, a branch's or a commit's name
+	text  string // a report's or an answer's text
+	from  string // a report's sender and time, an answer's task state
 }
 
-// body is the output's content, read when it is shown.
-func (o output) body() (string, error) {
-	if o.kind != outFile {
-		return o.text, nil
-	}
-	b, err := os.ReadFile(o.path)
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
+// key identifies an output for the details fetched for it.
+func (o output) key() string { return o.cwd + "|" + outputLabels[o.kind] + "|" + o.ref }
 
-// runOutputs collects a run's outputs: files first, since a file a task
-// recorded is usually the thing it was for; then reports; then answers,
-// the synthesis's first.
-func runOutputs(s broker.Snapshot) []output {
-	var files, reports, answers []output
+// fetched reports whether an output's content comes from a command.
+func (o output) fetched() bool { return o.kind == outPR || o.kind == outBranch || o.kind == outCommit }
+
+// runOutputs collects a run's outputs, in the order they are listed: what
+// a person acts on first — files, PRs, branches, commits — then the
+// reports, then the answers, the synthesis's first.
+func runOutputs(s broker.Snapshot, step int) []output {
+	byKind := map[outputKind][]output{}
+	add := func(o output) {
+		o.run, o.step, o.cwd = s.RunID, step, s.CWD
+		byKind[o.kind] = append(byKind[o.kind], o)
+	}
 	tasks := append([]broker.TaskSnapshot(nil), s.Tasks...)
 	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
-	seenFile := map[string]bool{}
-	for _, t := range tasks {
-		if t.Artifacts == nil {
-			continue
+	seen := map[string]bool{}
+	once := func(k string) bool {
+		if seen[k] {
+			return false
 		}
-		for _, f := range t.Artifacts.Files {
+		seen[k] = true
+		return true
+	}
+	for _, t := range tasks {
+		var a broker.Artifacts
+		if t.Artifacts != nil {
+			a.Merge(*t.Artifacts)
+		}
+		if t.State == broker.TaskCompleted {
+			a.Merge(broker.ExtractArtifacts(t.Outcome))
+		}
+		for _, f := range a.Files {
 			p := f
 			if !filepath.IsAbs(p) && s.CWD != "" {
 				p = filepath.Join(s.CWD, p)
 			}
-			if seenFile[p] {
-				continue
+			if once("f" + p) {
+				add(output{kind: outFile, task: t.ID, title: filepath.Base(p), path: p, ref: p})
 			}
-			seenFile[p] = true
-			files = append(files, output{kind: outFile, task: t.ID, title: filepath.Base(p), path: p})
+		}
+		for _, u := range a.PRs {
+			if once("p" + u) {
+				add(output{kind: outPR, task: t.ID, title: prShort(u), ref: u})
+			}
+		}
+		for _, b := range a.Branches {
+			if once("b" + b) {
+				add(output{kind: outBranch, task: t.ID, title: b, ref: b})
+			}
+		}
+		for _, c := range a.Commits {
+			if once("c" + c) {
+				add(output{kind: outCommit, task: t.ID, title: c, ref: c})
+			}
 		}
 	}
 	for _, m := range s.Messages {
 		if m == nil || m.ThreadID != broker.ResultsThread || broker.IsProtocol(m.Content) {
 			continue
 		}
-		reports = append(reports, output{kind: outReport, task: strings.TrimPrefix(m.Sender, "worker-"),
-			title: titleOf(m.Content), text: m.Content})
+		add(output{kind: outReport, task: strings.TrimPrefix(m.Sender, "worker-"), title: titleOf(m.Content),
+			text: m.Content, from: m.Sender + " · " + clock(m.CreatedAt) + " · results thread"})
 	}
+	var answers []output
 	for _, t := range tasks {
 		if strings.TrimSpace(t.Outcome) == "" {
 			continue
 		}
-		o := output{kind: outAnswer, task: t.ID, title: titleOf(t.Outcome), text: t.Outcome}
+		o := output{kind: outAnswer, task: t.ID, title: titleOf(t.Outcome), text: t.Outcome, from: string(t.State)}
+		if !t.EndedAt.IsZero() {
+			o.from += " · " + clock(t.EndedAt)
+		}
 		if isSynthesisTask(t) {
 			answers = append([]output{o}, answers...)
 		} else {
 			answers = append(answers, o)
 		}
 	}
-	return append(append(files, reports...), answers...)
+	for _, o := range answers {
+		add(o)
+	}
+	var out []output
+	for k := outFile; k <= outAnswer; k++ {
+		out = append(out, byKind[k]...)
+	}
+	return out
 }
 
 func isSynthesisTask(t broker.TaskSnapshot) bool {
@@ -114,42 +163,100 @@ func titleOf(text string) string {
 	return flattenMarkdown(firstLine(strings.TrimSpace(text)))
 }
 
-// outputsSnap is the run the Outputs view shows.
-func (m tuiModel) outputsSnap() broker.Snapshot {
-	if m.outputsRun != "" {
-		return m.runSnapshot(m.outputsRun)
+// outputs is what the Outputs view lists: the watched run's, or each step's
+// of the flow it was opened from, step by step.
+func (m tuiModel) outputs() []output {
+	if len(m.outputsRuns) == 0 {
+		return runOutputs(m.snap, 0)
 	}
-	return m.snap
+	var out []output
+	for i, id := range m.outputsRuns {
+		out = append(out, runOutputs(m.runSnapshot(id), i)...)
+	}
+	return out
 }
 
-// openOutputs shows the outputs of the watched run, the first of task
-// selected when task is set.
-func (m *tuiModel) openOutputs(task string) {
-	m.outputsView, m.outputSel, m.outputScroll, m.outputsRun = true, 0, 0, ""
-	for i, o := range runOutputs(m.outputsSnap()) {
+// openOutputs shows the watched run's outputs, the first of task selected
+// when task is set.
+func (m *tuiModel) openOutputs(task string) tea.Cmd {
+	m.outputsView, m.outputSel, m.outputScroll, m.outputsRuns = true, 0, 0, nil
+	for i, o := range m.outputs() {
 		if task != "" && o.task == task {
 			m.outputSel = i
 			break
 		}
 	}
+	return m.fetchOutputDetails()
+}
+
+// openFlowOutputs shows every step's outputs, from the first of run's.
+func (m *tuiModel) openFlowOutputs(runs []string, run string) tea.Cmd {
+	m.outputsView, m.outputSel, m.outputScroll = true, 0, 0
+	m.outputsRuns = append([]string(nil), runs...)
+	for i, o := range m.outputs() {
+		if o.run == run {
+			m.outputSel = i
+			break
+		}
+	}
+	return m.fetchOutputDetails()
+}
+
+// outputDetail is what a command said about a PR, a branch or a commit.
+type outputDetail struct {
+	text    string
+	err     error
+	pending bool
+}
+
+type outputDetailMsg struct {
+	key  string
+	text string
+	err  error
+}
+
+// fetchOutputDetails asks git and gh about every listed output they
+// describe and that has not been asked about yet.
+func (m *tuiModel) fetchOutputDetails() tea.Cmd {
+	if m.outputDetails == nil {
+		m.outputDetails = map[string]outputDetail{}
+	}
+	var cmds []tea.Cmd
+	for _, o := range m.outputs() {
+		if !o.fetched() {
+			continue
+		}
+		if _, ok := m.outputDetails[o.key()]; ok {
+			continue
+		}
+		m.outputDetails[o.key()] = outputDetail{pending: true}
+		cmds = append(cmds, detailCmd(o))
+	}
+	return tea.Batch(cmds...)
 }
 
 // handleOutputsKey drives the Outputs view: j/k choose, J/K and pages
-// read, o hands the output to $PAGER whole, esc goes back.
+// read; o, e, y and enter do what suits the selected kind; esc goes back.
 func (m tuiModel) handleOutputsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	outs := runOutputs(m.outputsSnap())
+	outs := m.outputs()
 	rows := m.outputRows()
+	var sel *output
+	if m.outputSel < len(outs) {
+		sel = &outs[m.outputSel]
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
 	case "esc", "q", "O":
-		m.outputsView, m.outputsRun = false, ""
+		m.outputsView, m.outputsRuns = false, nil
 	case "j", "down":
 		if m.outputSel < len(outs)-1 {
 			m.outputSel++
 			m.outputScroll = 0
 		}
+		// A live run records more as it goes.
+		return m, m.fetchOutputDetails()
 	case "k", "up":
 		if m.outputSel > 0 {
 			m.outputSel--
@@ -163,29 +270,75 @@ func (m tuiModel) handleOutputsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.outputScroll = 0
 	case "G", "end":
 		m.outputScroll = 1 << 20
-	case "o", "enter":
-		if m.outputSel < len(outs) {
-			return m, pageOutput(outs[m.outputSel])
+	case "o":
+		if sel != nil {
+			return m, openOutput(*sel)
+		}
+	case "e":
+		if sel != nil && sel.kind == outFile {
+			return m, editOutput(sel.path)
 		}
 	case "y":
-		if m.outputSel < len(outs) {
-			text, err := outs[m.outputSel].body()
-			if err != nil {
-				m.setNotice("", err)
-				return m, nil
-			}
-			return m, copyCmd(text)
+		if sel != nil {
+			text, what := copyable(*sel)
+			return m, copyCmd(text, what)
 		}
+	case "enter":
+		if sel == nil {
+			return m, nil
+		}
+		if sel.kind != outAnswer && sel.kind != outReport {
+			return m, openOutput(*sel)
+		}
+		// To the task that gave it, in its run.
+		m.outputsView, m.outputsRuns = false, nil
+		if sel.run != m.snap.RunID {
+			m.flowView = false
+			return m, m.openRun(sel.run)
+		}
+		m.flowView = false
+		m.openTask(sel.task, time.Time{})
 	}
 	return m, nil
 }
 
-// pageOutput opens an output whole in $PAGER: a file where it is, text
-// through a temporary file.
-func pageOutput(o output) tea.Cmd {
-	if o.kind == outFile {
-		if _, err := os.Stat(o.path); err != nil {
+// copyable is what y copies, and what to call it: the content for
+// something read, the name for something referred to.
+func copyable(o output) (string, string) {
+	switch o.kind {
+	case outFile:
+		if b, err := os.ReadFile(o.path); err == nil {
+			return string(b), filepath.Base(o.path)
+		}
+		return o.path, "the path"
+	case outPR:
+		return o.ref, "the PR's URL"
+	case outBranch:
+		return o.ref, "the branch name"
+	case outCommit:
+		return o.ref, "the commit hash"
+	}
+	return o.text, "the " + outputLabels[o.kind]
+}
+
+// openOutput opens an output whole, the way its kind is opened: a PR in the
+// browser, a commit's diff or a branch's log in $PAGER, a file where it is,
+// text through a temporary file.
+func openOutput(o output) tea.Cmd {
+	switch o.kind {
+	case outPR:
+		return openURLCmd(o.ref)
+	case outCommit:
+		return gitPagerCmd(o.cwd, "show", "--color=always", o.ref)
+	case outBranch:
+		return gitPagerCmd(o.cwd, "log", "--color=always", "--stat", branchRange(o.cwd, o.ref))
+	case outFile:
+		fi, err := os.Stat(o.path)
+		if err != nil {
 			return func() tea.Msg { return noticeMsg{err: err} }
+		}
+		if fi.IsDir() {
+			return func() tea.Msg { return noticeMsg{err: fmt.Errorf("%s is a directory", o.path)} }
 		}
 		return pagerCmd(o.path, false)
 	}
@@ -205,72 +358,29 @@ func pageOutput(o output) tea.Cmd {
 	return pagerCmd(path, true)
 }
 
-// outputRows is the reading pane's height.
-func (m tuiModel) outputRows() int { return max(3, m.height-6) }
-
-// viewOutputs draws the list on the left and the selected output on the
-// right, rendered.
-func (m tuiModel) viewOutputs() string {
-	w := max(m.width, 1)
-	snap := m.outputsSnap()
-	outs := runOutputs(snap)
-	head := styDim.Render("‹ ") + styCyanBold.Render("Outputs") + styDim.Render(fmt.Sprintf("   %d from %s", len(outs), snap.RunID))
-	title := "  " + truncate(oneLine(snap.Prompt), w-3)
-	keys := styDim.Render(ansi.Truncate("j/k choose · J/K space page · g/G · o/enter $PAGER · y copy · esc back", w, "…"))
-	if n := m.noticeLine(w); n != "" {
-		keys = n + "\n" + keys
+// gitPagerCmd runs git in dir and pages what it prints.
+func gitPagerCmd(dir string, args ...string) tea.Cmd {
+	pager := os.Getenv("PAGER")
+	if pager == "" {
+		pager = "less -R"
 	}
-	bodyH := max(3, m.height-2-lipgloss.Height(keys))
-	lw := min(max(w/3, 28), 48)
-	rw := max(10, w-lw-bandBorderCols)
-
-	left := []string{paneTitle("Outputs", false, lw)}
-	if len(outs) == 0 {
-		left = append(left, styDim.Render("  nothing yet"))
-	}
-	for i, o := range outs {
-		kind := outputLabels[o.kind]
-		line := fmt.Sprintf("%-6s %-10s %s", kind, truncate(o.task, 10), o.title)
-		if i == m.outputSel {
-			left = append(left, stySel.Render(padRight(truncate(line, lw), lw)))
-			continue
-		}
-		style := styDim
-		if o.kind == outFile {
-			style = styCyan
-		}
-		left = append(left, style.Render(padRight(kind, 6))+" "+styBlue.Render(padRight(truncate(o.task, 10), 10))+" "+
-			truncate(o.title, max(4, lw-18)))
-	}
-
-	right := []string{paneTitle("", false, rw)}
-	if m.outputSel < len(outs) {
-		o := outs[m.outputSel]
-		text, err := o.body()
-		var lines []string
-		src := o.task
-		if o.kind == outFile {
-			src = o.path
-		}
-		lines = append(lines, styDim.Render(outputLabels[o.kind]+" · "+src))
+	script := `dir=$1; shift; git -C "$dir" --no-pager "$@" | ` + pager
+	c := exec.Command("sh", append([]string{"-c", script, "narwhal-git", dir}, args...)...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return tea.ExecProcess(c, func(err error) tea.Msg {
 		if err != nil {
-			lines = append(lines, "", styRed.Render(err.Error()))
-		} else {
-			lines = append(lines, "")
-			lines = append(lines, renderMarkdown(text, rw, lipgloss.NewStyle())...)
+			return noticeMsg{err: fmt.Errorf("git %s: %w", args[0], err)}
 		}
-		rows := bodyH - 3
-		scroll := min(m.outputScroll, max(0, len(lines)-rows))
-		end := min(len(lines), scroll+rows)
-		label := truncate(o.title, max(4, rw-20))
-		if len(lines) > rows {
-			label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
-			if end < len(lines) {
-				label += " ↓"
-			}
+		return nil
+	})
+}
+
+// editOutput opens a file in $EDITOR.
+func editOutput(path string) tea.Cmd {
+	return tea.ExecProcess(editorCommand(path), func(err error) tea.Msg {
+		if err != nil {
+			return noticeMsg{err: fmt.Errorf("editor: %w", err)}
 		}
-		right = append([]string{paneTitle(label, true, rw)}, lines[scroll:end]...)
-	}
-	body := framedBand(lw, rw, bodyH-3, padRows(left, lw, bodyH-2), padRows(right, rw, bodyH-2))
-	return pinFooter(head+"\n"+title+"\n"+body, keys, m.height)
+		return noticeMsg{text: "edited " + abbreviatePath(path)}
+	})
 }

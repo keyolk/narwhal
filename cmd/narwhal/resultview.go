@@ -214,21 +214,20 @@ func (m tuiModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.setNotice("", fmt.Errorf("nothing to copy yet"))
 			return m, nil, true
 		}
-		return m, copyCmd(res.Answer), true
+		return m, copyCmd(res.Answer, "the answer"), true
 	case len(k) == 1 && k[0] >= '1' && k[0] <= '9':
 		return m, openArtifact(m.snap.Result().Artifacts, int(k[0]-'0'), m.snap.CWD), true
 	case k == "n" || k == "i":
 		m.startCompose(m.flowOf(m.live))
 		return m, nil, true
 	case k == "o" || k == "O":
-		m.openOutputs("")
-		return m, nil, true
+		return m, m.openOutputs(""), true
 	}
 	return m, nil, false
 }
 
-// copyCmd puts text on the clipboard.
-func copyCmd(text string) tea.Cmd {
+// copyCmd puts text on the clipboard; what names it in the notice.
+func copyCmd(text, what string) tea.Cmd {
 	return func() tea.Msg {
 		for _, c := range [][]string{{"pbcopy"}, {"wl-copy"}, {"xclip", "-selection", "clipboard"}} {
 			if _, err := exec.LookPath(c[0]); err != nil {
@@ -239,7 +238,7 @@ func copyCmd(text string) tea.Cmd {
 			if err := cmd.Run(); err != nil {
 				return noticeMsg{err: fmt.Errorf("%s: %w", c[0], err)}
 			}
-			return noticeMsg{text: fmt.Sprintf("copied the answer (%d lines)", strings.Count(text, "\n")+1)}
+			return noticeMsg{text: fmt.Sprintf("copied %s (%d lines)", what, strings.Count(text, "\n")+1)}
 		}
 		return noticeMsg{err: fmt.Errorf("no clipboard command (pbcopy, wl-copy, xclip) found")}
 	}

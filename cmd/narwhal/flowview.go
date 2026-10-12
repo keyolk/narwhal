@@ -177,9 +177,13 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "o", "O":
 		if m.flowSel < len(steps) {
-			m.openOutputs("")
-			m.outputsRun = steps[m.flowSel].RunID
-			return m, nil
+			// Every step's outputs, from this step's: the work's product so
+			// far, not one run's.
+			runs := make([]string, len(steps))
+			for i, s := range steps {
+				runs[i] = s.RunID
+			}
+			return m, m.openFlowOutputs(runs, steps[m.flowSel].RunID)
 		}
 	case "r":
 		if m.flowSel < len(steps) {

@@ -107,3 +107,36 @@ func TestTheQuestionsViewDrawsAtAnySize(t *testing.T) {
 		}
 	}
 }
+
+// A question with options is answered by its number; one waiting for the
+// run's review is listed but not answerable.
+func TestAnOptionIsPickedByItsNumber(t *testing.T) {
+	m := fixtureRun(t)
+	now := time.Now()
+	m.snap.Questions = []broker.Question{
+		{ID: 1, TaskID: "api", Text: "sqlite or postgres?", Options: []string{"sqlite", "postgres"}, Recommended: 1,
+			Context: "single user, 5k rows a day", RaisedBy: "synthesis", AskedAt: now},
+		{ID: 2, TaskID: "client", Text: "Keep v1?", Assumed: "yes", Candidate: true, AskedAt: now},
+	}
+	m = press(m, "Q")
+	view := ansi.Strip(m.View())
+	for _, want := range []string{"1) sqlite  ← recommended", "2) postgres", "single user, 5k rows a day",
+		"raised by synthesis", "waiting for the run's review", "1 in review"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("questions view lacks %q:\n%s", want, view)
+		}
+	}
+	m = press(m, "2")
+	if p := m.pendingAnswers[1]; p.text != "postgres" {
+		t.Errorf("2 picked %+v", p)
+	}
+	// The candidate cannot be answered from here.
+	m.questionSel = 1
+	m = press(m, "y")
+	if _, ok := m.pendingAnswers[2]; ok {
+		t.Error("a question in review took an answer")
+	}
+	if open, _ := openQuestionCount(m.snap); open != 1 {
+		t.Errorf("the header counts %d open, want 1 (the candidate is not the operator's yet)", open)
+	}
+}

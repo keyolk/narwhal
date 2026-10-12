@@ -46,6 +46,10 @@ type WorkerConfig struct {
 	// did it, with Prompt as its next turn. See broker/followup.go.
 	ResumeSession string
 	Prompt        string
+	// Reviewer marks a synthesis or checkpoint: it reviews the workers'
+	// candidate questions before they reach the operator. See
+	// broker/questions.go.
+	Reviewer bool
 }
 
 // WorkerConfigFor builds the config for a task's worker.
@@ -72,7 +76,8 @@ func WorkerConfigFor(task *broker.Task) WorkerConfig {
 		// The end condition travels with the assignment. A worker that
 		// first meets its check as a 202 has already written its answer
 		// and dropped the context it needed to test it.
-		Check: task.CurrentCheck(),
+		Check:    task.CurrentCheck(),
+		Reviewer: task.IsReviewer(),
 	}
 }
 
@@ -355,16 +360,50 @@ curl -s -X POST %s/send \
 `, base),
 		"ask": fmt.Sprintf(`#!/bin/bash
 # usage: ask "<question>" "<what you will assume>" [assume|blocking]
+#            [--option "<A>" --option "<B>" ...] [--recommend <n>] [--context "<what you found>"]
 # Ask the operator about an ambiguity you cannot settle from the code or the
 # request. The question is collected with the run's others and answered
 # together. assume (default): returns at once; carry on with your assumption.
 # blocking: waits for the answer (up to 30 minutes) and prints it; use only
-# when no reasonable assumption lets you go on.
+# when no reasonable assumption lets you go on. When the choice is between
+# options your research found, list them, say which you recommend, and give
+# the context that makes it a question.
 set -euo pipefail
-QUESTION="$1"; ASSUMED="${2:-}"; MODE="${3:-assume}"
-curl -s --max-time 1900 -X POST %s/ask \
-  -H "Content-Type: application/json" \
-  -d "$(python3 -c 'import json,sys; print(json.dumps({"question":sys.argv[1],"assumed":sys.argv[2],"blocking":sys.argv[3]=="blocking"}))' "$QUESTION" "$ASSUMED" "$MODE")"
+QUESTION="$1"; ASSUMED="${2:-}"; shift 2 || true
+MODE="assume"; if [ "${1:-}" = "assume" ] || [ "${1:-}" = "blocking" ]; then MODE="$1"; shift; fi
+python3 - "$QUESTION" "$ASSUMED" "$MODE" "$@" <<'PY' > /tmp/narwhal-ask-$$.json
+import json, sys
+q, assumed, mode, rest = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+opts, ctx, rec = [], "", 0
+i = 0
+while i < len(rest):
+    a = rest[i]
+    if a == "--option" and i + 1 < len(rest): opts.append(rest[i+1]); i += 2
+    elif a == "--context" and i + 1 < len(rest): ctx = rest[i+1]; i += 2
+    elif a == "--recommend" and i + 1 < len(rest): rec = int(rest[i+1]); i += 2
+    else: i += 1
+print(json.dumps({"question": q, "assumed": assumed, "blocking": mode == "blocking",
+                  "options": opts, "context": ctx, "recommended": rec}))
+PY
+curl -s --max-time 1900 -X POST %s/ask -H "Content-Type: application/json" -d @/tmp/narwhal-ask-$$.json
+rm -f /tmp/narwhal-ask-$$.json
+`, base),
+		"candidates": fmt.Sprintf(`#!/bin/bash
+# usage: candidates
+# The workers' questions waiting for your review (synthesis or checkpoint).
+set -euo pipefail
+curl -s %s/candidates
+`, base),
+		"resolve": fmt.Sprintf(`#!/bin/bash
+# usage: resolve '<json list>'
+#   [{"id":3,"answer":"what the findings settle"},
+#    {"id":4,"merge_into":3},
+#    {"id":5,"raise":true,"options":["A","B"],"recommended":1,"context":"what the research found"}]
+# Settle candidate questions from the peers' findings, merge duplicates, and
+# raise the rest to the operator with the options and your recommendation.
+set -euo pipefail
+curl -s -X POST %s/resolve -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"resolutions":json.loads(sys.argv[1])}))' "$1")"
 `, base),
 		"judge": fmt.Sprintf(`#!/bin/bash
 # usage: judge "<yes/no question>" "<state>"   (or pipe the state on stdin)
@@ -472,7 +511,27 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    (assume, the default). The operator answers the run's questions\n")
 	fmt.Fprintf(&b, "    together; if the answer differs, your task is reopened with it. Use\n")
 	fmt.Fprintf(&b, "    blocking only when no reasonable assumption lets you go on — it waits\n")
-	fmt.Fprintf(&b, "    for the answer. Not for things you can find out yourself.\n")
+	fmt.Fprintf(&b, "    for the answer. Not for things you can find out yourself. When the\n")
+	fmt.Fprintf(&b, "    choice is between options your research found, add --option for each,\n")
+	fmt.Fprintf(&b, "    --recommend <n> and --context \"<what you found>\".\n")
+	if cfg.Reviewer {
+		fmt.Fprintf(&b, "\n## You review the workers' questions\n\n")
+		fmt.Fprintf(&b, "Your peers' questions reach you before the operator: you see their\n")
+		fmt.Fprintf(&b, "findings together, so you can tell which questions the findings already\n")
+		fmt.Fprintf(&b, "answer, which ask the same thing, and which are real choices only the\n")
+		fmt.Fprintf(&b, "operator can make. Once the findings are in — before you write your\n")
+		fmt.Fprintf(&b, "answer — run:\n\n")
+		fmt.Fprintf(&b, "- bash %s/candidates\n", scriptsDir)
+		fmt.Fprintf(&b, "    The questions waiting for you.\n")
+		fmt.Fprintf(&b, "- bash %s/resolve '<json list>'\n", scriptsDir)
+		fmt.Fprintf(&b, "    For each: {\"id\":N,\"answer\":\"...\"} when the findings settle it (the asker\n")
+		fmt.Fprintf(&b, "    is told, or reopened if it assumed otherwise); {\"id\":N,\"merge_into\":M} for a\n")
+		fmt.Fprintf(&b, "    duplicate; {\"id\":N,\"raise\":true,\"options\":[...],\"recommended\":k,\n")
+		fmt.Fprintf(&b, "    \"context\":\"...\"} for a real choice — give the options the research found and\n")
+		fmt.Fprintf(&b, "    your recommendation, so the operator can answer with a number.\n")
+		fmt.Fprintf(&b, "Do not raise what the findings settle; do not settle what only the\n")
+		fmt.Fprintf(&b, "operator can decide. What you leave is raised when you finish.\n")
+	}
 	fmt.Fprintf(&b, "- bash %s/judge \"<yes/no question>\" \"<state>\"\n", scriptsDir)
 	fmt.Fprintf(&b, "    Ask a fast decision model a yes/no question about concrete state —\n")
 	fmt.Fprintf(&b, "    a test log, a diff, a peer's message — and get a probability in about\n")

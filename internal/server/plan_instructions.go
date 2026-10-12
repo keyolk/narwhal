@@ -104,6 +104,25 @@ Your job is to decompose the user's request into a task DAG.
      -H "Content-Type: application/json" \
      -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio and integrate them into one answer.","deps":["task-1","task-2"],"model":"opus","check":"Confirm two or three of the items your peers reported really meet the definition in the request, and report what that showed — including a result that contradicts the headline."}'
 
+3b. If the request has a research part whose findings decide how the rest
+   is done — which of several approaches, what to keep, where to put it —
+   and you cannot know that before the research, put a CHECKPOINT between
+   them: a task named "checkpoint" that depends on the research tasks, and
+   make the tasks that act on the findings depend on the checkpoint. It
+   starts with the research, reviews what the researchers found and the
+   questions they asked, and raises the real choices to the operator with
+   options and a recommendation; its task-done waits for the answers, so
+   the work after it starts only once the operator has chosen. When the
+   findings leave nothing to choose, it passes straight through.
+
+   curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
+     -H "Content-Type: application/json" \
+     -d '{"id":"checkpoint","name":"checkpoint","assignment":"This is the checkpoint task. Accumulate the research tasks' findings from the radio. Review the workers' questions (candidates) and settle, merge or raise them. Raise to the operator, with options and your recommendation, every choice the findings leave open that changes how the following tasks should work. Write the findings and the operator's answers as your outcome — the tasks after you build on it.","deps":["task-1","task-2"],"model":"opus"}'
+
+   Then the implementing tasks use "deps":["checkpoint"]. Use a checkpoint
+   only where the research can genuinely change the plan; a request whose
+   approach is already clear needs none.
+
 4. After creating ALL tasks, signal completion by sending a message:
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/agents/$NARWHAL_AGENT_TOKEN/send \
@@ -120,7 +139,7 @@ Your job is to decompose the user's request into a task DAG.
 - If the request is simple enough for one worker, create exactly one task.
 - Do NOT create more than 5 tasks.`,
 		runID, brokerURL, brokerURL, mainToken, prompt,
-		runID, broker.DepsContract, broker.CheckContract, broker.CriterionContract, runID)
+		runID, broker.DepsContract, broker.CheckContract, broker.CriterionContract, runID, runID)
 }
 
 // BuildPlanInstructionsWithHistory is BuildPlanInstructions plus a digest of

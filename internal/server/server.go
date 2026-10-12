@@ -268,6 +268,10 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request, parts []str
 		s.handleJudge(w, r, agent, run)
 	case "ask":
 		s.handleAsk(w, r, agent, run)
+	case "candidates":
+		s.handleCandidates(w, r, run)
+	case "resolve":
+		s.handleResolve(w, r, agent, run)
 	default:
 		http.NotFound(w, r)
 	}
@@ -647,6 +651,38 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			return
 		}
 
+		// A checkpoint does not complete past the questions it raised: the
+		// tasks after it are waiting on the operator's choices, not on its
+		// say-so. The call holds, as the dep gate does, until they are
+		// answered. See broker/questions.go.
+		if task.IsCheckpoint() {
+			if open := run.RaisedOpen(task.ID); len(open) > 0 {
+				ids := make([]string, len(open))
+				for i, q := range open {
+					ids[i] = fmt.Sprintf("#%d", q.ID)
+				}
+				if !s.awaitAnswers(r, run, open, waitTimeout(req.TimeoutMs)) {
+					writeJSON(w, http.StatusConflict, map[string]any{
+						"error":   "the operator has not answered the questions you raised",
+						"task_id": task.ID, "open_questions": ids,
+						"hint": "Call task-done again — it waits for the answers. Do not decide for the operator.",
+					})
+					return
+				}
+				var answers []string
+				for _, q := range open {
+					a, _ := run.Question(q.ID)
+					answers = append(answers, fmt.Sprintf("#%d %s → %s", a.ID, a.Text, a.Answer))
+				}
+				writeJSON(w, http.StatusAccepted, map[string]any{
+					"task_id": task.ID, "answers": answers,
+					"hint": "The operator answered. Write the answers into your outcome — the tasks after you " +
+						"read it — and call task-done again with the updated outcome.",
+				})
+				return
+			}
+		}
+
 		// Whether the outcome answers the task, once per dispatch, after
 		// the gates that may still change it. See broker/answered.go.
 		hint := run.JudgeCriterion(task, req.Outcome)
@@ -742,9 +778,12 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 		return
 	}
 	var req struct {
-		Question string `json:"question"`
-		Assumed  string `json:"assumed"`
-		Blocking bool   `json:"blocking"`
+		Question    string   `json:"question"`
+		Assumed     string   `json:"assumed"`
+		Blocking    bool     `json:"blocking"`
+		Options     []string `json:"options"`
+		Context     string   `json:"context"`
+		Recommended int      `json:"recommended"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -759,11 +798,22 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 		// The planner, asking before it decomposes.
 		taskID = broker.PlanAsker
 	}
-	q := run.Ask(taskID, req.Question, req.Assumed, req.Blocking)
-	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
-		fmt.Sprintf("%s %s asks (#%d): %s", broker.RelayPrefix, taskID, q.ID, q.Text))
+	q := run.AskSpec(taskID, broker.QuestionSpec{Text: req.Question, Assumed: req.Assumed, Blocking: req.Blocking,
+		Options: req.Options, Context: req.Context, Recommended: req.Recommended})
+	if q.Candidate {
+		// For the reviewer first; the operator sees it if it is raised.
+		run.PostMessage(broker.WorklogThread, "coordinator", nil, broker.PriorityFYI,
+			fmt.Sprintf("%s %s asks (#%d, for review): %s", broker.RelayPrefix, taskID, q.ID, q.Text))
+	} else {
+		run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
+			fmt.Sprintf("%s %s asks (#%d): %s", broker.RelayPrefix, taskID, q.ID, q.Text))
+	}
 	if !req.Blocking {
-		writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": "recorded",
+		status := "recorded"
+		if q.Candidate {
+			status = "recorded for review"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": status,
 			"hint": "Carry on with your assumption. If the operator answers otherwise, you will be told — " +
 				"or, once your task is done, reopened with the answer."})
 		return
@@ -784,4 +834,77 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 	a, _ := run.Question(q.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "status": "answered", "answer": a.Answer,
 		"as_assumed": !a.Differs()})
+}
+
+// handleCandidates lists the workers' questions waiting for review, for the
+// run's synthesis or checkpoint. See broker/questions.go.
+func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request, run *broker.Run) {
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": run.Candidates()})
+}
+
+// handleResolve applies the reviewer's resolution of candidate questions:
+// answered from the findings, merged, or raised to the operator.
+func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request, agent *broker.Agent, run *broker.Run) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Resolutions []struct {
+			ID          int      `json:"id"`
+			Answer      string   `json:"answer"`
+			MergeInto   int      `json:"merge_into"`
+			Raise       bool     `json:"raise"`
+			Options     []string `json:"options"`
+			Context     string   `json:"context"`
+			Recommended int      `json:"recommended"`
+		} `json:"resolutions"`
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	by := strings.TrimPrefix(agent.ID, "worker-")
+	var errs []string
+	raised, settled := 0, 0
+	for _, res := range req.Resolutions {
+		q, err := run.Resolve(by, broker.Resolution{ID: res.ID, Answer: res.Answer, MergeInto: res.MergeInto,
+			Raise: res.Raise, Options: res.Options, Context: res.Context, Recommended: res.Recommended})
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		if q.Candidate || q.Open() {
+			raised++
+			continue
+		}
+		settled++
+		run.ApplyAnswer(q)
+	}
+	if raised > 0 {
+		run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
+			fmt.Sprintf("%s %s raised %d question(s) for the operator after reviewing the findings.", broker.RelayPrefix, by, raised))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"raised": raised, "settled": settled, "errors": errs,
+		"left": len(run.Candidates())})
+}
+
+// awaitAnswers holds until every question is answered, the timeout passes,
+// or the caller goes away. It reports whether all were answered.
+func (s *Server) awaitAnswers(r *http.Request, run *broker.Run, qs []broker.Question, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for _, q := range qs {
+		ch, done := run.AwaitAnswer(q.ID)
+		if done {
+			continue
+		}
+		select {
+		case <-ch:
+		case <-deadline:
+			return false
+		case <-r.Context().Done():
+			return false
+		}
+	}
+	return true
 }

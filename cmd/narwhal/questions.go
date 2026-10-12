@@ -41,9 +41,18 @@ type answersSentMsg struct {
 // viewQuestions lists the run's questions, open ones first.
 func (m tuiModel) questionsList() []broker.Question {
 	qs := append([]broker.Question(nil), m.snap.Questions...)
+	rank := func(q broker.Question) int {
+		switch {
+		case q.ForOperator():
+			return 0
+		case q.Candidate:
+			return 1
+		}
+		return 2
+	}
 	sort.SliceStable(qs, func(i, j int) bool {
-		if qs[i].Open() != qs[j].Open() {
-			return qs[i].Open()
+		if rank(qs[i]) != rank(qs[j]) {
+			return rank(qs[i]) < rank(qs[j])
 		}
 		if qs[i].Blocking != qs[j].Blocking {
 			return qs[i].Blocking
@@ -57,7 +66,7 @@ func (m tuiModel) questionsList() []broker.Question {
 // of those block a worker.
 func openQuestionCount(s broker.Snapshot) (open, blocking int) {
 	for _, q := range s.Questions {
-		if q.Open() {
+		if q.ForOperator() {
 			open++
 			if q.Blocking {
 				blocking++
@@ -65,6 +74,18 @@ func openQuestionCount(s broker.Snapshot) (open, blocking int) {
 		}
 	}
 	return open, blocking
+}
+
+// reviewingCount is how many questions wait for the run's synthesis or
+// checkpoint before they may reach the operator.
+func reviewingCount(s broker.Snapshot) int {
+	n := 0
+	for _, q := range s.Questions {
+		if q.Open() && q.Candidate {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *tuiModel) openQuestions() {
@@ -121,13 +142,19 @@ func (m tuiModel) handleQuestionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.questionSel > 0 {
 			m.questionSel--
 		}
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		// An option, for a question that offers them.
+		if n := int(msg.String()[0] - '0'); sel != nil && sel.ForOperator() && n <= len(sel.Options) {
+			m.pendingAnswers[sel.ID] = pendingAnswer{text: sel.Options[n-1]}
+			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
+		}
 	case "enter", "a":
-		if sel != nil && sel.Open() {
+		if sel != nil && sel.ForOperator() {
 			m.answering = true
 			m.answerBuf = []rune(m.pendingAnswers[sel.ID].text)
 		}
 	case "y":
-		if sel != nil && sel.Open() && sel.Assumed != "" {
+		if sel != nil && sel.ForOperator() && sel.Assumed != "" {
 			m.pendingAnswers[sel.ID] = pendingAnswer{asAssumed: true}
 			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}
@@ -149,7 +176,7 @@ func (m tuiModel) handleQuestionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // i when there is none.
 func nextOpen(qs []broker.Question, i int, pending map[int]pendingAnswer) int {
 	for j := i + 1; j < len(qs); j++ {
-		if _, ok := pending[qs[j].ID]; qs[j].Open() && !ok {
+		if _, ok := pending[qs[j].ID]; qs[j].ForOperator() && !ok {
 			return j
 		}
 	}
@@ -230,6 +257,9 @@ func (m tuiModel) viewQuestions() string {
 	if blocking > 0 {
 		head += "  " + styRedBold.Render(fmt.Sprintf("%d waiting", blocking))
 	}
+	if n := reviewingCount(m.snap); n > 0 {
+		head += "  " + styDim.Render(fmt.Sprintf("%d in review", n))
+	}
 	if n := len(m.pendingAnswers); n > 0 {
 		head += "  " + styYellow.Render(fmt.Sprintf("%d answers to send", n))
 	}
@@ -248,6 +278,8 @@ func (m tuiModel) viewQuestions() string {
 		switch {
 		case !q.Open():
 			mark, st = "✓", styGreen
+		case q.Candidate:
+			mark, st = "…", styDim
 		case q.Blocking:
 			mark, st = "!", styRedBold
 		}
@@ -274,12 +306,36 @@ func (m tuiModel) viewQuestions() string {
 				body = append(body, "     "+l)
 			}
 		}
+		if q.Context != "" {
+			for _, l := range wrapText(q.Context, inner-4) {
+				body = append(body, "     "+styDim.Render(l))
+			}
+		}
+		for k, o := range q.Options {
+			opt := fmt.Sprintf("%d) %s", k+1, o)
+			if k+1 == q.Recommended {
+				opt += "  ← recommended"
+			}
+			if q.ForOperator() {
+				body = append(body, "     "+styCyan.Render(truncate(opt, inner-4)))
+			} else {
+				body = append(body, "     "+styDim.Render(truncate(opt, inner-4)))
+			}
+		}
 		if q.Assumed != "" {
 			body = append(body, "     "+styDim.Render("assumes: ")+truncate(q.Assumed, inner-9))
+		}
+		if q.Candidate {
+			body = append(body, "     "+styDim.Render("waiting for the run's review — it may be settled from the findings first"))
+		}
+		if q.RaisedBy != "" && q.ForOperator() {
+			body = append(body, "     "+styDim.Render("raised by "+q.RaisedBy+" after reviewing the findings"))
 		}
 		switch {
 		case !q.Open() && q.AcceptedAssumption:
 			body = append(body, "     "+styGreen.Render("answered: as assumed"))
+		case !q.Open() && q.ResolvedBy != "":
+			body = append(body, "     "+styGreen.Render("settled by "+q.ResolvedBy+": ")+truncate(q.Answer, inner-14))
 		case !q.Open():
 			body = append(body, "     "+styGreen.Render("answered: ")+truncate(q.Answer, inner-10))
 		case pending && p.asAssumed:
@@ -289,7 +345,7 @@ func (m tuiModel) viewQuestions() string {
 		}
 	}
 
-	keys := "j/k question · enter answer · y as assumed · x clear · S send all · esc back"
+	keys := "j/k question · 1-9 pick an option · enter answer · y as assumed · x clear · S send all · esc back"
 	foot := styDim.Render(ansi.Truncate(keys, w, "…"))
 	if m.answering {
 		foot = ansi.Truncate(styCyanBold.Render("» answer: ")+string(m.answerBuf)+styCyan.Render("▏"), w, "…") +

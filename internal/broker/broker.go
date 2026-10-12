@@ -738,7 +738,9 @@ func (r *Run) DispatchableTasks() []*Task {
 	for _, t := range r.Tasks {
 		t.mu.RLock()
 		state := t.State
-		isSynth := isSynthesisName(t.Name, t.Assignment)
+		// A checkpoint starts early for the same reason: it watches the
+		// research arrive. See questions.go.
+		isSynth := isSynthesisName(t.Name, t.Assignment) || isCheckpointName(t.Name, t.Assignment)
 		t.mu.RUnlock()
 		if state == TaskReady || (state == TaskPending && isSynth) {
 			out = append(out, t)
@@ -1016,6 +1018,11 @@ func (t *Task) CompleteDispatch(output string, r *Run) {
 	t.clearFollowUp()
 	t.mu.Unlock()
 	r.measureTask(t.ID)
+	// A reviewer done without settling every candidate question: what is
+	// left goes to the operator. See questions.go.
+	if rv := r.reviewer(); rv == nil || rv.ID == t.ID || rv.CurrentState() == TaskCompleted {
+		r.RaiseCandidates()
+	}
 	r.ReleaseTaskFiles(t.ID)
 	r.mu.Lock()
 	for _, other := range r.Tasks {

@@ -107,3 +107,38 @@ func TestMentioningTheCheckpointIsNotBeingOne(t *testing.T) {
 		}
 	}
 }
+
+// An answer to a question the reviewer raised goes to the reviewer: the
+// asker finished on findings that stand either way, and reopening it held
+// the reviewer's dependents for a second research pass.
+func TestARaisedAnswerGoesToTheReviewerNotTheAsker(t *testing.T) {
+	r := New().CreateRun("r", "p", t.TempDir(), "main")
+	r.CreateStandardThreads()
+	research := r.AddTask("research", "research", "compare formats", nil)
+	cp := r.AddTask("checkpoint", "checkpoint", "This is the checkpoint task.", []string{"research"})
+	r.AddTask("write", "write", "write the chosen format", []string{"checkpoint"})
+	research.StartDispatch("d1", "worker-research")
+	cp.StartDispatch("d1", "worker-checkpoint")
+
+	q := r.Ask("research", "Which format?", "json", false)
+	research.CompleteDispatch("both json and yaml are viable", r)
+	if _, err := r.Resolve("checkpoint", Resolution{ID: q.ID, Raise: true, Options: []string{"json", "yaml"}}); err != nil {
+		t.Fatal(err)
+	}
+	cp.CompleteDispatch("format: json", r)
+
+	a, err := r.Answer(q.ID, "yaml", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := r.ApplyAnswer(a)
+	if containsStr(reopened, "research") {
+		t.Errorf("reopened the asker: %v", reopened)
+	}
+	if !containsStr(reopened, "checkpoint") {
+		t.Errorf("reopened %v, want the checkpoint that raised it", reopened)
+	}
+	if s := research.CurrentState(); s != TaskCompleted {
+		t.Errorf("research is %s, want it left completed", s)
+	}
+}

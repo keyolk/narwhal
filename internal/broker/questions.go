@@ -335,42 +335,65 @@ func (r *Run) Question(id int) (Question, bool) {
 // told on the radio, a finished one whose assumption was wrong is reopened
 // with the answer, and the run's answer follows (ReopenWithDependents). It
 // returns the tasks reopened.
+//
+// A question a reviewer raised is the reviewer's to carry: it saw the
+// findings together, and what follows builds on its outcome, not on the
+// asker's. Reopening the asker instead re-ran research whose finding stood
+// either way ("both are viable"), and held the checkpoint's dependents until
+// it finished again. The asker is still told while it works.
 func (r *Run) ApplyAnswer(q Question) []string {
 	if q.TaskID == PlanAsker || q.Open() {
-		return nil
-	}
-	t := r.GetTask(q.TaskID)
-	if t == nil {
 		return nil
 	}
 	who := "The operator"
 	if q.ResolvedBy != "" {
 		who = q.ResolvedBy + ", from the run's findings,"
 	}
-	note := fmt.Sprintf("%s answered your question #%d.\n\nQ: %s\nYou assumed: %s\nAnswer: %s",
-		who, q.ID, q.Text, orNone(q.Assumed), q.Answer)
-	switch t.CurrentState() {
-	case TaskCompleted, TaskFailed:
+	if q.RaisedBy == "" || q.RaisedBy == q.TaskID {
+		note := fmt.Sprintf("%s answered your question #%d.\n\nQ: %s\nYou assumed: %s\nAnswer: %s",
+			who, q.ID, q.Text, orNone(q.Assumed), q.Answer)
+		return r.carryAnswer(q, q.TaskID, note)
+	}
+	if t := r.GetTask(q.TaskID); t != nil && !q.Blocking && !taskFinished(t) {
+		r.tellAnswer(q, q.TaskID, fmt.Sprintf("%s answered your question #%d, which %s raised.\n\nQ: %s\nYou assumed: %s\nAnswer: %s",
+			who, q.ID, q.RaisedBy, q.Text, orNone(q.Assumed), q.Answer))
+	}
+	note := fmt.Sprintf("%s answered question #%d, which %s asked and you raised.\n\nQ: %s\n%s assumed: %s\nAnswer: %s",
+		who, q.ID, q.TaskID, q.Text, q.TaskID, orNone(q.Assumed), q.Answer)
+	return r.carryAnswer(Question{ID: q.ID, Text: q.Text, Assumed: q.Assumed, Answer: q.Answer,
+		AcceptedAssumption: q.AcceptedAssumption, AnsweredAt: q.AnsweredAt}, q.RaisedBy, note)
+}
+
+// carryAnswer brings an answer to one task: reopened when it finished on
+// an assumption the answer overturns, told when it is still working.
+func (r *Run) carryAnswer(q Question, taskID, note string) []string {
+	t := r.GetTask(taskID)
+	if t == nil {
+		return nil
+	}
+	if taskFinished(t) {
 		if !q.Differs() {
 			return nil
 		}
 		return r.ReopenWithDependents(t, note+"\n\nYour outcome was built on the assumption. Revise the work "+
 			"to follow the answer.")
-	default:
-		if q.Blocking {
-			// The worker is waiting inside its ask call, which returns the
-			// answer itself.
-			return nil
-		}
-		msg := note
-		if q.Differs() {
-			msg += "\n\nThis differs from what you assumed: change course to follow it."
-		} else {
-			msg += "\n\nYour assumption stands."
-		}
-		r.PostMessage(WorklogThread, "main", []string{"worker-" + q.TaskID}, PriorityUrgent, msg)
+	}
+	if q.Blocking {
+		// The worker is waiting inside its ask call, which returns the
+		// answer itself.
 		return nil
 	}
+	r.tellAnswer(q, taskID, note)
+	return nil
+}
+
+func (r *Run) tellAnswer(q Question, taskID, note string) {
+	if q.Differs() {
+		note += "\n\nThis differs from what was assumed: change course to follow it."
+	} else {
+		note += "\n\nThe assumption stands."
+	}
+	r.PostMessage(WorklogThread, "main", []string{"worker-" + taskID}, PriorityUrgent, note)
 }
 
 func orNone(s string) string {
@@ -423,4 +446,9 @@ func (t *Task) IsCheckpoint() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return isCheckpointName(t.Name, t.Assignment)
+}
+
+func taskFinished(t *Task) bool {
+	s := t.CurrentState()
+	return s == TaskCompleted || s == TaskFailed
 }

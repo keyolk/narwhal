@@ -583,7 +583,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.steerNote(fmt.Sprintf("not sent (%v): %s", msg.err, msg.text), true)
 			return m, nil
 		}
-		m.steerNote(msg.text, false)
+		note := "sent: " + msg.text
+		if len(msg.reopened) > 0 {
+			note = "reopened " + strings.Join(msg.reopened, ", ") + " — resuming its worker with: " + msg.text
+		}
+		m.steerNote(note, false)
 		// Show the instruction on the radio now rather than on the next
 		// tick, so it is clear it went in.
 		return m, m.poll()
@@ -713,7 +717,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case "i":
-		m.steering, m.steerBuf = true, nil
+		m.startSteer("")
 		return m, nil
 	case "tab":
 		m.focus = m.focus.next()

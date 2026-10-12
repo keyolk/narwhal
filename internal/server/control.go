@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -266,12 +267,60 @@ func DispatchTask(reg *broker.AgentRegistry, l *launcher.Launcher, run *broker.R
 	if err != nil {
 		return fmt.Errorf("setup agent: %w", err)
 	}
+	if fu := task.CurrentFollowUp(); fu != "" {
+		followUpConfig(&cfg, l, task, fu)
+	}
 	task.StartDispatch(fmt.Sprintf("%s-d%d", task.ID, task.DispatchCount()+1), agentID)
 	if err := l.Launch(agentDir, cfg); err != nil {
 		task.FailDispatch(err.Error(), run)
 		return fmt.Errorf("launch worker: %w", err)
 	}
 	return nil
+}
+
+// followUpConfig points a reopened task's dispatch at the worker that did
+// it: its Claude session resumed, with the operator's instruction as the
+// next turn. See broker/followup.go.
+//
+// When that session cannot be resumed — no id was recorded, or its
+// transcript is gone — a fresh worker is started instead, told what the
+// task concluded and what is now asked. It lacks the first worker's
+// context but not the instruction, which is the part that must not be
+// lost.
+func followUpConfig(cfg *launcher.WorkerConfig, l *launcher.Launcher, task *broker.Task, instruction string) {
+	sid := l.RecordedSessionID(cfg.AgentID)
+	if sid != "" {
+		if _, err := os.Stat(launcher.TranscriptPath(l.CWD(), sid)); err == nil {
+			cfg.ResumeSession = sid
+			cfg.Prompt = followUpPrompt(task.ID, instruction)
+			return
+		}
+	}
+	var b strings.Builder
+	b.WriteString(cfg.Assignment)
+	if prev := strings.TrimSpace(task.PreviousOutcome()); prev != "" {
+		fmt.Fprintf(&b, "\n\n## This task was done once already\n\nIts outcome then was:\n\n%s\n", prev)
+	}
+	fmt.Fprintf(&b, "\n\n## Follow-up from the operator\n\n%s\n\n"+
+		"Build on what was done rather than redoing it, then call task-done with the updated outcome.\n", instruction)
+	cfg.Assignment = b.String()
+}
+
+// followUpPrompt is the resumed worker's next turn.
+//
+// It says the task was reopened rather than relying on the worker to infer
+// it, because the session's last memory is calling task-done: without
+// this, the natural reading is a stray message after the work was over.
+// The outcome it asks for is the whole updated answer — task-done records
+// one outcome, and a delta would replace the answer with a fragment.
+func followUpPrompt(taskID, instruction string) string {
+	return fmt.Sprintf("Your task %s was finished, and the operator has reopened it with a follow-up "+
+		"instruction:\n\n%s\n\n"+
+		"Act on it in the same working directory, with what you already know. Your helper scripts "+
+		"(send, drain, watch, artifact, task-done, …) have been reissued at the same paths; start a "+
+		"radio watcher again if the instruction involves peers. When you are done, call task-done "+
+		"with your full updated outcome — the whole answer as it now stands, not only what changed, "+
+		"because task-done replaces the recorded outcome.", taskID, instruction)
 }
 
 // handleControlDrain returns radio messages after a cursor, from the
@@ -422,11 +471,6 @@ func (s *Server) handleControlSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	run := s.broker.GetRun(req.RunID)
-	if run == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
-		return
-	}
 	if req.ThreadID == "" {
 		req.ThreadID = "worklog"
 	}
@@ -434,13 +478,74 @@ func (s *Server) handleControlSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "content is required"})
 		return
 	}
+	run := s.broker.GetRun(req.RunID)
+	if run == nil {
+		// A run this daemon has not hosted since it started — finished
+		// before a restart. Its record is on disk, and an instruction to
+		// one of its tasks reopens it; anything else has nowhere to go.
+		snap, err := store.LoadRun(req.RunID)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found"})
+			return
+		}
+		restored := broker.RestoreRun(snap)
+		if len(restored.AddressedTasks(req.Mentions, req.Content)) == 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{
+				"error": "this run has finished; address a task with @task to reopen it with the instruction",
+			})
+			return
+		}
+		s.broker.AdoptRun(restored)
+		run = restored
+	}
 	prio := broker.PriorityNormal
 	switch broker.Priority(req.Priority) {
 	case broker.PriorityFYI, broker.PriorityNormal, broker.PriorityUrgent:
 		prio = broker.Priority(req.Priority)
 	}
-	msg := run.PostMessage(req.ThreadID, "main", req.Mentions, prio, req.Content)
-	writeJSON(w, http.StatusOK, msg)
+	// Mentions are recorded as worker ids, whichever form the caller used,
+	// so the watcher of a task named in the text wakes too.
+	addressed := run.AddressedTasks(req.Mentions, req.Content)
+	mentions := append([]string(nil), req.Mentions...)
+	for _, t := range addressed {
+		if !slices.Contains(mentions, "worker-"+t.ID) {
+			mentions = append(mentions, "worker-"+t.ID)
+		}
+	}
+	msg := run.PostMessage(req.ThreadID, "main", mentions, prio, req.Content)
+	reopened := s.reopenFinished(run, addressed, req.Content)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"seq": msg.Seq, "run_id": run.ID, "mentions": msg.Mentions, "reopened": reopened,
+	})
+}
+
+// reopenFinished reopens the addressed tasks that had finished, with the
+// instruction, and puts their run back in front of the dispatcher, which
+// resumes each one's worker. A task still running reads the instruction on
+// the radio and is left alone. See broker/followup.go.
+func (s *Server) reopenFinished(run *broker.Run, tasks []*broker.Task, instruction string) []string {
+	var reopened []string
+	for _, t := range tasks {
+		if t.Reopen(instruction) {
+			reopened = append(reopened, t.ID)
+		}
+	}
+	if len(reopened) == 0 {
+		return []string{}
+	}
+	switch run.CurrentState() {
+	case broker.RunDone, broker.RunFailed, broker.RunCanceled:
+		run.SetState(broker.RunActive)
+	}
+	if s.control != nil {
+		// A launcher is what puts a run in front of the dispatcher; a
+		// settled run's was retired.
+		s.control.LauncherFor(run.ID, run.Snapshot().CWD)
+	}
+	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
+		fmt.Sprintf("%s reopened %s with the operator's instruction; resuming %s.", broker.RelayPrefix,
+			strings.Join(reopened, ", "), map[bool]string{true: "its worker", false: "their workers"}[len(reopened) == 1]))
+	return reopened
 }
 
 // handleControlCancel stops a run's workers. The tasks are left in whatever

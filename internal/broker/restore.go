@@ -111,6 +111,8 @@ func RestoreRun(s Snapshot) *Run {
 			// answer would be asked a second time for work already done.
 			Check:       ts.Check,
 			CheckResult: ts.CheckResult,
+			FollowUp:    ts.FollowUp,
+			ReopenedAt:  ts.ReopenedAt,
 		}
 		if ts.Artifacts != nil {
 			t.Artifacts = ts.Artifacts.clone()

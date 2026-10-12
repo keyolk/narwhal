@@ -8,11 +8,19 @@
 //
 // "@worker-x" or "@x" in the text addresses that task, and a leading "!"
 // marks it urgent — the two things a worker's watcher acts on.
+//
+// Addressing a task that has finished reopens it: the daemon resumes the
+// worker's Claude session with the instruction (see broker/followup.go).
+// That is the one thing a finished run can still be told, so its line
+// takes keystrokes too — and an instruction to no one in particular is
+// refused there with the reason, rather than posted to a radio nobody
+// reads. From a task's view, i starts the line already addressed to it.
 package main
 
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -22,12 +30,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	nd "github.com/keyolk/narwhal/internal/daemon"
 )
 
-// steerSentMsg reports how a posted instruction went.
+// steerSentMsg reports how a posted instruction went, and which finished
+// tasks it reopened.
 type steerSentMsg struct {
-	text string
-	err  error
+	text     string
+	reopened []string
+	err      error
 }
 
 // steerNoticeFor is how long the footer shows a send result.
@@ -61,24 +72,55 @@ func parseSteer(line, runID string, tasks map[string]bool) (steerRequest, bool) 
 	return req, true
 }
 
+// daemonURL finds the running daemon, for a run read from disk: the
+// daemon that ran it may be gone, but the one running now can reopen it.
+// A variable so tests can stand in for it.
+var daemonURL = func() (string, error) { return nd.URL() }
+
 // sendSteer posts an instruction in the background.
 func (m tuiModel) sendSteer(req steerRequest) tea.Cmd {
-	url := m.live.BrokerURL + "/api/v1/control/send"
+	base := m.live.BrokerURL
 	client := m.client
 	return func() tea.Msg {
+		if base == "" {
+			u, err := daemonURL()
+			if err != nil {
+				return steerSentMsg{text: req.Content, err: fmt.Errorf("no daemon is running to reopen this run (narwhal daemon start): %w", err)}
+			}
+			base = u
+		}
 		body, err := json.Marshal(req)
 		if err != nil {
 			return steerSentMsg{text: req.Content, err: err}
 		}
-		resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+		resp, err := client.Post(base+"/api/v1/control/send", "application/json", bytes.NewReader(body))
 		if err != nil {
 			return steerSentMsg{text: req.Content, err: err}
 		}
 		defer resp.Body.Close()
+		var out struct {
+			Reopened []string `json:"reopened"`
+			Error    string   `json:"error"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&out)
 		if resp.StatusCode != http.StatusOK {
+			if out.Error != "" {
+				return steerSentMsg{text: req.Content, err: errors.New(out.Error)}
+			}
 			return steerSentMsg{text: req.Content, err: fmt.Errorf("daemon returned %d", resp.StatusCode)}
 		}
-		return steerSentMsg{text: req.Content}
+		if decodeErr != nil {
+			return steerSentMsg{text: req.Content, err: fmt.Errorf("daemon answer: %w", decodeErr)}
+		}
+		return steerSentMsg{text: req.Content, reopened: out.Reopened}
+	}
+}
+
+// startSteer opens the command line, addressed to task when one is given.
+func (m *tuiModel) startSteer(task string) {
+	m.steering, m.steerBuf = true, nil
+	if task != "" {
+		m.steerBuf = []rune("@" + task + " ")
 	}
 }
 
@@ -95,16 +137,17 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		line := string(m.steerBuf)
 		m.steering, m.steerBuf = false, nil
-		if m.live.BrokerURL == "" {
-			m.steerNote("this run has no live daemon; nothing to steer", true)
-			return m, nil
-		}
 		tasks := make(map[string]bool, len(m.snap.Tasks))
 		for _, t := range m.snap.Tasks {
 			tasks[t.ID] = true
 		}
 		req, ok := parseSteer(line, m.runID(), tasks)
 		if !ok {
+			return m, nil
+		}
+		if !m.runIsLive() && len(req.Mentions) == 0 {
+			// Nothing is running to read it; only a task can be reopened.
+			m.steerNote("this run has finished — address a task with @task to reopen it with this instruction", true)
 			return m, nil
 		}
 		return m, m.sendSteer(req)
@@ -128,9 +171,9 @@ func (m *tuiModel) steerNote(text string, failed bool) {
 	m.steerMsg, m.steerFailed, m.steerAt = text, failed, time.Now()
 }
 
-// canSteer reports whether instructions to this run would reach anyone:
-// it has a daemon to post through, and work still going.
-func (m tuiModel) canSteer() bool {
+// runIsLive reports whether the run has work going that an instruction
+// to no one in particular could reach.
+func (m tuiModel) runIsLive() bool {
 	if m.live.BrokerURL == "" {
 		return false
 	}
@@ -164,14 +207,15 @@ func (m tuiModel) steerBar() string {
 		if m.steerFailed {
 			return fit(styRedBold.Render("✗ ") + styRed.Render(m.steerMsg))
 		}
-		return fit(styGreenBold.Render("✓ ") + styDim.Render("sent: ") + m.steerMsg)
+		return fit(styGreenBold.Render("✓ ") + m.steerMsg)
 	}
-	if !m.canSteer() {
+	if !m.runIsLive() {
 		why := "this request has finished"
 		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {
-			why = "its daemon is gone, so instructions would reach no one"
+			why = "its daemon is gone"
 		}
-		return fit(styDim.Render("» " + why + " · r its result · n a next step that builds on it"))
+		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render("i") +
+			styDim.Render(" @task reopens a task with an instruction · r result · n next step"))
 	}
 	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
 		styDim.Render(" to tell the workers something")

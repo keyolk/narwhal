@@ -512,6 +512,12 @@ type Task struct {
 	// Guarded with Check by the task lock. See check.go for why this is
 	// recorded rather than enforced.
 	CheckResult string
+	// FollowUp is an operator instruction a finished task was reopened
+	// with, waiting for its worker's session to be resumed; ReopenedAt is
+	// the first dispatch after the reopen, so the circuit breaker counts
+	// only the follow-up's failures. See followup.go.
+	FollowUp   string
+	ReopenedAt int
 }
 
 // Dispatch is one attempt to execute a Task. A retry mints a new Dispatch;
@@ -796,6 +802,7 @@ func (t *Task) snapshot() TaskSnapshot {
 	}
 	ts.Check = t.Check
 	ts.CheckResult = t.CheckResult
+	ts.FollowUp, ts.ReopenedAt = t.FollowUp, t.ReopenedAt
 	if !t.Artifacts.Empty() {
 		a := t.Artifacts.clone()
 		ts.Artifacts = &a
@@ -986,6 +993,7 @@ func (t *Task) CompleteDispatch(output string, r *Run) {
 		t.Dispatches[len(t.Dispatches)-1].EndedAt = time.Now()
 	}
 	t.State = TaskCompleted
+	t.clearFollowUp()
 	t.mu.Unlock()
 	r.measureTask(t.ID)
 	r.ReleaseTaskFiles(t.ID)
@@ -1008,13 +1016,14 @@ func (t *Task) FailDispatch(reason string, r *Run) {
 		d.Output = reason
 		d.EndedAt = time.Now()
 	}
-	for _, d := range t.Dispatches {
+	for _, d := range t.Dispatches[min(t.ReopenedAt, len(t.Dispatches)):] {
 		if d.Status == DispatchFailed {
 			failedCount++
 		}
 	}
 	if failedCount >= MaxDispatchFailures {
 		t.State = TaskFailed
+		t.clearFollowUp()
 		t.mu.Unlock()
 		// A failed task spent tokens on every attempt the breaker allowed,
 		// so it is measured like any other terminal task. Accounting that
@@ -1055,6 +1064,7 @@ func (t *Task) CancelDispatch(reason string, r *Run) {
 	if t.State != TaskCompleted {
 		t.State = TaskFailed
 	}
+	t.clearFollowUp()
 	t.mu.Unlock()
 	if r != nil {
 		r.measureTask(t.ID)
@@ -1240,6 +1250,12 @@ type TaskSnapshot struct {
 	// only be ordered by the radio, where task-done is not posted.
 	StartedAt time.Time `json:"started_at,omitzero"`
 	EndedAt   time.Time `json:"ended_at,omitzero"`
+	// FollowUp is the operator instruction a reopened task waits to be
+	// resumed with, and ReopenedAt where its own dispatches begin; both
+	// survive a restart so the instruction is not lost before the worker
+	// gets it. See followup.go.
+	FollowUp   string `json:"follow_up,omitempty"`
+	ReopenedAt int    `json:"reopened_at,omitempty"`
 }
 
 // Usage is one task's measured cost.

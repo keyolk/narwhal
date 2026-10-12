@@ -41,6 +41,11 @@ type WorkerConfig struct {
 	// worker can run it while it still has the context to, rather than
 	// meeting it for the first time as a 202 at task-done.
 	Check string
+	// ResumeSession is the Claude session to continue rather than start:
+	// a finished task reopened with a follow-up resumes the worker that
+	// did it, with Prompt as its next turn. See broker/followup.go.
+	ResumeSession string
+	Prompt        string
 }
 
 // WorkerConfigFor builds the config for a task's worker.
@@ -555,6 +560,49 @@ func (l *Launcher) recordSession(agentID, sessionID string) {
 	}
 }
 
+// RecordedSessionID is the Claude session a worker of this run was launched
+// with, as recorded on disk — which outlives the launcher and the daemon —
+// or "" when there is none.
+func (l *Launcher) RecordedSessionID(agentID string) string {
+	b, err := os.ReadFile(filepath.Join(l.sessionDir, "agents", agentID, "claude-session-id"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// CWD is the directory the run's workers start in.
+func (l *Launcher) CWD() string { return l.cwd }
+
+// TranscriptPath resolves a session id to the file Claude Code writes it
+// to: ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl.
+//
+// The directory name is the working directory with every character that is
+// not alphanumeric replaced by a hyphen — "/private/tmp/x" becomes
+// "-private-tmp-x". Note this is the *resolved* path: /tmp is a symlink to
+// /private/tmp on macOS, and Claude records the resolved form, so a
+// transcript for a run whose cwd was recorded as /tmp/x is filed under
+// -private-tmp-x.
+func TranscriptPath(cwd, sessionID string) string {
+	home := homeDir()
+	if home == "" || sessionID == "" {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	var b strings.Builder
+	for _, r := range cwd {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	return filepath.Join(home, ".claude", "projects", b.String(), sessionID+".jsonl")
+}
+
 // SessionID returns the Claude session UUID a worker was launched with,
 // or "" if it has not been launched or the id could not be minted.
 func (l *Launcher) SessionID(agentID string) string {
@@ -608,7 +656,17 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	//
 	// A failure here is not fatal: the worker still runs, it just cannot
 	// be resumed by id.
-	if sid, err := newSessionUUID(); err == nil {
+	if cfg.ResumeSession != "" {
+		// The same session, continued: its transcript grows in place, so
+		// the monitor follows it under the id it already knows.
+		args = append(args, "--resume", cfg.ResumeSession)
+		l.mu.Lock()
+		if l.sessions == nil {
+			l.sessions = map[string]string{}
+		}
+		l.sessions[cfg.AgentID] = cfg.ResumeSession
+		l.mu.Unlock()
+	} else if sid, err := newSessionUUID(); err == nil {
 		args = append(args, "--session-id", sid)
 		l.mu.Lock()
 		if l.sessions == nil {
@@ -628,7 +686,11 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	args = append(args, cfg.Assignment)
+	prompt := cfg.Assignment
+	if cfg.ResumeSession != "" {
+		prompt = cfg.Prompt
+	}
+	args = append(args, prompt)
 	cmd := exec.Command("ccproxy", args...)
 	cmd.Dir = l.cwd
 	cmd.Stdout = logFile

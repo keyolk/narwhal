@@ -54,6 +54,8 @@ func (m tuiModel) viewHelp() string {
 		"",
 		section("Act on the run"),
 		key("i", "send the workers an instruction (@task to address one, ! urgent)"),
+		key("", "@task on a finished task reopens it: its worker's session resumes with the instruction"),
+		key("", "from a task's view, i starts the line already addressed to it"),
 		key("a", "attach to the selected worker's live Claude session"),
 		key("w", "inside tmux: a window with a pane per working task, each following it"),
 		key("esc", "back up: task → run → flow → home"),

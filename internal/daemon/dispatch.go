@@ -50,6 +50,8 @@ type Dispatcher struct {
 	// stuck tracks which long-running workers have been judged. See
 	// stuck.go.
 	stuck stuckWatch
+	// notes tracks the scene summaries being written. See scene_notes.go.
+	notes sceneNoter
 	// done closes when the loop has returned, so Stop can wait for a tick
 	// that is mid-write.
 	done chan struct{}
@@ -153,6 +155,7 @@ func (d *Dispatcher) tick() {
 		d.reap(runID, run, l.ActiveWorkers())
 		d.dispatchReady(runID, run)
 		d.checkStuck(runID, run)
+		d.noteScenes(runID, run)
 		// Persist after the graph has settled for this tick, so a crash
 		// or a restart leaves the run readable rather than erasing it.
 		// The write is gated on an actual change, so an idle run costs

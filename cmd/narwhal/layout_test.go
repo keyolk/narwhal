@@ -31,7 +31,7 @@ func TestTheRunViewIsTheGraphBesideOneReader(t *testing.T) {
 		t.Errorf("the frame's top %q does not hold the graph, then the tabs", top)
 	}
 	// Each number shows its pane in the right column, alone.
-	for key, want := range map[string]string{"2": "activity", "3": "started", "4": "LockKey is missing"} {
+	for key, want := range map[string]string{"2": "activity", "3": "now", "4": "LockKey is missing"} {
 		got := ansi.Strip(press(m, "1", key).View())
 		if !strings.Contains(got, want) {
 			t.Errorf("%s does not show %q:\n%s", key, want, got)

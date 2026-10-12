@@ -44,19 +44,30 @@ func (m *tuiModel) openFromFocus() tea.Cmd {
 			m.detailScroll = 0
 		}
 	case focusTimeline:
-		events := m.timelineEvents()
-		i, ok := m.selectedEvent(events)
+		// A scene leads to its subject: a task's course to the task, an
+		// exchange to its first message, the run's start to what it
+		// continues.
+		scenes := m.timelineScenes()
+		i, ok := m.selectedScene(len(scenes))
 		if !ok {
 			return nil
 		}
-		e := events[i]
-		switch {
-		case e.Run != "":
-			return m.openRun(e.Run)
-		case e.Seq > 0:
-			m.openMessage(e.Seq)
-		case m.taskByID(e.Who).ID != "":
-			m.openTask(e.Who, e.At)
+		sc := scenes[i]
+		switch sc.Kind {
+		case broker.SceneTask:
+			m.openTask(sc.Who[0], time.Time{})
+			return nil
+		case broker.SceneNow:
+			return nil
+		}
+		for _, e := range sc.Events {
+			switch {
+			case e.Run != "":
+				return m.openRun(e.Run)
+			case e.Seq > 0:
+				m.openMessage(e.Seq)
+				return nil
+			}
 		}
 	}
 	return nil

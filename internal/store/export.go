@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -88,18 +89,22 @@ func ExportMarkdown(s broker.Snapshot) string {
 	// the judge made, when each task ended. The Tasks section says what
 	// each concluded and the radio what they said; neither says in what
 	// order, or which of it the operator was involved in.
-	if events := broker.Timeline(s); len(events) > 0 {
+	// The run told as scenes, as the monitor tells it (broker/scenes.go):
+	// a document is read by a person, not replayed.
+	if scenes := broker.Scenes(s, time.Now()); len(scenes) > 1 {
 		b.WriteString("## Timeline\n\n")
-		for _, e := range events {
-			who := e.Who
-			if who != "" {
-				who = " **" + who + "**"
+		for _, sc := range scenes {
+			at := "now  "
+			if sc.Kind != broker.SceneNow {
+				at = sc.At().Local().Format("15:04")
 			}
-			text := e.Text
-			if text != "" {
-				text = " — " + text
+			fmt.Fprintf(&b, "- %s %s **%s**\n", at, sc.Mark, sc.Title)
+			if sc.Note != "" {
+				fmt.Fprintf(&b, "  - %s\n", sc.Note)
 			}
-			fmt.Fprintf(&b, "- %s %s%s%s\n", e.At.Local().Format("15:04:05"), e.Kind, who, text)
+			for _, l := range sc.Lines {
+				fmt.Fprintf(&b, "  - %s\n", oneLineClip(l, 300))
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -394,4 +399,13 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i])
 	}
 	return s
+}
+
+// oneLineClip is a line flattened and cut to n runes, for a list item.
+func oneLineClip(s string, n int) string {
+	r := []rune(strings.Join(strings.Fields(s), " "))
+	if len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return string(r)
 }

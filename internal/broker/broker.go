@@ -535,9 +535,11 @@ type Dispatch struct {
 	EndedAt time.Time
 	Status  DispatchStatus
 	Output  string
-	// AnswerAsked records that this dispatch's outcome was put to the
-	// judge at task-done, which happens once. See answered.go.
+	// AnswerAsked and FoldAsked record that this dispatch's outcome was
+	// put to the judge at task-done, which happens once each. See
+	// answered.go.
 	AnswerAsked bool
+	FoldAsked   bool
 }
 
 // Thread is a named conversation channel within a Run's radio layer.

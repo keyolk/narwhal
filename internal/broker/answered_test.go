@@ -118,3 +118,33 @@ func TestADependentTheChangeCannotReachIsLeftFinished(t *testing.T) {
 		t.Errorf("%d skips recorded, want 1 (docs)", skipped)
 	}
 }
+
+// A synthesis whose answer leaves a peer out is handed back once, naming it.
+func TestASynthesisThatLeavesAPeerOutIsHandedBack(t *testing.T) {
+	b := New()
+	b.SetJudge(JudgeFunc(func(_ context.Context, state, name, _ string) (float64, bool) {
+		if name == QuestionFolded && strings.Contains(state, "PEER b:") {
+			return 0.05, true
+		}
+		return 0.9, true
+	}))
+	r := b.CreateRun("r", "p", t.TempDir(), "main")
+	done(t, r, "a", "a")
+	done(t, r, "b", "b")
+	syn := r.AddTask("synthesis", "synthesis", "combine", []string{"a", "b"})
+	syn.StartDispatch("d1", "worker-synthesis")
+
+	hint := r.JudgeFolded(syn, "a done; that is all")
+	if !strings.Contains(hint, "what b concluded") || strings.Contains(hint, "a,") {
+		t.Fatalf("hint = %q, want it to name b alone", hint)
+	}
+	if hint := r.JudgeFolded(syn, "a done; that is all"); hint != "" {
+		t.Errorf("handed back twice: %q", hint)
+	}
+	// Not a synthesis: never asked.
+	other := r.AddTask("c", "c", "x", []string{"a"})
+	other.StartDispatch("d1", "worker-c")
+	if hint := r.JudgeFolded(other, "x"); hint != "" {
+		t.Errorf("a non-synthesis was judged: %q", hint)
+	}
+}

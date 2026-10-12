@@ -140,3 +140,86 @@ func (r *Run) judgeAffected(tasks []*Task, ans *Task, upstream, instruction stri
 	wg.Wait()
 	return out
 }
+
+// QuestionFolded names the judgement made when a synthesis says it is done.
+const QuestionFolded = "folded"
+
+// FoldedThreshold is the P(the answer takes a peer's findings into
+// account) below which a synthesis is handed back to fold that peer in.
+//
+// Calibrated 2026-10-13 on the nine runs on disk with a synthesis and at
+// least two peers: each synthesis judged against its own peers (25) and
+// against two peers of another run (16). Own peers scored 0.25–0.97,
+// foreign ones 0.06–0.49, 13 of 16 under 0.2. The two lowest own peers were
+// real signals — one answer contradicted its peer's count without saying
+// why, and one carried only part of a peer's report — but at 0.2 neither
+// is handed back: the cost of a wrong handback is one more round, and the
+// threshold is kept where it costs none on the runs that went well.
+const FoldedThreshold = 0.2
+
+const foldedQuestion = "ANSWER is a run's final answer, written by its synthesis task. PEER is one " +
+	"task the synthesis depended on, with what it concluded. Does ANSWER take PEER's findings into " +
+	"account — use them, reflect them, or say why they do not matter — rather than leave them out?"
+
+// JudgeFolded asks, for a synthesis completing, whether its answer takes
+// each finished dependency's findings into account, once per dispatch. It
+// returns the reason to hand the call back, naming the peers left out, or
+// "" to complete.
+func (r *Run) JudgeFolded(t *Task, answer string) string {
+	if r.currentJudge() == nil || !t.IsSynthesis() || strings.TrimSpace(answer) == "" {
+		return ""
+	}
+	t.mu.Lock()
+	n := len(t.Dispatches)
+	asked := n > 0 && t.Dispatches[n-1].FoldAsked
+	if n > 0 {
+		t.Dispatches[n-1].FoldAsked = true
+	}
+	deps := append([]string(nil), t.Deps...)
+	t.mu.Unlock()
+	if asked {
+		return ""
+	}
+	var peers []TaskSnapshot
+	for _, d := range deps {
+		if p := r.GetTask(d); p != nil {
+			if s := p.snapshot(); s.State == TaskCompleted && strings.TrimSpace(s.Outcome) != "" {
+				peers = append(peers, s)
+			}
+		}
+	}
+	missing := make([]bool, len(peers))
+	var wg sync.WaitGroup
+	for i, p := range peers {
+		wg.Add(1)
+		go func(i int, p TaskSnapshot) {
+			defer wg.Done()
+			state := "ANSWER:\n" + clip(answer, 3000) + "\n\nPEER " + p.ID + ":\nTASK: " + clip(p.Assignment, 500) +
+				"\nCONCLUDED: " + clip(p.Outcome, 1500)
+			v := r.ask(t.ID, QuestionFolded, state, foldedQuestion)
+			v.Ask = p.ID
+			if v.Decided && v.P < FoldedThreshold {
+				v.Action = ActionReturned
+				missing[i] = true
+			} else if v.Decided {
+				v.Action = ActionComplete
+			}
+			r.recordVerdict(v)
+		}(i, p)
+	}
+	wg.Wait()
+	var left []string
+	for i, p := range peers {
+		if missing[i] {
+			left = append(left, p.ID)
+		}
+	}
+	if len(left) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Your answer does not appear to take into account what %s concluded. Read %s "+
+		"outcome (and what %s posted to the results thread), then fold it into the answer — or say in "+
+		"the answer why it does not matter — and call task-done again with the full answer. The next "+
+		"call completes the task either way.", strings.Join(left, ", "),
+		map[bool]string{true: "its", false: "their"}[len(left) == 1], map[bool]string{true: "it", false: "they"}[len(left) == 1])
+}

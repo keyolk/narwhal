@@ -93,3 +93,17 @@ func TestACheckpointIsTheReviewerWhileItRuns(t *testing.T) {
 		t.Errorf("reviewer = %v, want the checkpoint", rv)
 	}
 }
+
+// A task that builds on the checkpoint and says so is not a checkpoint: it
+// must wait for one, not start with it.
+func TestMentioningTheCheckpointIsNotBeingOne(t *testing.T) {
+	r := New().CreateRun("r", "p", t.TempDir(), "main")
+	r.AddTask("a", "a", "research", nil)
+	r.AddTask("checkpoint", "checkpoint", "This is the checkpoint task.", []string{"a"})
+	r.AddTask("write", "write", "Read the checkpoint task's outcome and write it.", []string{"checkpoint"})
+	for _, d := range r.DispatchableTasks() {
+		if d.ID == "write" {
+			t.Fatal("a task that only mentions the checkpoint started before it")
+		}
+	}
+}

@@ -157,9 +157,18 @@ func (r *Run) reviewer() *Task {
 
 // isCheckpointName reports whether a task is a checkpoint: the point after
 // research where the run stops for the operator's choices.
+//
+// By its name, or an assignment that declares itself one ("This is the
+// checkpoint task"). Mentioning a checkpoint is not being one: a task that
+// builds on the checkpoint says "read the checkpoint task's outcome", and
+// matching that started it alongside the checkpoint it was meant to wait
+// for.
 func isCheckpointName(name, assignment string) bool {
-	return strings.Contains(strings.ToLower(name), "checkpoint") ||
-		strings.Contains(strings.ToLower(assignment), "checkpoint task")
+	if strings.Contains(strings.ToLower(name), "checkpoint") {
+		return true
+	}
+	a := strings.ToLower(assignment)
+	return strings.Contains(a, "this is the checkpoint task") || strings.Contains(a, "you are the checkpoint")
 }
 
 // Candidates returns the questions waiting for the reviewer.

@@ -52,6 +52,7 @@ func (m tuiModel) viewHelp() string {
 		section("Act on the run"),
 		key("i", "send the workers an instruction (@task to address one, ! urgent)"),
 		key("a", "attach to the selected worker's live Claude session"),
+		key("w", "inside tmux: a window with a pane per working task, each following it"),
 		key("esc", "back up: task → run → flow → home"),
 		key("n", "on home, start a new request in the directory narwhal was opened in"),
 		key("e  ctrl-e", "write it in $VISUAL / $EDITOR instead (vi if neither is set)"),

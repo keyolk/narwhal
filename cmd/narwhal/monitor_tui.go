@@ -253,6 +253,9 @@ type tuiModel struct {
 	steerMsg    string
 	steerFailed bool
 	steerAt     time.Time
+	// steerStep is the flow step the open line sends to, when it was
+	// opened from the flow view; nil for the watched run.
+	steerStep *steerTarget
 
 	width  int
 	height int

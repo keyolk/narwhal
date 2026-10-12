@@ -125,9 +125,9 @@ func TestSendResultShowsInTheFooter(t *testing.T) {
 	}
 }
 
-// A finished run has nothing running to read an instruction to no one;
-// say so rather than posting it to a radio nobody reads.
-func TestAnUnaddressedInstructionToAFinishedRunSaysWhy(t *testing.T) {
+// A finished run whose answer came from several tasks cannot be resumed
+// without saying which; say so rather than guess.
+func TestAnUnaddressedInstructionToAFinishedRunWithNoAnswerTaskSaysWhy(t *testing.T) {
 	m := steerModel(t, "")
 	m.snap.State = broker.RunDone
 	m = press(m, "i")
@@ -135,9 +135,9 @@ func TestAnUnaddressedInstructionToAFinishedRunSaysWhy(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(tuiModel)
 	if cmd != nil {
-		t.Error("sent an instruction no one can read")
+		t.Error("sent an instruction with no task to resume")
 	}
-	if !strings.Contains(ansi.Strip(m.viewFooter()), "address a task with @task") {
+	if !strings.Contains(ansi.Strip(m.viewFooter()), "say which with @task") {
 		t.Errorf("footer = %q", ansi.Strip(m.viewFooter()))
 	}
 }

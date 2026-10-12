@@ -192,7 +192,13 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.detailScroll = 0
 			return m, tea.Batch(cmd, m.prStatusCmd())
 		}
-	case "n", "i":
+	case "i":
+		// An instruction for the selected step: its workers resume with
+		// it, where n plans a new step on top. See steer.go.
+		if m.flowSel < len(steps) {
+			m.startStepSteer(steps[m.flowSel], m.flowSel+1)
+		}
+	case "n":
 		m.startCompose(m.flowID)
 	case "e":
 		cmd := m.openNotesEditor(m.flowID)
@@ -254,13 +260,15 @@ func (m tuiModel) flowGeometry() flowGeom {
 		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
 	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
-	keys := "j/k step · l/tab read the step · z widen · enter open run · o outputs · r result · n next step · e notes · x export · c close · esc home"
+	keys := "j/k step · i resume the step · n next step · l/tab read · z widen · enter open run · o outputs · r result · e notes · x export · c close · esc home"
 	if m.flowDetail {
 		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · 1-9 open a PR or file · h/tab back to steps · z widen · n next step · esc home"
 	}
 	g.footer = styDim.Render(ansi.Truncate(keys, w, "…"))
 	if m.composing {
 		g.footer = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
+	} else if m.steering || (m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor) {
+		g.footer = m.steerBar() + "\n" + g.footer
 	} else if n := m.noticeLine(w); n != "" {
 		g.footer = n + "\n" + g.footer
 	}

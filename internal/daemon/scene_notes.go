@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/config"
 )
 
 // noteTimeout bounds one summarising call.
@@ -201,6 +202,11 @@ func parseNotes(s string) (map[string]sceneReading, error) {
 	return notes, nil
 }
 
-// scenesNotesOn reports whether notes are written: on unless
-// NARWHAL_SCENE_NOTES=off, the switch the judge has too.
-func scenesNotesOn() bool { return os.Getenv("NARWHAL_SCENE_NOTES") != "off" }
+var settingSceneNotes = config.Register(config.Key{Name: "scene_notes.enabled", Kind: config.Bool, Default: "true",
+	Help: "write one-line notes for the timeline's scenes with a small model (~30s per call)"})
+
+// scenesNotesOn reports whether notes are written: on unless the setting
+// or NARWHAL_SCENE_NOTES=off turns them off.
+func scenesNotesOn() bool {
+	return os.Getenv("NARWHAL_SCENE_NOTES") != "off" && config.GetBool(settingSceneNotes.Name)
+}

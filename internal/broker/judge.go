@@ -179,10 +179,10 @@ func (r *Run) Verdicts() []Verdict {
 func (r *Run) ask(taskID, question, state, instructions string) Verdict {
 	v := Verdict{At: time.Now(), TaskID: taskID, Question: question, Action: ActionFallback}
 	j := r.currentJudge()
-	if j == nil {
+	if j == nil || !r.judging(question) {
 		return v
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), judgeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), currentJudgeTimeout())
 	defer cancel()
 	start := time.Now()
 	v.P, v.Decided = j.Ask(ctx, state, question, instructions)
@@ -238,7 +238,7 @@ func (r *Run) ResolveExitWithoutDone(task *Task, agentID string) string {
 	state := "TASK:\n" + clip(task.assignment(), 800) + "\n\nMESSAGES:\n" + strings.Join(parts, "\n---\n")
 
 	v := r.ask(task.ID, QuestionNoResult, state, noResultQuestion)
-	if v.Decided && v.P >= NoResultThreshold {
+	if v.Decided && v.P >= threshold(QuestionNoResult) {
 		v.Action = ActionRetry
 		r.recordVerdict(v)
 		r.FailAndMaybeEscalate(task, fmt.Sprintf("worker exited without task-done; radio held no result (p=%.2f)", v.P))
@@ -247,7 +247,7 @@ func (r *Run) ResolveExitWithoutDone(task *Task, agentID string) string {
 	if v.Decided {
 		v.Action = ActionComplete
 	}
-	if r.currentJudge() != nil {
+	if r.judging(QuestionNoResult) {
 		r.recordVerdict(v)
 	}
 	task.CompleteDispatch("completed via radio activity", r)
@@ -288,10 +288,10 @@ func (r *Run) FailAndMaybeEscalate(task *Task, reason string) {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, clip(verdictTail.ReplaceAllString(f, ""), 500))
 	}
 	v := r.ask(task.ID, QuestionSameCause, b.String(), sameCauseQuestion)
-	if r.currentJudge() == nil {
+	if !r.judging(QuestionSameCause) {
 		return
 	}
-	if v.Decided && v.P >= SameCauseThreshold {
+	if v.Decided && v.P >= threshold(QuestionSameCause) {
 		v.Action = ActionEscalate
 		r.recordVerdict(v)
 		task.SetModel(next)
@@ -347,7 +347,7 @@ func (r *Run) AskForWorker(asker, question, state string) Verdict {
 	v := Verdict{At: time.Now(), TaskID: strings.TrimPrefix(asker, "worker-"),
 		Question: QuestionWorker, Action: ActionFallback, Asker: asker, Ask: question}
 	j := r.currentJudge()
-	if j != nil {
+	if j != nil && r.judging(QuestionWorker) {
 		ctx, cancel := context.WithTimeout(context.Background(), workerJudgeTimeout)
 		start := time.Now()
 		v.P, v.Decided = j.Ask(ctx, clip(state, 4000), QuestionWorker, question)

@@ -369,19 +369,28 @@ curl -s -X POST %s/send \
 # options your research found, list them, say which you recommend, and give
 # the context that makes it a question.
 set -euo pipefail
-QUESTION="$1"; ASSUMED="${2:-}"; shift 2 || true
-MODE="assume"; if [ "${1:-}" = "assume" ] || [ "${1:-}" = "blocking" ]; then MODE="$1"; shift; fi
-python3 - "$QUESTION" "$ASSUMED" "$MODE" "$@" <<'PY' > /tmp/narwhal-ask-$$.json
+# The arguments are read in Python: positionally as the usage says, or with
+# --assume/--blocking, which workers reach for — a shell shift took the
+# flag itself as the assumption.
+python3 - "$@" <<'PY' > /tmp/narwhal-ask-$$.json
 import json, sys
-q, assumed, mode, rest = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
-opts, ctx, rec = [], "", 0
+args = sys.argv[1:]
+pos, opts, ctx, rec, assumed, mode = [], [], "", 0, None, "assume"
 i = 0
-while i < len(rest):
-    a = rest[i]
-    if a == "--option" and i + 1 < len(rest): opts.append(rest[i+1]); i += 2
-    elif a == "--context" and i + 1 < len(rest): ctx = rest[i+1]; i += 2
-    elif a == "--recommend" and i + 1 < len(rest): rec = int(rest[i+1]); i += 2
-    else: i += 1
+while i < len(args):
+    a = args[i]
+    has = i + 1 < len(args)
+    if a == "--option" and has: opts.append(args[i+1]); i += 2
+    elif a == "--context" and has: ctx = args[i+1]; i += 2
+    elif a == "--recommend" and has: rec = int(args[i+1]); i += 2
+    elif a == "--assume" and has: assumed = args[i+1]; i += 2
+    elif a == "--blocking": mode = "blocking"; i += 1
+    elif a in ("assume", "blocking") and len(pos) >= 1: mode = a; i += 1
+    elif a.startswith("--"): i += 1
+    else: pos.append(a); i += 1
+q = pos[0] if pos else ""
+if assumed is None:
+    assumed = pos[1] if len(pos) > 1 else ""
 print(json.dumps({"question": q, "assumed": assumed, "blocking": mode == "blocking",
                   "options": opts, "context": ctx, "recommended": rec}))
 PY

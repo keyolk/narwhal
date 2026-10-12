@@ -72,10 +72,13 @@ type Question struct {
 	RaisedBy string `json:"raised_by,omitempty"`
 	// Answer is the operator's; empty while open. AcceptedAssumption
 	// records that the operator answered "as assumed".
-	Answer             string    `json:"answer,omitempty"`
-	AcceptedAssumption bool      `json:"accepted_assumption,omitempty"`
-	AskedAt            time.Time `json:"asked_at"`
-	AnsweredAt         time.Time `json:"answered_at,omitempty"`
+	Answer             string `json:"answer,omitempty"`
+	AcceptedAssumption bool   `json:"accepted_assumption,omitempty"`
+	// Overturns is the judge's reading of whether the answer calls for
+	// different work than the assumption, when it decided (answer_judge.go).
+	Overturns  *bool     `json:"overturns,omitempty"`
+	AskedAt    time.Time `json:"asked_at"`
+	AnsweredAt time.Time `json:"answered_at,omitempty"`
 }
 
 // PlanAsker is the TaskID of a question the planner asked.
@@ -89,11 +92,17 @@ func (q Question) Open() bool { return q.AnsweredAt.IsZero() }
 func (q Question) ForOperator() bool { return q.Open() && !q.Candidate }
 
 // Differs reports whether the answer departs from what was assumed: an
-// answer to a question with no assumption always does.
+// answer to a question with no assumption always does. Where the judge
+// read the answer against the assumption, its reading decides; otherwise
+// the text does.
 func (q Question) Differs() bool {
-	return !q.Open() && !q.AcceptedAssumption && q.MergedInto == 0 &&
-		strings.TrimSpace(q.Answer) != "" &&
-		!strings.EqualFold(strings.TrimSpace(q.Answer), strings.TrimSpace(q.Assumed))
+	if q.Open() || q.AcceptedAssumption || q.MergedInto != 0 || strings.TrimSpace(q.Answer) == "" {
+		return false
+	}
+	if q.Overturns != nil {
+		return *q.Overturns
+	}
+	return !strings.EqualFold(strings.TrimSpace(q.Answer), strings.TrimSpace(q.Assumed))
 }
 
 // QuestionSpec is what an asker says.
@@ -233,8 +242,12 @@ func (r *Run) Resolve(by string, res Resolution) (Question, error) {
 		r.mu.Unlock()
 		return *q, fmt.Errorf("question %d: answer, merge_into or raise is required", res.ID)
 	}
-	out := *q
+	settled := q.Answer != "" && q.MergedInto == 0
 	r.mu.Unlock()
+	if settled {
+		r.judgeOverturned(res.ID)
+	}
+	out, _ := r.Question(res.ID)
 	return out, nil
 }
 
@@ -295,7 +308,12 @@ func (r *Run) Answer(id int, text string, asAssumed bool) (Question, error) {
 		return *q, fmt.Errorf("question %d: an answer is required", id)
 	}
 	q.AnsweredAt = time.Now()
-	out := *q
+	r.mu.Unlock()
+	// Before the waiters wake: a blocking asker is told whether its
+	// assumption stood.
+	r.judgeOverturned(id)
+	r.mu.Lock()
+	out := r.questions[id-1]
 	waiters := r.answerWaiters[id]
 	delete(r.answerWaiters, id)
 	r.mu.Unlock()

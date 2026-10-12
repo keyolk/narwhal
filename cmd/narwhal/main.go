@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/config"
 	"github.com/keyolk/narwhal/internal/coordinator"
 	"github.com/keyolk/narwhal/internal/launcher"
 	"github.com/keyolk/narwhal/internal/server"
@@ -45,6 +46,10 @@ func main() {
 	// With no command, the home screen: every request and a line to start
 	// one. Usage was what this printed, which is the one thing a person
 	// starting the program does not need first.
+	// Settings come from ~/.narwhal/config.json for every command, the
+	// daemon included; see internal/config.
+	config.UseFile(config.DefaultPath())
+
 	if len(os.Args) < 2 {
 		homeCmd()
 		return
@@ -69,6 +74,8 @@ func main() {
 		mcpCmd(os.Args[2:])
 	case "experiment":
 		experimentCmd(os.Args[2:])
+	case "config":
+		configCmd(os.Args[2:])
 	case "version":
 		fmt.Println("narwhal " + version)
 	case "-h", "--help", "help":
@@ -317,6 +324,11 @@ Usage:
 
   narwhal experiment [--cwd DIR]
                 Two-worker passive-awareness validation scenario.
+
+  narwhal config [list [PREFIX] | get KEY | set KEY VALUE | unset KEY | path]
+                Settings in ~/.narwhal/config.json: which Jev judgements are
+                consulted and their thresholds, scene notes. A change applies
+                to the running daemon without a restart.
 
   narwhal version
 

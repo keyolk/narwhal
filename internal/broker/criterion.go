@@ -51,13 +51,13 @@ func (r *Run) JudgeCriterion(t *Task, outcome string) string {
 		t.Dispatches[n-1].CriterionAsked = true
 	}
 	t.mu.Unlock()
-	if crit == "" || asked || r.currentJudge() == nil || strings.TrimSpace(outcome) == "" {
+	if crit == "" || asked || !r.judging(QuestionCriterion) || strings.TrimSpace(outcome) == "" {
 		return ""
 	}
 	v := r.ask(t.ID, QuestionCriterion, "OUTCOME:\n"+clip(outcome, 4000),
 		"CRITERION is what a correct outcome for this task must satisfy. Does OUTCOME satisfy it?\n\nCRITERION: "+crit)
 	v.Ask = crit
-	if v.Decided && v.P < CriterionThreshold {
+	if v.Decided && v.P < threshold(QuestionCriterion) {
 		v.Action = ActionReturned
 		r.recordVerdict(v)
 		return fmt.Sprintf("Your outcome does not appear to satisfy this task's criterion (p=%.2f):\n\n  %s\n\n"+

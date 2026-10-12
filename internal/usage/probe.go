@@ -58,6 +58,8 @@ func (TranscriptProbe) TaskUsage(runID, taskID string) *broker.Usage {
 func NewBroker() *broker.Broker {
 	b := broker.New()
 	b.SetUsageProbe(TranscriptProbe{})
+	// NARWHAL_JEV=off is for tests and one-off runs; jev.enabled in the
+	// config file switches it for the operator (broker/settings.go).
 	if os.Getenv("NARWHAL_JEV") != "off" {
 		b.SetJudge(jev.New())
 	}

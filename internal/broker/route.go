@@ -70,7 +70,7 @@ const routeTimeout = 4 * time.Second
 // workers it concerns.
 func (r *Run) routeInstruction(m *Message) {
 	j := r.currentJudge()
-	if j == nil {
+	if j == nil || !r.judging(QuestionRoute) {
 		return
 	}
 	var running []*Task
@@ -114,7 +114,7 @@ func (r *Run) routeInstruction(m *Message) {
 		}
 	}
 	for i, v := range verdicts {
-		if v.Decided && v.P >= RouteThreshold && v.P >= best-RouteMargin {
+		if v.Decided && v.P >= threshold(QuestionRoute) && v.P >= best-RouteMargin {
 			verdicts[i].Action = ActionRouted
 		}
 	}

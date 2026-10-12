@@ -524,7 +524,35 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 | `narwhal show` | List recent runs (from disk), with what each one cost |
 | `narwhal show <id>` | Full run snapshot, per-task token accounting first |
 | `narwhal backfill` | Measure past runs from their transcripts (`--dry-run` to preview) |
+| `narwhal config` | Settings in `~/.narwhal/config.json` (`list`, `get`, `set`, `unset`, `path`) |
 | `narwhal version` | Print version |
+
+### Settings
+
+`~/.narwhal/config.json` holds what an operator tunes without a rebuild.
+The daemon re-reads it when it changes, so a setting applies to the next
+judgement with no restart. `NARWHAL_CONFIG` points elsewhere.
+
+```sh
+narwhal config                               # every setting, its value and what it does
+narwhal config set jev.overturned.threshold 0.4
+narwhal config set jev.followed.enabled off  # stop handing back outcomes that ignore an answer
+narwhal config set jev.enabled off           # no Jev judgements at all
+narwhal config unset jev.overturned.threshold
+```
+
+| Key | Default | |
+|---|---|---|
+| `jev.enabled` | `true` | Consult the Jev judge at all |
+| `jev.timeout` | `3s` | How long one dispatcher judgement may take |
+| `jev.<judgement>.enabled` | `true` | One judgement on or off |
+| `jev.<judgement>.threshold` | calibrated | The probability it acts at |
+| `scene_notes.enabled` | `true` | One-line timeline notes from a small model |
+
+Judgements: `no-result`, `same-cause`, `criterion`, `answered`, `followed`,
+`folded`, `affected`, `overturned`, `stuck`, `route`. Each default is the
+calibrated constant in `internal/broker`, whose comment says what it was
+measured on.
 
 ## Coverage
 

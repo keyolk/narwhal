@@ -750,7 +750,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case "i":
-		m.startSteer("")
+		// From a line of the timeline, the steer is to its task, quoting
+		// the line; anywhere else, to the run. See timeline.go.
+		if m.focus != focusTimeline || !m.steerFromTimeline() {
+			m.startSteer("")
+		}
 		return m, nil
 	case "tab":
 		m.focus = m.focus.next()
@@ -1239,7 +1243,7 @@ func (m *tuiModel) clampCursors() {
 	if n := len(m.snap.Messages); n > 0 && m.radioCur >= n {
 		m.radioCur = n - 1
 	}
-	if n := len(m.timelineScenes()); m.timelineSel >= n {
+	if n := len(m.timelineItems()); m.timelineSel >= n {
 		m.timelineSel = n - 1
 	}
 	if m.timelineSel < timelineFollow {
@@ -1836,7 +1840,7 @@ func (m tuiModel) footerKeys() string {
 		}
 		parts = append(parts, "jk move", "f follow", tab)
 	case focusTimeline:
-		parts = append(parts, "enter go to it", "space open into events", "jk scene", "l next tab")
+		parts = append(parts, "enter go to it", "i correct this", "space open scene", "jk line", "l next tab")
 	}
 	zoomKey := "z zoom"
 	if m.zoom >= 0 {

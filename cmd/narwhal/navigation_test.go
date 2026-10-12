@@ -69,8 +69,8 @@ func TestARetriedTaskShowsTheJudgesCall(t *testing.T) {
 // enter on a task's scene opens the task.
 func TestATaskSceneOpensItsTask(t *testing.T) {
 	m := press(fixtureRun(t), "3")
-	for i, sc := range m.timelineScenes() {
-		if sc.Kind == broker.SceneTask && sc.Who[0] == "api" {
+	for i, it := range m.timelineItems() {
+		if it.scene != nil && it.scene.Kind == broker.SceneTask && it.scene.Who[0] == "api" {
 			m.timelineSel = i
 		}
 	}
@@ -86,9 +86,9 @@ func TestATaskSceneOpensItsTask(t *testing.T) {
 func TestAnExchangeSceneOpensItsMessageAndThenItsTask(t *testing.T) {
 	m := press(fixtureRun(t), "3")
 	var key string
-	for i, sc := range m.timelineScenes() {
-		if sc.Kind == broker.SceneExchange {
-			m.timelineSel, key = i, sc.Key
+	for i, it := range m.timelineItems() {
+		if it.scene != nil && it.scene.Kind == broker.SceneExchange {
+			m.timelineSel, key = i, it.scene.Key
 		}
 	}
 	if key == "" {

@@ -337,6 +337,9 @@ type Run struct {
 	// questions are what workers and the planner asked the operator, and
 	// answerWaiters the blocking askers waiting on each. See questions.go.
 	questions     []Question
+	// taskReasons are what the daemon read out of finished tasks'
+	// outcomes. See provenance.go.
+	taskReasons map[string]TaskReasons
 	answerWaiters map[int][]chan struct{}
 }
 
@@ -1214,6 +1217,9 @@ type Snapshot struct {
 	// Questions are what the run's workers and planner asked the operator,
 	// answered or open. See questions.go.
 	Questions []Question `json:"questions,omitempty"`
+	// TaskReasons are the decisions and unverified points the daemon read
+	// out of finished tasks' outcomes, by task. See provenance.go.
+	TaskReasons map[string]TaskReasons `json:"task_reasons,omitempty"`
 	// Flow is the piece of work this run is a step of, and ParentRun the
 	// step before it. A request big enough to need several rounds —
 	// plan, then build, then verify — was several unrelated runs, each
@@ -1327,6 +1333,7 @@ func (r *Run) Snapshot() Snapshot {
 		Verdicts:       append([]Verdict(nil), r.verdicts...),
 		SceneNotes:     r.copySceneNotes(),
 		Questions:      append([]Question(nil), r.questions...),
+		TaskReasons:    r.copyTaskReasons(),
 		Flow:           r.flow,
 		ParentRun:      r.parentRun,
 	}

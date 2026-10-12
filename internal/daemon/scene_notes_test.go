@@ -11,8 +11,8 @@ import (
 )
 
 func TestParseNotesToleratesFencesAndProse(t *testing.T) {
-	got, err := parseNotes("here you go:\n```json\n{\"a\": \"task-3이 소유\", \"b\": \"끝\"}\n```")
-	if err != nil || got["a"] != "task-3이 소유" || got["b"] != "끝" {
+	got, err := parseNotes("here you go:\n```json\n{\"a\": \"task-3이 소유\", \"b\": {\"note\": \"끝\", \"unverified\": [\"실측 안 함\"]}}\n```")
+	if err != nil || got["a"].Note != "task-3이 소유" || got["b"].Note != "끝" || got["b"].Unverified[0] != "실측 안 함" {
 		t.Fatalf("got %v, %v", got, err)
 	}
 	if _, err := parseNotes("no json"); err == nil {
@@ -26,11 +26,11 @@ func TestClosedScenesAreSummarisedOnce(t *testing.T) {
 	t.Setenv("NARWHAL_SCENE_NOTES", "on")
 	var calls atomic.Int32
 	saved := summarise
-	summarise = func(_ context.Context, scenes []broker.Scene) (map[string]string, error) {
+	summarise = func(_ context.Context, scenes []broker.Scene) (map[string]sceneReading, error) {
 		calls.Add(1)
-		out := map[string]string{}
+		out := map[string]sceneReading{}
 		for _, sc := range scenes {
-			out[sc.Key] = "요약: " + sc.Title
+			out[sc.Key] = sceneReading{Note: "요약: " + sc.Title, Unverified: []string{"실측 안 함"}}
 		}
 		return out, nil
 	}
@@ -59,8 +59,9 @@ func TestClosedScenesAreSummarisedOnce(t *testing.T) {
 	if n := calls.Load(); n != 1 {
 		t.Errorf("summarised %d times, want once", n)
 	}
-	// The note survives a restart.
-	if s := run.Snapshot(); len(broker.RestoreRun(s).Snapshot().SceneNotes) == 0 {
-		t.Error("the note did not survive a restart")
+	// The note, and what was read out of the outcome, survive a restart.
+	s := broker.RestoreRun(run.Snapshot()).Snapshot()
+	if len(s.SceneNotes) == 0 || len(s.TaskReasons["a"].Unverified) == 0 {
+		t.Errorf("notes %v, reasons %v did not survive a restart", s.SceneNotes, s.TaskReasons)
 	}
 }

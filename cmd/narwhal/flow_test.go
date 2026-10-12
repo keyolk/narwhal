@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -346,5 +349,63 @@ func TestAFileArtifactOpensInThePager(t *testing.T) {
 	must(t, exec.Command("sh", "-c", pager+` "$1"`, "x", plan).Run())
 	if b, _ := os.ReadFile(seen); string(b) != "# the plan\n" {
 		t.Errorf("pager saw %q", b)
+	}
+}
+
+// i on a flow step opens a line to that step's run; unaddressed, the
+// instruction resumes the task whose outcome is the step's answer.
+func TestResumingAFlowStepFromTheFlowView(t *testing.T) {
+	m := flowModel(t)
+	var got steerRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"seq":3,"reopened":["synthesis"]}`))
+	}))
+	defer srv.Close()
+	saved := daemonURL
+	daemonURL = func() (string, error) { return srv.URL, nil }
+	t.Cleanup(func() { daemonURL = saved })
+
+	for i, r := range m.runs {
+		if r.RunID == "p1" {
+			m.runCur = i
+		}
+	}
+	m = press(m, "enter")
+	if !m.flowView || m.flowSel != 0 {
+		t.Fatalf("flow view %v, step %d", m.flowView, m.flowSel)
+	}
+	m = press(m, "i")
+	if !m.steering {
+		t.Fatal("i in the flow view did not open the line")
+	}
+	if foot := ansi.Strip(m.View()); !strings.Contains(foot, "step 1 → synthesis »") {
+		t.Errorf("the line does not say where it goes:\n%s", foot)
+	}
+	m = typeKeys(m, "add a rollback section")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+	if cmd == nil {
+		t.Fatal("the instruction was not sent")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(tuiModel)
+	if got.RunID != "p1" || len(got.Mentions) != 1 || got.Mentions[0] != "worker-synthesis" {
+		t.Errorf("sent %+v, want step 1's run with worker-synthesis", got)
+	}
+	if !m.flowView || m.steerStep != nil {
+		t.Errorf("after sending: flowView=%v steerStep=%v", m.flowView, m.steerStep)
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "reopened synthesis") {
+		t.Errorf("the flow view does not say the step was resumed:\n%s", view)
+	}
+}
+
+// n still plans a new step; i is not it.
+func TestNStillStartsANextStepInTheFlowView(t *testing.T) {
+	m := flowModel(t)
+	m = press(m, "enter", "n")
+	if !m.composing || m.steering {
+		t.Errorf("n: composing=%v steering=%v", m.composing, m.steering)
 	}
 }

@@ -12,9 +12,10 @@
 // Addressing a task that has finished reopens it: the daemon resumes the
 // worker's Claude session with the instruction (see broker/followup.go).
 // That is the one thing a finished run can still be told, so its line
-// takes keystrokes too — and an instruction to no one in particular is
-// refused there with the reason, rather than posted to a radio nobody
-// reads. From a task's view, i starts the line already addressed to it.
+// takes keystrokes too, and an instruction to no one in particular goes
+// to the task whose outcome is the run's answer — resuming a finished run
+// means continuing its answer. From a task's view, i starts the line
+// addressed to it; from a flow's, it goes to the selected step's run.
 package main
 
 import (
@@ -31,6 +32,7 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 	nd "github.com/keyolk/narwhal/internal/daemon"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // steerSentMsg reports how a posted instruction went, and which finished
@@ -77,9 +79,58 @@ func parseSteer(line, runID string, tasks map[string]bool) (steerRequest, bool) 
 // A variable so tests can stand in for it.
 var daemonURL = func() (string, error) { return nd.URL() }
 
-// sendSteer posts an instruction in the background.
+// steerTarget is the run an instruction goes to: the watched one, or a
+// flow step's, chosen in the flow view.
+type steerTarget struct {
+	brokerURL string
+	snap      broker.Snapshot
+	// step is the flow step's 1-based number, for the line's label; 0 for
+	// the watched run.
+	step int
+}
+
+// currentSteerTarget is where the open line sends.
+func (m tuiModel) currentSteerTarget() steerTarget {
+	if m.steerStep != nil {
+		return *m.steerStep
+	}
+	snap := m.snap
+	if snap.RunID == "" {
+		snap.RunID = m.runID()
+	}
+	return steerTarget{brokerURL: m.live.BrokerURL, snap: snap}
+}
+
+// live reports whether the target has work going that an instruction to
+// no one in particular could reach.
+func (t steerTarget) live() bool {
+	if t.brokerURL == "" {
+		return false
+	}
+	switch t.snap.State {
+	case broker.RunDone, broker.RunFailed, broker.RunCanceled:
+		return false
+	}
+	return true
+}
+
+// resumes is the task an unaddressed instruction to a finished run goes
+// to: the one whose outcome is the run's answer — usually the synthesis —
+// or the only task there is. "" when the answer was composed from several,
+// and the instruction must say which.
+func (t steerTarget) resumes() string {
+	if r := t.snap.Result(); r.AnswerFrom != "" {
+		return r.AnswerFrom
+	}
+	if len(t.snap.Tasks) == 1 {
+		return t.snap.Tasks[0].ID
+	}
+	return ""
+}
+
+// sendSteer posts an instruction to the target's daemon in the background.
 func (m tuiModel) sendSteer(req steerRequest) tea.Cmd {
-	base := m.live.BrokerURL
+	base := m.currentSteerTarget().brokerURL
 	client := m.client
 	return func() tea.Msg {
 		if base == "" {
@@ -116,11 +167,21 @@ func (m tuiModel) sendSteer(req steerRequest) tea.Cmd {
 	}
 }
 
-// startSteer opens the command line, addressed to task when one is given.
+// startSteer opens the command line to the watched run, addressed to task
+// when one is given.
 func (m *tuiModel) startSteer(task string) {
-	m.steering, m.steerBuf = true, nil
+	m.steering, m.steerBuf, m.steerStep = true, nil, nil
 	if task != "" {
 		m.steerBuf = []rune("@" + task + " ")
+	}
+}
+
+// startStepSteer opens the command line to a flow step's run.
+func (m *tuiModel) startStepSteer(run store.LiveRun, step int) {
+	m.steering, m.steerBuf = true, nil
+	m.steerStep = &steerTarget{brokerURL: run.BrokerURL, snap: m.runSnapshot(run.RunID), step: step}
+	if m.steerStep.snap.RunID == "" {
+		m.steerStep.snap.RunID = run.RunID
 	}
 }
 
@@ -129,28 +190,39 @@ func (m *tuiModel) startSteer(task string) {
 func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEsc:
-		m.steering, m.steerBuf = false, nil
+		m.steering, m.steerBuf, m.steerStep = false, nil, nil
 		return m, nil
 	case tea.KeyCtrlC:
 		m.quit = true
 		return m, tea.Quit
 	case tea.KeyEnter:
 		line := string(m.steerBuf)
+		target := m.currentSteerTarget()
 		m.steering, m.steerBuf = false, nil
-		tasks := make(map[string]bool, len(m.snap.Tasks))
-		for _, t := range m.snap.Tasks {
+		tasks := make(map[string]bool, len(target.snap.Tasks))
+		for _, t := range target.snap.Tasks {
 			tasks[t.ID] = true
 		}
-		req, ok := parseSteer(line, m.runID(), tasks)
+		req, ok := parseSteer(line, target.snap.RunID, tasks)
 		if !ok {
+			m.steerStep = nil
 			return m, nil
 		}
-		if !m.runIsLive() && len(req.Mentions) == 0 {
-			// Nothing is running to read it; only a task can be reopened.
-			m.steerNote("this run has finished — address a task with @task to reopen it with this instruction", true)
-			return m, nil
+		if !target.live() && len(req.Mentions) == 0 {
+			// Nothing is running to read it. Resuming a finished run
+			// means continuing its answer, so it goes to the task that
+			// wrote it.
+			id := target.resumes()
+			if id == "" {
+				m.steerStep = nil
+				m.steerNote("this run's answer came from several tasks — say which with @task", true)
+				return m, nil
+			}
+			req.Mentions = []string{"worker-" + id}
 		}
-		return m, m.sendSteer(req)
+		cmd := m.sendSteer(req)
+		m.steerStep = nil
+		return m, cmd
 	case tea.KeyBackspace:
 		if n := len(m.steerBuf); n > 0 {
 			m.steerBuf = m.steerBuf[:n-1]
@@ -171,17 +243,28 @@ func (m *tuiModel) steerNote(text string, failed bool) {
 	m.steerMsg, m.steerFailed, m.steerAt = text, failed, time.Now()
 }
 
-// runIsLive reports whether the run has work going that an instruction
-// to no one in particular could reach.
+// runIsLive reports whether the watched run has work going that an
+// instruction to no one in particular could reach.
 func (m tuiModel) runIsLive() bool {
-	if m.live.BrokerURL == "" {
-		return false
+	return steerTarget{brokerURL: m.live.BrokerURL, snap: m.snap}.live()
+}
+
+// steerPrompt is the open line's lead: where what is typed will go.
+func (m tuiModel) steerPrompt() string {
+	t := m.currentSteerTarget()
+	var to []string
+	if t.step > 0 {
+		to = append(to, fmt.Sprintf("step %d", t.step))
 	}
-	switch m.snap.State {
-	case broker.RunDone, broker.RunFailed, broker.RunCanceled:
-		return false
+	if !t.live() && !strings.HasPrefix(strings.TrimSpace(string(m.steerBuf)), "@") {
+		if id := t.resumes(); id != "" {
+			to = append(to, "→ "+id)
+		}
 	}
-	return true
+	if len(to) == 0 {
+		return styCyanBold.Render("» ")
+	}
+	return styMagenta.Render(strings.Join(to, " ")) + styCyanBold.Render(" » ")
 }
 
 // steerBar is the run view's standing input line.
@@ -200,8 +283,11 @@ func (m tuiModel) steerBar() string {
 		return n
 	}
 	if m.steering {
-		return fit(styCyanBold.Render("» ") + string(m.steerBuf) + styCyan.Render("▏") +
-			styDim.Render("   enter send · esc cancel · @task addresses one · ! urgent"))
+		hint := "   enter send · esc cancel · @task addresses one · ! urgent"
+		if !m.currentSteerTarget().live() {
+			hint = "   enter resumes its worker with this · @task picks another task · esc cancel"
+		}
+		return fit(m.steerPrompt() + string(m.steerBuf) + styCyan.Render("▏") + styDim.Render(hint))
 	}
 	if m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor {
 		if m.steerFailed {
@@ -215,7 +301,7 @@ func (m tuiModel) steerBar() string {
 			why = "its daemon is gone"
 		}
 		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render("i") +
-			styDim.Render(" @task reopens a task with an instruction · r result · n next step"))
+			styDim.Render(" resumes it with an instruction · r result · n next step"))
 	}
 	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
 		styDim.Render(" to tell the workers something")

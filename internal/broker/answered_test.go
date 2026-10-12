@@ -79,3 +79,42 @@ func TestAReopenedTaskIsJudgedWithItsFollowUp(t *testing.T) {
 		t.Errorf("the judge did not see the follow-up: %q", j.asked)
 	}
 }
+
+// A dependent the judge is confident the change cannot reach stays
+// finished, and so does what builds only on it; the answer task reopens
+// regardless.
+func TestADependentTheChangeCannotReachIsLeftFinished(t *testing.T) {
+	b := New()
+	b.SetJudge(JudgeFunc(func(_ context.Context, state, name, _ string) (float64, bool) {
+		if name != QuestionAffected {
+			return 0, false
+		}
+		if strings.Contains(state, "TASK:\ndo docs") {
+			return 0.1, true
+		}
+		return 0.8, true
+	}))
+	r := b.CreateRun("r", "p", t.TempDir(), "main")
+	a := done(t, r, "a", "a")
+	done(t, r, "docs", "docs", "a")
+	done(t, r, "docs-index", "docs-index", "docs")
+	done(t, r, "impl", "impl", "a")
+	done(t, r, "synthesis", "synthesis", "docs", "impl")
+
+	got := r.ReopenWithDependents(a, "add an Expiry field")
+	if strings.Join(got, ",") != "a,impl,synthesis" {
+		t.Fatalf("reopened %v, want a, impl and the synthesis", got)
+	}
+	if r.GetTask("docs").CurrentState() != TaskCompleted || r.GetTask("docs-index").CurrentState() != TaskCompleted {
+		t.Error("a dependent the change cannot reach was reopened")
+	}
+	var skipped int
+	for _, v := range r.Verdicts() {
+		if v.Question == QuestionAffected && v.Action == ActionSkipped {
+			skipped++
+		}
+	}
+	if skipped != 1 {
+		t.Errorf("%d skips recorded, want 1 (docs)", skipped)
+	}
+}

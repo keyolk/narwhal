@@ -20,6 +20,7 @@ package broker
 import (
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // QuestionAnswered names the judgement made at task-done.
@@ -83,4 +84,59 @@ func (r *Run) JudgeAnswered(t *Task, outcome string) string {
 	}
 	r.recordVerdict(v)
 	return ""
+}
+
+// QuestionAffected names the judgement made before reopening a dependent.
+const QuestionAffected = "affected"
+
+// ActionSkipped is a dependent left finished because the judge said the
+// upstream change could not reach its outcome.
+const ActionSkipped = "skipped"
+
+// AffectedThreshold is the P(the change reaches this outcome) below which
+// a finished dependent is not reopened.
+//
+// Measured 2026-10-13 on ten upstream-change/dependent pairs: changes that
+// do reach the dependent — a number it doubles, a field it validates, the
+// database its migrations target — scored 0.63–0.94; ones that do not — a
+// comment, a report's format, a rename in a test helper — scored 0.09–0.50.
+// Waking a dependent needlessly costs a worker run; leaving one that
+// should have revised costs a wrong answer, so only a confident no skips:
+// at 0.3, four of the five unrelated pairs skip and none of the related.
+const AffectedThreshold = 0.3
+
+const affectedQuestion = "UPSTREAM is a task this task builds on, and INSTRUCTION is a change the " +
+	"operator just asked of it. TASK is this task's assignment and OUTCOME what it concluded. Could " +
+	"the change to UPSTREAM alter anything in OUTCOME — a fact it relies on, a file it touched, a " +
+	"number it reports — so that this task should revise its work?"
+
+// judgeAffected reports, for each finished dependent, whether it should be
+// reopened. The answer task, unfinished ones and any the judge is not
+// confident about are; the questions go out together.
+func (r *Run) judgeAffected(tasks []*Task, ans *Task, upstream, instruction string) []bool {
+	out := make([]bool, len(tasks))
+	var wg sync.WaitGroup
+	for i, t := range tasks {
+		out[i] = true
+		if t == ans || t.CurrentState() != TaskCompleted || r.currentJudge() == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, t *Task) {
+			defer wg.Done()
+			s := t.snapshot()
+			state := "UPSTREAM:\n" + clip(upstream, 800) + "\n\nINSTRUCTION:\n" + clip(instruction, 800) +
+				"\n\nTASK:\n" + clip(s.Assignment, 800) + "\n\nOUTCOME:\n" + clip(s.Outcome, 1500)
+			v := r.ask(t.ID, QuestionAffected, state, affectedQuestion)
+			if v.Decided && v.P < AffectedThreshold {
+				v.Action = ActionSkipped
+				out[i] = false
+			} else if v.Decided {
+				v.Action = ActionComplete
+			}
+			r.recordVerdict(v)
+		}(i, t)
+	}
+	wg.Wait()
+	return out
 }

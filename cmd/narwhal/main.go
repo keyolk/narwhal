@@ -12,7 +12,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -201,13 +200,7 @@ func exportCmd(args []string) {
 }
 
 // defaultExportDir keeps the markdown beside the JSON it is rendered from.
-func defaultExportDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "narwhal-exports"
-	}
-	return filepath.Join(home, ".narwhal", "exports")
-}
+func defaultExportDir() string { return store.DefaultExportDir() }
 
 func showCmd(args []string) {
 	if len(args) < 1 {

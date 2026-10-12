@@ -265,6 +265,18 @@ if [ "$CODE" != "200" ]; then
   exit 1
 fi
 `, agentDir, base),
+		"artifact": fmt.Sprintf(`#!/bin/bash
+# usage: artifact <taskId> <pr|branch|commit|file> <value>
+# Record something this task made, as it is made: a PR you opened, a branch
+# you pushed, a commit, a file you created or changed. The run's result
+# lists these, the next step of the work is planned with them, and the
+# operator checks them — a hash mentioned only in your outcome text is a
+# claim nobody can list.
+set -euo pipefail
+curl -s -X POST %s/task/$1/artifact \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"kind":sys.argv[1],"value":sys.argv[2]}))' "$2" "$3")"
+`, base),
 		"split": fmt.Sprintf(`#!/bin/bash
 # usage: split "<taskId>" "<name>" "<assignment>" [depsCSV]
 # Request the coordinator to add a new task to the run. Existing tasks
@@ -407,6 +419,10 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    Print the full run state.\n")
 	fmt.Fprintf(&b, "- bash %s/task-done %s \"<outcome>\"\n", scriptsDir, cfg.TaskID)
 	fmt.Fprintf(&b, "    Declare your task complete with a summary of findings.\n")
+	fmt.Fprintf(&b, "- bash %s/artifact %s <pr|branch|commit|file> <value>\n", scriptsDir, cfg.TaskID)
+	fmt.Fprintf(&b, "    Record each thing you make AS you make it: a PR URL, a branch you\n")
+	fmt.Fprintf(&b, "    pushed, a commit hash, a file you created. One call per artifact.\n")
+	fmt.Fprintf(&b, "    The run's result and the next step of the work are built from these.\n")
 	fmt.Fprintf(&b, "- bash %s/split \"<newTaskId>\" \"<name>\" \"<assignment>\" [depsCSV]\n", scriptsDir)
 	fmt.Fprintf(&b, "    Request a NEW task be added to the run. Use when you discover work\n")
 	fmt.Fprintf(&b, "    that is genuinely independent of yours and should run in parallel.\n")

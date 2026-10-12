@@ -83,7 +83,7 @@ func TestHomeWithNoRequestsSaysHowToStart(t *testing.T) {
 func TestANewRequestStartsAndOpens(t *testing.T) {
 	var gotCWD, gotPrompt string
 	saved := startRequest
-	startRequest = func(cwd, prompt string) (store.LiveRun, error) {
+	startRequest = func(cwd, prompt, _ string) (store.LiveRun, error) {
 		gotCWD, gotPrompt = cwd, prompt
 		return store.LiveRun{RunID: "plan-1", BrokerURL: "http://d", CWD: cwd, Prompt: prompt,
 			StartedAt: time.Now().Unix(), State: "active"}, nil
@@ -114,7 +114,7 @@ func TestANewRequestStartsAndOpens(t *testing.T) {
 // A request that does not start says why, and keeps what was typed.
 func TestARequestThatFailsToStartSaysWhy(t *testing.T) {
 	saved := startRequest
-	startRequest = func(string, string) (store.LiveRun, error) {
+	startRequest = func(string, string, string) (store.LiveRun, error) {
 		return store.LiveRun{}, errors.New("daemon did not become ready within 10s")
 	}
 	t.Cleanup(func() { startRequest = saved })

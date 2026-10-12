@@ -63,6 +63,20 @@ func ExportMarkdown(s broker.Snapshot) string {
 		fmt.Fprintf(&b, "## Findings\n\n%s\n\n", f)
 	}
 
+	// What it produced, as a list: the branches, commits and PRs are what
+	// a reader acts on, and in the findings they are scattered in prose.
+	if res := s.Result(); !res.Artifacts.Empty() {
+		b.WriteString("## Artifacts\n\n")
+		writeArtifacts(&b, res.Artifacts)
+	}
+	if s.Flow != "" {
+		fmt.Fprintf(&b, "Part of flow `%s`", s.Flow)
+		if s.ParentRun != "" {
+			fmt.Fprintf(&b, ", after run `%s`", s.ParentRun)
+		}
+		b.WriteString(".\n\n")
+	}
+
 	if len(tasks) > 0 {
 		b.WriteString("## Tasks\n\n")
 		for _, t := range tasks {
@@ -197,6 +211,39 @@ func isProtocol(content string) bool {
 func substantial(md string) bool {
 	const floor = 1000
 	return len(md) >= floor
+}
+
+// DefaultExportDir keeps the markdown beside the JSON it is rendered from.
+func DefaultExportDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "narwhal-exports"
+	}
+	return filepath.Join(home, ".narwhal", "exports")
+}
+
+// ExportRun writes one run's report into dir and returns its path. With
+// force unset, a run with nothing substantial is skipped and the path is
+// "".
+func ExportRun(dir string, s broker.Snapshot, force bool) (string, error) {
+	md := ExportMarkdown(s)
+	if !force && !substantial(md) {
+		return "", nil
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create export dir: %w", err)
+	}
+	path := filepath.Join(dir, s.RunID+".md")
+	return path, os.WriteFile(path, []byte(md), 0o600)
+}
+
+// ExportFlow writes a flow's report into dir as flow-<id>.md.
+func ExportFlow(dir string, f Flow) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create export dir: %w", err)
+	}
+	path := filepath.Join(dir, "flow-"+f.ID+".md")
+	return path, os.WriteFile(path, []byte(FlowMarkdown(f, f.Output().Runs)), 0o600)
 }
 
 // ExportRuns writes every persisted run into dir as <run-id>.md and

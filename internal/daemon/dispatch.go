@@ -20,6 +20,7 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/server"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // DispatchInterval is how often the loop looks for newly ready tasks.
@@ -226,6 +227,7 @@ func (d *Dispatcher) retireIfSettled(runID string, run *broker.Run, active []str
 		}
 		run.SetState(state)
 		_ = d.persistRun(runID, run)
+		d.exportSettled(run)
 	}
 	d.sess.DropLauncher(runID)
 	log.Printf("[dispatch] %s settled; launcher retired", runID)
@@ -412,4 +414,25 @@ func taskOf(key string) string {
 		}
 	}
 	return ""
+}
+
+// exportSettled writes a finished run's report, and its flow's, into the
+// export directory, so the result is a document the moment it exists —
+// in the search index, and ready to hand on — without someone remembering
+// to run `narwhal export`. Failure is logged, not fatal: the snapshot is
+// the record, the report a rendering of it.
+func (d *Dispatcher) exportSettled(run *broker.Run) {
+	snap := run.Snapshot()
+	dir := store.DefaultExportDir()
+	if _, err := store.ExportRun(dir, snap, false); err != nil {
+		log.Printf("[dispatch] export %s: %v", snap.RunID, err)
+	}
+	if snap.Flow == "" {
+		return
+	}
+	if f, err := store.LoadFlow(snap.Flow); err == nil && len(f.Steps) > 1 {
+		if _, err := store.ExportFlow(dir, f); err != nil {
+			log.Printf("[dispatch] export flow %s: %v", f.ID, err)
+		}
+	}
 }

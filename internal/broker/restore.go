@@ -81,6 +81,7 @@ func RestoreRun(s Snapshot) *Run {
 	// applied", and the channel is treated as read to its end.
 	r.intakeCursor = s.IntakeCursor
 	r.verdicts = append([]Verdict(nil), s.Verdicts...)
+	r.flow, r.parentRun = s.Flow, s.ParentRun
 	if r.intakeCursor == 0 && len(s.Messages) > 0 {
 		for _, m := range s.Messages {
 			if m != nil && m.Seq > r.intakeCursor {
@@ -110,6 +111,9 @@ func RestoreRun(s Snapshot) *Run {
 			// answer would be asked a second time for work already done.
 			Check:       ts.Check,
 			CheckResult: ts.CheckResult,
+		}
+		if ts.Artifacts != nil {
+			t.Artifacts = ts.Artifacts.clone()
 		}
 		// Dispatch history is rebuilt from the count, which is all the
 		// snapshot keeps. The statuses follow from the task's own state:

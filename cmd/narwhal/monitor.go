@@ -50,6 +50,8 @@ func daemonRunLister() ([]store.LiveRun, error) {
 			Failed        int    `json:"failed"`
 			Messages      int    `json:"messages"`
 			ActiveWorkers int    `json:"active_workers"`
+			Flow          string `json:"flow"`
+			ParentRun     string `json:"parent_run"`
 		} `json:"runs"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -74,6 +76,8 @@ func daemonRunLister() ([]store.LiveRun, error) {
 			Failed:    r.Failed,
 			Messages:  r.Messages,
 			Running:   r.ActiveWorkers,
+			Flow:      r.Flow,
+			ParentRun: r.ParentRun,
 		})
 	}
 	return runs, nil

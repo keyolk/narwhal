@@ -34,6 +34,8 @@ const (
 	TimelineUrgent      TimelineKind = "urgent"
 	TimelineVerdict     TimelineKind = "verdict"
 	TimelineAsked       TimelineKind = "asked"
+	// TimelineFollows is the step of a flow this run continues.
+	TimelineFollows TimelineKind = "follows"
 )
 
 // FromRadio reports whether the event is a radio message lifted into the
@@ -60,6 +62,8 @@ type TimelineEvent struct {
 	// the task states and verdicts record. It lets a view open the message
 	// itself rather than a one-line echo of it.
 	Seq int64
+	// Run is another run the event refers to — the step this one follows.
+	Run string
 }
 
 // Timeline returns the run's history, oldest first.
@@ -86,7 +90,13 @@ func Timeline(s Snapshot) []TimelineEvent {
 	}
 
 	if s.StartedAt > 0 {
-		add(time.Unix(s.StartedAt, 0), TimelineRun, "", s.Prompt)
+		at := time.Unix(s.StartedAt, 0)
+		if s.ParentRun != "" {
+			// First, so the run reads as what it continues.
+			add(at, TimelineFollows, "", "continues "+s.ParentRun)
+			out[len(out)-1].Run = s.ParentRun
+		}
+		add(at, TimelineRun, "", s.Prompt)
 	}
 
 	for _, t := range s.Tasks {

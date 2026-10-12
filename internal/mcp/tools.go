@@ -57,8 +57,15 @@ func toolDefinitions() []map[string]any {
 						"type":        "integer",
 						"description": "Max seconds for the planning phase. Default 300.",
 					},
+					"flow": map[string]any{
+						"type": "string",
+						"description": "Continue a piece of work: the flow id (returned by an " +
+							"earlier narwhal_plan). The new run is its next step, planned with " +
+							"the flow's goal, notes and what the earlier steps concluded, in " +
+							"the flow's directory. Omit to start a new flow.",
+					},
 				},
-				"required": []string{"cwd", "prompt"},
+				"required": []string{"prompt"},
 			},
 		},
 		{

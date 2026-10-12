@@ -101,7 +101,15 @@ func TestRunningBoxShowsWhatItsWorkerSaid(t *testing.T) {
 	m.activity = map[string]agentLive{
 		"alpha-worker": {tool: "Edit  internal/api.go", said: "Splitting the loader.", last: time.Now()},
 	}
-	if got := m.liveDetail("alpha-worker"); got != "Splitting the loader." {
+	got := m.liveDetail("alpha-worker")
+	if prose, _, _ := strings.Cut(got, detailAlt); prose != "Splitting the loader." {
 		t.Errorf("liveDetail = %q", got)
+	}
+	// A box too narrow for a readable piece of the sentence shows the tool.
+	if fit := fitDetail(got, 8); !strings.HasPrefix(fit, "Edit") {
+		t.Errorf("fitDetail at 8 cells = %q, want the tool", fit)
+	}
+	if fit := fitDetail(got, 30); fit != "Splitting the loader." {
+		t.Errorf("fitDetail at 30 cells = %q, want the sentence", fit)
 	}
 }

@@ -998,8 +998,21 @@ func runeCells(r rune) int {
 // cut to its first few letters: "Edit" says what the worker is doing,
 // "Edit  cmd/na…" does not say much more and costs the same row.
 func fitDetail(detail string, w int) string {
+	if prose, alt, ok := strings.Cut(detail, detailAlt); ok {
+		// The sentence where enough of it shows to be read; the tool
+		// where it would be a fragment.
+		const readable = 16
+		if displayWidth(prose) <= w || w >= readable {
+			return fitDetail(prose, w)
+		}
+		return fitDetail(alt, w)
+	}
 	if displayWidth(detail) <= w {
 		return detail
+	}
+	if !strings.Contains(detail, "  ") {
+		// Prose, not "Tool  argument": cut it where it ends, and say so.
+		return truncate(detail, w-1) + "…"
 	}
 	tool, arg, ok := strings.Cut(detail, "  ")
 	if !ok || displayWidth(tool)+4 > w {

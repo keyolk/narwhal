@@ -92,7 +92,7 @@ func TestRunningWorkerWithNoEventsSaysSo(t *testing.T) {
 	m.width, m.height = 100, 30
 	m.detail = detailSession
 
-	out := m.viewSessionDetail()
+	out := m.viewTaskView()
 	if strings.Contains(out, "no transcript found") {
 		t.Errorf("a running worker was reported as having no transcript:\n%s", out)
 	}
@@ -107,7 +107,7 @@ func TestUndispatchedTaskStillSaysSo(t *testing.T) {
 	m.snap.Tasks[0] = broker.TaskSnapshot{ID: "alpha", State: broker.TaskPending}
 	m.detail = detailSession
 
-	out := m.viewSessionDetail()
+	out := m.viewTaskView()
 	if !strings.Contains(out, "not dispatched yet") {
 		t.Errorf("a pending task should say it has not started:\n%s", out)
 	}

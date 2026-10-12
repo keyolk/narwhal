@@ -51,6 +51,10 @@ type cachedTranscript struct {
 	// and the two would otherwise evict each other on every frame.
 	narrativeWidth int
 	narrative      []string
+	// sig is the inputs both renders were merged with — the operator's
+	// instructions and the judge's calls, which change without the file
+	// changing. See feed.go.
+	renderSig, narrativeSig string
 	// tailProbe is the last few hundred bytes before offset, so the next
 	// read can tell "the same file, longer" from "a different file that
 	// happens to be at least this long".
@@ -157,44 +161,47 @@ func samePrefix(path string, prev *cachedTranscript) bool {
 	return string(buf) == prev.tailProbe
 }
 
-// render returns the file's entries rendered to width, reusing the last
-// render when neither the file nor the width has changed.
-func (c *transcriptCache) render(path string, width int) []string {
+// render returns the file's entries, merged with inputs, rendered to
+// width, reusing the last render when neither the file, the inputs nor the
+// width has changed.
+func (c *transcriptCache) render(path string, width int, inputs []transcriptEntry) []string {
 	entries := c.read(path)
 	if len(entries) == 0 {
 		return nil
 	}
+	sig := inputsSig(inputs)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cached, ok := c.entries[path]
 	if !ok {
-		return renderTranscript(entries, width)
+		return renderTranscript(mergeFeed(entries, inputs), width)
 	}
-	if cached.rendered != nil && cached.renderWidth == width {
+	if cached.rendered != nil && cached.renderWidth == width && cached.renderSig == sig {
 		return cached.rendered
 	}
-	cached.rendered = renderTranscript(cached.entries, width)
-	cached.renderWidth = width
+	cached.rendered = renderTranscript(mergeFeed(cached.entries, inputs), width)
+	cached.renderWidth, cached.renderSig = width, sig
 	return cached.rendered
 }
 
 // renderNarrative is render for renderNarrative.
-func (c *transcriptCache) renderNarrative(path string, width int) []string {
+func (c *transcriptCache) renderNarrative(path string, width int, inputs []transcriptEntry) []string {
 	entries := c.read(path)
 	if len(entries) == 0 {
 		return nil
 	}
+	sig := inputsSig(inputs)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	cached, ok := c.entries[path]
 	if !ok {
-		return renderNarrative(entries, width)
+		return renderNarrative(mergeFeed(entries, inputs), width)
 	}
-	if cached.narrative != nil && cached.narrativeWidth == width {
+	if cached.narrative != nil && cached.narrativeWidth == width && cached.narrativeSig == sig {
 		return cached.narrative
 	}
-	cached.narrative = renderNarrative(cached.entries, width)
-	cached.narrativeWidth = width
+	cached.narrative = renderNarrative(mergeFeed(cached.entries, inputs), width)
+	cached.narrativeWidth, cached.narrativeSig = width, sig
 	return cached.narrative
 }
 

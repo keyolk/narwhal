@@ -55,15 +55,39 @@ func (m tuiModel) timelineRows() int {
 	return l.bottom
 }
 
-// timelineMaxBack is the furthest pane 3 can scroll back: to where its
-// oldest event is the top row.
-func (m tuiModel) timelineMaxBack() int {
-	return max(0, len(m.timelineEvents())-max(1, m.timelineRows()))
+// timelineFollow selects the newest event and keeps it selected as more
+// arrive; any other value of timelineSel is a fixed event.
+const timelineFollow = -1
+
+// selectedEvent resolves the selection against the events on screen.
+func (m tuiModel) selectedEvent(events []broker.TimelineEvent) (int, bool) {
+	if len(events) == 0 {
+		return 0, false
+	}
+	if m.timelineSel == timelineFollow || m.timelineSel >= len(events) {
+		return len(events) - 1, true
+	}
+	return max(m.timelineSel, 0), true
+}
+
+// moveTimeline steps the selection; stepping past the newest follows again.
+func (m *tuiModel) moveTimeline(delta int) {
+	events := m.timelineEvents()
+	cur, ok := m.selectedEvent(events)
+	if !ok {
+		return
+	}
+	cur += delta
+	if cur >= len(events)-1 {
+		m.timelineSel = timelineFollow
+		return
+	}
+	m.timelineSel = max(cur, 0)
 }
 
 // viewTimeline is pane 3 zoomed across the body.
 func (m tuiModel) viewTimeline(width, height int) string {
-	return m.renderTimeline(broker.Timeline(m.snap), width, height)
+	return m.renderTimeline(m.timelineEvents(), width, height)
 }
 
 func (m tuiModel) renderTimeline(events []broker.TimelineEvent, width, height int) string {
@@ -74,30 +98,36 @@ func (m tuiModel) renderTimeline(events []broker.TimelineEvent, width, height in
 		label = fmt.Sprintf("Timeline · tasks & judge (%d)", total)
 	}
 	avail := max(1, height-1)
-	back := min(max(m.timelineBack, 0), max(0, total-avail))
-	end := total - back
-	start := max(0, end-avail)
+	sel, _ := m.selectedEvent(events)
+	// Following, the newest sit at the bottom; a fixed selection is kept
+	// in the middle of the window, so there is context either side of it.
+	start := max(0, total-avail)
+	if m.timelineSel != timelineFollow {
+		start = min(max(0, sel-avail/2), max(0, total-avail))
+	}
+	end := min(total, start+avail)
 	if total > avail {
 		label += fmt.Sprintf("  %d-%d", start+1, end)
-		if back == 0 {
-			label += " ⌄"
-		}
+	}
+	if m.timelineSel == timelineFollow {
+		label += " ⌄"
 	}
 	rows := []string{numberedPaneTitle(3, label, m.focus == focusTimeline, width)}
 	if total == 0 {
 		rows = append(rows, styDim.Render("   nothing yet"))
 		return padRows(rows, width, height)
 	}
-	events = events[start:end]
+	focused := m.focus == focusTimeline
+	window := events[start:end]
 	// The glyph says what kind of event it is, so the kind is not spelled
 	// out: under the graph the pane is a third of the screen wide, and the
 	// word "instruction" cost the line most of what the operator wrote.
 	whoW := 0
-	for _, e := range events {
+	for _, e := range window {
 		whoW = max(whoW, displayWidth(e.Who))
 	}
 	whoW = min(whoW, 10)
-	for _, e := range events {
+	for i, e := range window {
 		glyph, style := timelineGlyph(e.Kind)
 		text := e.Text
 		if text == "" {
@@ -108,6 +138,10 @@ func (m tuiModel) renderTimeline(events []broker.TimelineEvent, width, height in
 		line := styDim.Render(clock(e.At)) + " " +
 			style.Render(glyph) + " " + styCyan.Render(padRight(truncate(e.Who, whoW), whoW)) + " " +
 			style.Render(text)
+		if focused && start+i == sel {
+			// The selection is what enter opens, so it reads as one bar.
+			line = stySel.Render(padRight(ansi.Truncate(ansi.Strip(line), width, "…"), width))
+		}
 		// Styled before it is fitted, so the cut has to skip escapes.
 		rows = append(rows, ansi.Truncate(line, width, "…"))
 	}

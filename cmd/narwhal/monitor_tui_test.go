@@ -174,8 +174,8 @@ func TestEnterOpensDetailAndEscCloses(t *testing.T) {
 func TestEnterOnTasksPaneOpensTaskDetail(t *testing.T) {
 	m := testModel(2, 3)
 	m = press(m, "1", "enter")
-	if m.detail != detailTask {
-		t.Fatalf("enter on the tasks pane should open the task detail, got %v", m.detail)
+	if m.detail != detailSession {
+		t.Fatalf("enter on the tasks pane should open the task view, got %v", m.detail)
 	}
 }
 

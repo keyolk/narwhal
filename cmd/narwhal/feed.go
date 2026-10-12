@@ -61,12 +61,14 @@ func renderEntry(e transcriptEntry, width int, st *feedState) []string {
 		if label != "" {
 			text = label + " " + text
 		}
-		for i, l := range wrapText(text, width-len(stamp)-2) {
+		// Rendered as markdown: workers answer in tables, headings and
+		// emphasis, and printed raw those were pipes and asterisks.
+		for i, l := range renderMarkdown(text, width-len(stamp)-2, body) {
 			if i == 0 {
-				out = append(out, styDim.Render(stamp)+glyph+body.Render(l))
+				out = append(out, styDim.Render(stamp)+glyph+l)
 				continue
 			}
-			out = append(out, pad+body.Render(l))
+			out = append(out, pad+l)
 		}
 		return out
 	}

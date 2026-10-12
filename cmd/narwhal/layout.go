@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // paneLayout is where everything goes in the main view. It is computed in
@@ -65,7 +67,26 @@ func (m tuiModel) effectiveZoom() focusPane {
 	if (m.focus == focusNode || m.focus == focusTimeline) && m.singleBand() {
 		return m.focus
 	}
+	if m.focus == focusTimeline && m.timelineSparse() {
+		// Folded away beside the radio; focused, it still shows.
+		return m.focus
+	}
 	return -1
+}
+
+// timelineSparse reports whether pane 3 has too little of its own to be
+// worth a column: a run from before task times were recorded has its start
+// and nothing else, and a column holding one line beside a busy radio was
+// the emptiest thing on screen. The radio takes the band then, and the
+// band's edge says what was folded.
+func (m tuiModel) timelineSparse() bool {
+	n := 0
+	for _, e := range broker.Timeline(m.snap) {
+		if !e.Kind.FromRadio() {
+			n++
+		}
+	}
+	return n < 3 && len(m.snap.Tasks) > 0
 }
 
 func (m tuiModel) layout() paneLayout {
@@ -104,10 +125,53 @@ func (m tuiModel) viewBands(l paneLayout) string {
 		return framedBand(l.left, l.right, l.top,
 			m.viewTasks(l.left, l.top+1), m.viewChannel(l.right, l.top+1))
 	}
-	return framedBand(l.left, l.right, l.top,
-		m.viewTasks(l.left, l.top+1), m.viewInspector(l.right, l.top+1)) + "\n" +
+	top := framedBand(l.left, l.right, l.top,
+		m.viewTasks(l.left, l.top+1), m.viewInspector(l.right, l.top+1))
+	if m.timelineSparse() {
+		w := l.left + l.right + bandBorderCols - 3
+		return top + "\n" + framedSingle(w, l.bottom, m.viewChannel(w, l.bottom+1), m.foldedTimelineNote())
+	}
+	return top + "\n" +
 		framedBand(l.left, l.right, l.bottom,
 			m.renderTimeline(m.timelineEvents(), l.left, l.bottom+1), m.viewChannel(l.right, l.bottom+1))
+}
+
+// foldedTimelineNote says, on the band's edge, that pane 3 is folded and
+// why.
+func (m tuiModel) foldedTimelineNote() string {
+	why := "little to show"
+	recorded := false
+	for _, t := range m.snap.Tasks {
+		recorded = recorded || !t.StartedAt.IsZero()
+	}
+	if !recorded {
+		why = "this run predates task times"
+	}
+	return "3 Timeline folded · " + why
+}
+
+// framedSingle is framedBand with one pane across the band, and a note at
+// the right of its top edge.
+func framedSingle(w, h int, pane, note string) string {
+	w, h = max(w, 1), max(h, 0)
+	lines := strings.Split(pane, "\n")
+	c := w + 1
+	edge := borderTitle(lineAt(lines, 0), c)
+	if note != "" {
+		// The note replaces the tail of the rule, so the edge keeps its width.
+		n := " " + note + " ─"
+		if ansi.StringWidth(edge)-ansi.StringWidth(n) > ansi.StringWidth(strings.TrimRight(ansi.Strip(edge), "─"))+2 {
+			edge = ansi.Truncate(edge, c-ansi.StringWidth(n), "") + styDim.Render(n)
+		}
+	}
+	var b strings.Builder
+	b.WriteString(styDim.Render("╭") + edge + styDim.Render("╮"))
+	bar := styDim.Render("│")
+	for i := 1; i <= h; i++ {
+		b.WriteString("\n" + bar + " " + fitCells(lineAt(lines, i), w) + bar)
+	}
+	b.WriteString("\n" + styDim.Render("╰"+strings.Repeat("─", c)+"╯"))
+	return b.String()
 }
 
 // framedBand puts two panes side by side in one box.

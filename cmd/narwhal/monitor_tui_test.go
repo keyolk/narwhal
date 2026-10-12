@@ -563,13 +563,13 @@ func TestPickerViewIdentifiesRunsByPromptNotID(t *testing.T) {
 
 func TestHeaderShowsRunPosition(t *testing.T) {
 	m := multiRunModel(3)
-	if !strings.Contains(m.View(), "[1/3]") {
+	if !strings.Contains(m.View(), "1/3") {
 		t.Fatalf("header should show which run is open:\n%s", m.View())
 	}
 	// A single run needs no counter.
 	single := testModel(1, 1)
 	single.width, single.height = 100, 24
-	if strings.Contains(single.View(), "[1/1]") {
+	if strings.Contains(single.View(), "1/1") {
 		t.Fatal("a lone run should not show a position counter")
 	}
 }

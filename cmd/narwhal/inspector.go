@@ -249,7 +249,7 @@ func (m tuiModel) nodeActivityLines(taskID string, width int) []string {
 			return lines
 		}
 	}
-	return m.workerOutputLines(taskID)
+	return m.renderedOutput(taskID, width)
 }
 
 // sessionActivityLines is the worker's full activity — every call and a
@@ -262,7 +262,7 @@ func (m tuiModel) sessionActivityLines(taskID string, width int) []string {
 			return lines
 		}
 	}
-	return m.workerOutputLines(taskID)
+	return m.renderedOutput(taskID, width)
 }
 
 // nodeActivitySlice renders just the lines in [start, end).
@@ -384,4 +384,16 @@ func firstLine(s string) string {
 		return strings.TrimSpace(s[:i]) + " …"
 	}
 	return s
+}
+
+// renderedOutput is the worker's captured final output, rendered as the
+// markdown it is written in. It stands in for the transcript when there is
+// none — a run whose transcripts are gone — and printed raw it was a fence
+// of table pipes and asterisks.
+func (m tuiModel) renderedOutput(taskID string, width int) []string {
+	lines := m.workerOutputLines(taskID)
+	if len(lines) == 0 {
+		return nil
+	}
+	return renderMarkdown(strings.Join(lines, "\n"), width, lipgloss.NewStyle())
 }

@@ -302,7 +302,9 @@ func followUpConfig(cfg *launcher.WorkerConfig, l *launcher.Launcher, task *brok
 		fmt.Fprintf(&b, "\n\n## This task was done once already\n\nIts outcome then was:\n\n%s\n", prev)
 	}
 	fmt.Fprintf(&b, "\n\n## Follow-up from the operator\n\n%s\n\n"+
-		"Build on what was done rather than redoing it, then call task-done with the updated outcome.\n", instruction)
+		"Build on what was done rather than redoing it. If this is more work than one task should do, "+
+		"split new tasks off and dep-add yourself on the ones your outcome needs. Then call task-done "+
+		"with the full updated outcome.\n", instruction)
 	cfg.Assignment = b.String()
 }
 
@@ -318,9 +320,15 @@ func followUpPrompt(taskID, instruction string) string {
 		"instruction:\n\n%s\n\n"+
 		"Act on it in the same working directory, with what you already know. Your helper scripts "+
 		"(send, drain, watch, artifact, task-done, …) have been reissued at the same paths; start a "+
-		"radio watcher again if the instruction involves peers. When you are done, call task-done "+
-		"with your full updated outcome — the whole answer as it now stands, not only what changed, "+
-		"because task-done replaces the recorded outcome.", taskID, instruction)
+		"radio watcher again if the instruction involves peers.\n\n"+
+		"If the instruction is more work than this task should do alone, extend the run's graph "+
+		"rather than doing it all here: split new tasks off (each gets its own worker and runs in "+
+		"parallel) and, if your outcome needs theirs, dep-add yourself on them so your task-done "+
+		"waits for them. Tasks that build on yours are reopened behind you and will revise their "+
+		"outcomes from your new one, and work split off after the run's answer was written is "+
+		"folded into that answer automatically.\n\n"+
+		"When you are done, call task-done with your full updated outcome — the whole answer as it "+
+		"now stands, not only what changed, because task-done replaces the recorded outcome.", taskID, instruction)
 }
 
 // handleControlDrain returns radio messages after a cursor, from the
@@ -524,10 +532,18 @@ func (s *Server) handleControlSend(w http.ResponseWriter, r *http.Request) {
 // resumes each one's worker. A task still running reads the instruction on
 // the radio and is left alone. See broker/followup.go.
 func (s *Server) reopenFinished(run *broker.Run, tasks []*broker.Task, instruction string) []string {
-	var reopened []string
+	var reopened, addressed []string
+	seen := map[string]bool{}
 	for _, t := range tasks {
-		if t.Reopen(instruction) {
-			reopened = append(reopened, t.ID)
+		ids := run.ReopenWithDependents(t, instruction)
+		if len(ids) > 0 {
+			addressed = append(addressed, ids[0])
+		}
+		for _, id := range ids {
+			if !seen[id] {
+				seen[id] = true
+				reopened = append(reopened, id)
+			}
 		}
 	}
 	if len(reopened) == 0 {
@@ -542,9 +558,19 @@ func (s *Server) reopenFinished(run *broker.Run, tasks []*broker.Task, instructi
 		// settled run's was retired.
 		s.control.LauncherFor(run.ID, run.Snapshot().CWD)
 	}
-	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
-		fmt.Sprintf("%s reopened %s with the operator's instruction; resuming %s.", broker.RelayPrefix,
-			strings.Join(reopened, ", "), map[bool]string{true: "its worker", false: "their workers"}[len(reopened) == 1]))
+	note := fmt.Sprintf("%s reopened %s with the operator's instruction; resuming %s.", broker.RelayPrefix,
+		strings.Join(addressed, ", "), map[bool]string{true: "its worker", false: "their workers"}[len(addressed) == 1])
+	var behind []string
+	for _, id := range reopened {
+		if !slices.Contains(addressed, id) {
+			behind = append(behind, id)
+		}
+	}
+	if len(behind) > 0 {
+		note += fmt.Sprintf(" %s, which build on it, reopen behind it and will revise their outcomes when it is done.",
+			strings.Join(behind, ", "))
+	}
+	run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal, note)
 	return reopened
 }
 

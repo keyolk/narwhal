@@ -641,6 +641,17 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			return
 		}
 
+		// Whether the outcome answers the task, once per dispatch, after
+		// the gates that may still change it. See broker/answered.go.
+		if hint := run.JudgeAnswered(task, req.Outcome); hint != "" {
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"task_id": task.ID,
+				"state":   string(task.CurrentState()),
+				"hint":    hint,
+			})
+			return
+		}
+
 		task.CompleteDispatch(req.Outcome, run)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"task_id": task.ID,

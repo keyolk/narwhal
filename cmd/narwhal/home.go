@@ -106,6 +106,10 @@ func (m tuiModel) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlC:
 		m.quit = true
 		return m, tea.Quit
+	case tea.KeyCtrlE:
+		// What has been typed so far goes into the editor with it.
+		m.composing = false
+		return m, m.openEditor()
 	case tea.KeyEnter:
 		prompt := strings.TrimSpace(string(m.composeBuf))
 		if prompt == "" {
@@ -170,11 +174,19 @@ func (m tuiModel) viewHome() string {
 	var line string
 	switch {
 	case m.starting != "":
-		line = styCyan.Render("» ") + m.starting + styDim.Render("   starting…")
+		first, _, _ := strings.Cut(m.starting, "\n")
+		line = styCyan.Render("» ") + first + styDim.Render("   starting…")
 	case m.composing:
-		line = styCyanBold.Render("» ") + string(m.composeBuf) + styCyan.Render("▏")
+		// An edited request can run to paragraphs; the line shows how it
+		// starts and how much more there is.
+		text := string(m.composeBuf)
+		more := ""
+		if first, rest, ok := strings.Cut(text, "\n"); ok {
+			text, more = first, styDim.Render(fmt.Sprintf("  (+%d lines)", strings.Count(rest, "\n")+1))
+		}
+		line = styCyanBold.Render("» ") + text + styCyan.Render("▏") + more
 	default:
-		line = styDim.Render("» press n and describe the work — a planner breaks it into tasks")
+		line = styDim.Render("» press n and describe the work, or e to write it in $EDITOR")
 	}
 	title := "New request"
 	if m.composing {
@@ -185,9 +197,9 @@ func (m tuiModel) viewHome() string {
 		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-4))
 	}
 
-	keys := "enter open · n new request · j/k move · ? help · q quit"
+	keys := "enter open · n new request · e write in $EDITOR · j/k move · ? help · q quit"
 	if m.composing {
-		keys = "enter start · esc cancel"
+		keys = "enter start · ctrl-e open in $EDITOR · esc cancel"
 	}
 	top := head + "\n" + box + "\n"
 	room := m.height - strings.Count(top, "\n") - 2

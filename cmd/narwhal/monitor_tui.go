@@ -490,6 +490,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// tick, so it is clear it went in.
 		return m, m.poll()
 
+	case editorDoneMsg:
+		return m.editorDone(msg)
 	case attachDoneMsg:
 		// The attached session took over the terminal; Bubble Tea has just
 		// restored the TUI. Poll immediately rather than waiting out the
@@ -535,6 +537,10 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Start a request. i and / as well, since they are what opens a
 		// line to type in everywhere else in the monitor.
 		m.composing, m.homeErr = true, nil
+	case "e", "ctrl+e":
+		// Write it in $EDITOR. See editor.go.
+		m.homeErr = nil
+		return m, m.openEditor()
 	case "esc":
 		// esc backs out. From the top level there is nowhere further to go,
 		// so it quits rather than sitting inert.

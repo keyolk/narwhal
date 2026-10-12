@@ -22,7 +22,8 @@ func (m tuiModel) viewHelp() string {
 		"  " + styCyan.Render("run") + " one step: a plan and its tasks  →  " + styCyan.Render("task") + " one worker's part. esc goes back up.",
 		"",
 		section("The run screen"),
-		"  Left: " + styCyan.Render("1 Graph") + " the tasks and what waits on what — pick one here",
+		"  Left: " + styCyan.Render("1 Graph") + " the tasks and what waits on what — pick one here;",
+		"        under it, the run's result so far and what it produced (r reads it, o opens them)",
 		"  Right, one at a time: " + styCyan.Render("2 Task") + " the selected task, as it goes · " +
 			styCyan.Render("3 Timeline") + " what has happened · " +
 			styCyan.Render("4 Radio") + " what the workers said, or " + styCyan.Render("Brief") + " where things stand",

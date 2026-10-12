@@ -408,7 +408,7 @@ func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "O":
 		// This run's outputs, this task's first. See outputs.go.
 		if t, ok := m.selectedTask(); ok {
-			m.openOutputs(t.ID)
+			return m, m.openOutputs(t.ID), true
 		}
 		return m, nil, true
 	case "tab", "l", "right":
@@ -439,7 +439,7 @@ func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		case "G", "end":
 			m.detailScroll = 1 << 20
 		case "o":
-			m.openOutputs(t.ID)
+			return m, m.openOutputs(t.ID), true
 		case "enter":
 			m.summaryAskOpen = !m.summaryAskOpen
 		case "1", "2", "3", "4", "5", "6", "7", "8", "9":

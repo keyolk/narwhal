@@ -213,6 +213,15 @@ type tuiModel struct {
 	// summaryAskOpen unfolds a long request on Summary.
 	taskTab        int
 	summaryAskOpen bool
+	// outputsView shows the watched run's outputs; outputSel and
+	// outputScroll are its list and reading positions. See outputs.go.
+	outputsView  bool
+	outputSel    int
+	outputScroll int
+	// outputsRun is the run shown when it is not the watched one: a flow
+	// step's, opened from the flow view, which esc returns to.
+	outputsRun string
+
 	// pinnedTask is the one task a pane opened by w shows; leaving its
 	// view quits. See tmuxpanes.go.
 	pinnedTask string
@@ -657,6 +666,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.composing {
 		return m.handleComposeKey(msg)
 	}
+	if m.outputsView {
+		return m.handleOutputsKey(normalizeCJKKey(msg))
+	}
 	if m.flowView && !m.picker {
 		msg = normalizeCJKKey(msg)
 		return m.handleFlowKey(msg)
@@ -837,6 +849,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.picker = true
 		}
+	case "o", "O":
+		// Everything the run produced, readable in place. See outputs.go.
+		m.openOutputs("")
 	case "w":
 		// The working tasks as tmux panes. See tmuxpanes.go.
 		return m, m.openTmuxPanes()
@@ -1198,6 +1213,9 @@ func (m tuiModel) View() string {
 	}
 	if m.picker {
 		return m.viewHome()
+	}
+	if m.outputsView {
+		return m.viewOutputs()
 	}
 	if m.flowView {
 		return m.viewFlow()
@@ -1759,7 +1777,7 @@ func (m tuiModel) footerKeys() string {
 	if m.zoom >= 0 {
 		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
 	}
-	parts = append(parts, zoomKey, "i steer", "r result", "n next step", "esc back", "? help")
+	parts = append(parts, zoomKey, "i steer", "o outputs", "r result", "n next step", "esc back", "? help")
 	return strings.Join(parts, " · ")
 }
 

@@ -184,7 +184,7 @@ func (m tuiModel) viewResult() string {
 		body = append(body, ansi.Truncate(line, w, "…"))
 	}
 
-	keys := "e write report · y copy answer · 1-9 open a PR or file · n next step · esc back"
+	keys := "o outputs · e write report · y copy answer · 1-9 open a PR or file · n next step · esc back"
 	if m.composing {
 		keys = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
 	} else if n := m.noticeLine(w); n != "" {
@@ -219,6 +219,9 @@ func (m tuiModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, openArtifact(m.snap.Result().Artifacts, int(k[0]-'0'), m.snap.CWD), true
 	case k == "n" || k == "i":
 		m.startCompose(m.flowOf(m.live))
+		return m, nil, true
+	case k == "o" || k == "O":
+		m.openOutputs("")
 		return m, nil, true
 	}
 	return m, nil, false

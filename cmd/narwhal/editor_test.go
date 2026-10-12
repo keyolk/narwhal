@@ -78,7 +78,7 @@ func runEditor(t *testing.T, m tuiModel) tuiModel {
 func TestARequestWrittenInTheEditorIsSubmitted(t *testing.T) {
 	var got string
 	saved := startRequest
-	startRequest = func(cwd, prompt string) (store.LiveRun, error) {
+	startRequest = func(cwd, prompt, _ string) (store.LiveRun, error) {
 		got = prompt
 		return store.LiveRun{RunID: "plan-1", BrokerURL: "http://d", CWD: cwd, Prompt: prompt,
 			StartedAt: time.Now().Unix(), State: "active"}, nil
@@ -105,7 +105,7 @@ func TestAnEmptyEditCancels(t *testing.T) {
 	fakeEditor(t, "\n# only a comment\n")
 	called := false
 	saved := startRequest
-	startRequest = func(string, string) (store.LiveRun, error) { called = true; return store.LiveRun{}, nil }
+	startRequest = func(string, string, string) (store.LiveRun, error) { called = true; return store.LiveRun{}, nil }
 	t.Cleanup(func() { startRequest = saved })
 	m := runEditor(t, homeModel(t))
 	if called || m.starting != "" || !m.picker {

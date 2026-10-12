@@ -462,6 +462,27 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 	}
 
 	switch action {
+	case "artifact":
+		// A worker recording something it made — a branch, a commit, a
+		// PR, a file. See broker/result.go for why this is data and not
+		// left to the outcome text.
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})
+			return
+		}
+		var req struct {
+			Kind  string `json:"kind"`
+			Value string `json:"value"`
+		}
+		if err := decodeBody(r, &req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		if err := task.RecordArtifact(req.Kind, req.Value); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"task_id": task.ID, "recorded": req.Kind})
 	case "done":
 		if r.Method != http.MethodPost {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST required"})

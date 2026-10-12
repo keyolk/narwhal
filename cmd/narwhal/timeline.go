@@ -154,6 +154,8 @@ func timelineGlyph(k broker.TimelineKind) (string, lipgloss.Style) {
 	switch k {
 	case broker.TimelineRun:
 		return "◆", styTitle
+	case broker.TimelineFollows:
+		return "↳", styCyan
 	case broker.TimelineStarted:
 		return "▸", styBlue
 	case broker.TimelineCompleted:

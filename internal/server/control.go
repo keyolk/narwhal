@@ -24,6 +24,7 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/launcher"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // Controller is what the server needs from the daemon to serve control
@@ -380,6 +381,8 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 				"failed":         failed,
 				"messages":       len(snap.Messages),
 				"active_workers": active,
+				"flow":           snap.Flow,
+				"parent_run":     snap.ParentRun,
 			})
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
@@ -503,6 +506,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		WorkerModel     string `json:"worker_model"`
 		SynthesisModel  string `json:"synthesis_model"`
 		PlanTimeoutSecs int    `json:"plan_timeout_secs"`
+		// Flow continues a piece of work: the new run is its next step,
+		// planned with its goal, notes and what the earlier steps
+		// concluded. Empty starts a new flow. See store/flow.go.
+		Flow string `json:"flow"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -511,6 +518,21 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	if req.Prompt == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "prompt is required"})
 		return
+	}
+	var flow store.Flow
+	if req.Flow != "" {
+		f, err := store.LoadFlow(req.Flow)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+			return
+		}
+		if f.Closed {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "flow " + f.ID + " is closed"})
+			return
+		}
+		flow = f
+		// A step runs where its flow does, whatever the caller sent.
+		req.CWD = f.CWD
 	}
 	if req.CWD == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "cwd is required"})
@@ -559,6 +581,33 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	// started from the prompt alone.
 	planInstructions := PlanInstructionsFor(
 		runID, s.baseURL(), mainAgent.Token, req.Prompt, req.CWD)
+
+	// Place the run in its flow: the next step of one, or the first of a
+	// new one. A flow that cannot be written is reported, not fatal — the
+	// run is still worth doing on its own.
+	flowErr := ""
+	if flow.ID != "" {
+		steps := flow.Output().Runs
+		parent := flow.LastRun()
+		run.SetLineage(parent, flow.ID)
+		// The earlier steps in full, where a worker can read them; the
+		// planner is given the conclusions and this path.
+		full := filepath.Join(l.SessionDir(), "flow-so-far.md")
+		if err := os.MkdirAll(l.SessionDir(), 0o700); err != nil {
+			full = ""
+		} else if err := os.WriteFile(full, []byte(store.FlowMarkdown(flow, steps)), 0o600); err != nil {
+			full = ""
+		}
+		planInstructions += "\n\n" + store.FlowBrief(flow, steps, full)
+		if _, err := store.AddFlowStep(flow.ID, runID, req.Prompt); err != nil {
+			flowErr = err.Error()
+		}
+	} else {
+		run.SetLineage("", runID)
+		if _, err := store.StartFlow(runID, req.CWD, req.Prompt); err != nil {
+			flowErr = err.Error()
+		}
+	}
 	planTimeout := time.Duration(req.PlanTimeoutSecs) * time.Second
 	if planTimeout == 0 {
 		planTimeout = 5 * time.Minute
@@ -604,6 +653,10 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if duplicateOf != "" {
 		resp["duplicate_of"] = duplicateOf
+	}
+	resp["flow"] = run.Snapshot().Flow
+	if flowErr != "" {
+		resp["flow_error"] = flowErr
 	}
 	writeJSON(w, http.StatusCreated, resp)
 }

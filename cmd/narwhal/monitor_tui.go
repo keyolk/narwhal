@@ -82,6 +82,8 @@ const (
 	// detailSession shows a worker's full Claude session output. The task
 	// detail summarizes; this is where you actually watch a worker work.
 	detailSession
+	// detailResult is the run's result: answer, artifacts, tasks.
+	detailResult
 )
 
 // tickMsg drives the poll loop.
@@ -187,6 +189,29 @@ type tuiModel struct {
 	composeBuf []rune
 	starting   string
 	homeErr    error
+	// composeFlow is the flow the line continues, or "" for a new one.
+	composeFlow string
+	// editorNotes says the open editor is for a flow's notes, not a
+	// request. See editor.go.
+	editorNotes string
+
+	// The flow layer. See flowview.go. flows are read from disk, runFlow
+	// maps a run to the flow file listing it, and flowView with flowID,
+	// flowSel and flowScroll is the flow screen.
+	flows      map[string]store.Flow
+	runFlow    map[string]string
+	flowView   bool
+	flowID     string
+	flowSel    int
+	flowScroll int
+	snapCache  map[string]cachedSnap
+
+	// prState is each PR's state as gh reported it; notice is the last
+	// action's one-line result. See resultview.go.
+	prState   map[string]string
+	notice    string
+	noticeErr error
+	noticeAt  time.Time
 
 	// timelineSel is the selected timeline event, or timelineFollow to
 	// keep the newest selected as the run goes on.
@@ -214,6 +239,8 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		focus:       focusRadio,
 		timelineSel: timelineFollow,
 		homeCWD:     launchDir(),
+		snapCache:   map[string]cachedSnap{},
+		prState:     map[string]string{},
 		zoom:        -1,
 		followTail:  true,
 		nodeScroll:  nodeScrollTail,
@@ -234,7 +261,7 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(m.poll(), m.refreshRuns(), tick(m.interval))
+	return tea.Batch(m.poll(), m.refreshRuns(), refreshFlows(), tick(m.interval))
 }
 
 // refreshRuns re-discovers live runs so a run started after the monitor
@@ -345,16 +372,41 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	// Grouped first, as the home screen shows them — in progress, then
 	// abandoned, then history — so the cursor index and the rows on screen
 	// are the same order. Newest first within a group.
+	//
+	// A flow's runs stay together, in step order, placed by the flow's
+	// latest step: a flow whose last step is running is in progress
+	// however long ago it started.
 	sorted := append([]store.LiveRun(nil), runs...)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if gi, gj := runGroup(sorted[i]), runGroup(sorted[j]); gi != gj {
-			return gi < gj
+	type flowKey struct {
+		group  int
+		latest time.Time
+	}
+	keys := map[string]flowKey{}
+	for _, r := range sorted {
+		id := m.flowOf(r)
+		k, seen := keys[id]
+		if t := runStartTime(r); !seen || t.After(k.latest) {
+			keys[id] = flowKey{runGroup(r), t}
 		}
+	}
+	sort.SliceStable(sorted, func(i, j int) bool {
+		fi, fj := m.flowOf(sorted[i]), m.flowOf(sorted[j])
+		ki, kj := keys[fi], keys[fj]
+		if fi != fj {
+			if ki.group != kj.group {
+				return ki.group < kj.group
+			}
+			if !ki.latest.Equal(kj.latest) {
+				return ki.latest.After(kj.latest)
+			}
+			return fi > fj
+		}
+		// Within a flow, step order.
 		a, b := runStartTime(sorted[i]), runStartTime(sorted[j])
 		if !a.Equal(b) {
-			return a.After(b)
+			return a.Before(b)
 		}
-		return sorted[i].RunID > sorted[j].RunID
+		return sorted[i].RunID < sorted[j].RunID
 	})
 	m.runs = sorted
 
@@ -419,16 +471,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// In the picker only the run list is on screen, so polling the
 		// watched run's snapshot every second is work nobody sees.
-		if m.picker {
-			return m, tea.Batch(m.refreshRuns(), tick(m.interval))
+		if m.picker || m.flowView {
+			return m, tea.Batch(m.refreshRuns(), refreshFlows(), tick(m.interval))
 		}
-		return m, tea.Batch(m.poll(), m.refreshRuns(), tick(m.interval))
+		return m, tea.Batch(m.poll(), m.refreshRuns(), refreshFlows(), tick(m.interval))
 
 	case runsMsg:
 		m.mergeRuns(msg)
 		return m, nil
 	case requestStartedMsg:
 		return m.requestStarted(msg)
+	case flowsMsg:
+		m.applyFlows(msg)
+		return m, nil
+	case prStateMsg:
+		m.prState[msg.url] = msg.state
+		return m, nil
+	case noticeMsg:
+		m.setNotice(msg.text, msg.err)
+		return m, nil
 
 	case snapshotMsg:
 		// An error with no snapshot leaves what is on screen alone: a
@@ -530,13 +591,31 @@ func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(m.runs) == 0 {
 			return m, nil
 		}
+		// A flow of several runs opens on the flow; a finished run on its
+		// result, which is what it is opened for; a running one on its
+		// graph.
+		r := m.runs[m.runCur]
+		if id := m.flowOf(r); len(m.flowRuns(id)) > 1 {
+			m.openFlow(id, r.RunID)
+			return m, nil
+		}
 		cmd := m.selectRun(m.runCur)
 		m.picker = false
+		if !runIsWorking(r) && r.Tasks > 0 {
+			m.detail = detailResult
+			return m, tea.Batch(cmd, m.prStatusCmd())
+		}
 		return m, cmd
+	case "u":
+		// The selected run's flow, whatever its size: where notes are kept.
+		if len(m.runs) > 0 {
+			r := m.runs[m.runCur]
+			m.openFlow(m.flowOf(r), r.RunID)
+		}
 	case "n", "i", "/":
 		// Start a request. i and / as well, since they are what opens a
 		// line to type in everywhere else in the monitor.
-		m.composing, m.homeErr = true, nil
+		m.startCompose("")
 	case "e", "ctrl+e":
 		// Write it in $EDITOR. See editor.go.
 		m.homeErr = nil
@@ -558,6 +637,10 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.composing {
 		return m.handleComposeKey(msg)
+	}
+	if m.flowView && !m.picker {
+		msg = normalizeCJKKey(msg)
+		return m.handleFlowKey(msg)
 	}
 
 	// Under a Korean input source the shortcut keys arrive as jamo (`q` -> `ㅂ`).
@@ -681,7 +764,7 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		// Enter opens what the cursor is on, wherever it is. See
 		// navigation.go for where each pane leads.
-		m.openFromFocus()
+		return m, m.openFromFocus()
 	case "s":
 		// The selected task's view, from any pane: when another pane has
 		// focus the graph cursor still points at a task, and watching a
@@ -727,13 +810,29 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = focusRadio
 		}
-	case "r", "esc":
-		// Back to the run list. esc pairs with enter: enter digs into a run,
-		// esc backs out of it. Allowed even with a single run — backing out
-		// to a one-line list is less surprising than a key that silently
-		// does nothing.
-		m.picker = true
+	case "esc":
+		// Back out one level: to the flow a run is a step of, or home.
+		// esc pairs with enter: enter digs in, esc backs out.
+		if len(m.flowRuns(m.flowOf(m.live))) > 1 {
+			m.openFlow(m.flowOf(m.live), m.live.RunID)
+		} else {
+			m.picker = true
+		}
+	case "u":
+		// Up to the run's flow, however many steps it has: where its
+		// notes are written and its steps' results read side by side.
+		m.openFlow(m.flowOf(m.live), m.live.RunID)
+	case "r":
+		m.detail, m.detailScroll = detailResult, 0
+		return m, m.prStatusCmd()
+	case "n":
+		// The next step of this run's flow.
+		m.startCompose(m.flowOf(m.live))
 	case "]", "shift+right":
+		// Within a flow, the next step; otherwise the next run.
+		if cmd, ok := m.stepRun(1); ok {
+			return m, cmd
+		}
 		if m.runCur+1 < len(m.runs) {
 			// selectRun mutates m, so run it before m is copied into the
 			// return value — otherwise the switch is silently discarded.
@@ -741,6 +840,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	case "[", "shift+left":
+		if cmd, ok := m.stepRun(-1); ok {
+			return m, cmd
+		}
 		if m.runCur > 0 {
 			cmd := m.selectRun(m.runCur - 1)
 			return m, cmd
@@ -750,6 +852,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.detail == detailResult {
+		if next, cmd, ok := m.handleResultKey(msg); ok {
+			return next, cmd
+		}
+	}
 	switch msg.String() {
 	case "q", "esc":
 		m.detail = detailClosed
@@ -1059,7 +1166,12 @@ func (m tuiModel) View() string {
 	if m.picker {
 		return m.viewHome()
 	}
+	if m.flowView {
+		return m.viewFlow()
+	}
 	switch m.detail {
+	case detailResult:
+		return m.viewResult()
 	case detailMessage:
 		return m.viewMessageDetail()
 	case detailSession:
@@ -1474,6 +1586,10 @@ func (m tuiModel) viewHeader() string {
 	if prompt == "" {
 		return line
 	}
+	// A step of a flow says which, among the others.
+	if stages := m.flowStages(w); stages != "" {
+		line += "\n" + stages
+	}
 	// The prompt is what the run is *for*: at full contrast, wrapped to
 	// two lines rather than cut at one, and indented under the title so
 	// it reads as its subject rather than a second header.
@@ -1610,7 +1726,7 @@ func (m tuiModel) footerKeys() string {
 	if m.zoom >= 0 {
 		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
 	}
-	parts = append(parts, zoomKey, "i steer", "esc home", "? help")
+	parts = append(parts, zoomKey, "i steer", "r result", "n next step", "esc back", "? help")
 	return strings.Join(parts, " · ")
 }
 

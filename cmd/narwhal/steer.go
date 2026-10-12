@@ -150,6 +150,12 @@ func (m tuiModel) canSteer() bool {
 func (m tuiModel) steerBar() string {
 	w := max(1, m.width)
 	fit := func(s string) string { return ansi.Truncate(s, w, "…") }
+	if m.composing {
+		return m.composeLine(w)
+	}
+	if n := m.noticeLine(w); n != "" {
+		return n
+	}
 	if m.steering {
 		return fit(styCyanBold.Render("» ") + string(m.steerBuf) + styCyan.Render("▏") +
 			styDim.Render("   enter send · esc cancel · @task addresses one · ! urgent"))
@@ -165,7 +171,7 @@ func (m tuiModel) steerBar() string {
 		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {
 			why = "its daemon is gone, so instructions would reach no one"
 		}
-		return fit(styDim.Render("» " + why + " · esc for home, n there for a new request"))
+		return fit(styDim.Render("» " + why + " · r its result · n a next step that builds on it"))
 	}
 	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
 		styDim.Render(" to tell the workers something")

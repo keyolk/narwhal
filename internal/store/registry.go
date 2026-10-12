@@ -38,6 +38,10 @@ type LiveRun struct {
 	Failed   int    `json:"failed,omitempty"`
 	Running  int    `json:"running,omitempty"`
 	Messages int    `json:"messages,omitempty"`
+
+	// Flow and ParentRun place the run in a piece of work. See flow.go.
+	Flow      string `json:"flow,omitempty"`
+	ParentRun string `json:"parent_run,omitempty"`
 }
 
 func registryPath() string {
@@ -248,6 +252,8 @@ func listFinished(seen map[string]bool) []LiveRun {
 			State:     string(snap.State),
 			Tasks:     len(snap.Tasks),
 			Messages:  len(snap.Messages),
+			Flow:      snap.Flow,
+			ParentRun: snap.ParentRun,
 		}
 		for _, t := range snap.Tasks {
 			switch t.State {

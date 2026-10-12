@@ -23,13 +23,15 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
-// openFromFocus opens whatever the focused pane's cursor is on.
-func (m *tuiModel) openFromFocus() {
+// openFromFocus opens whatever the focused pane's cursor is on, and
+// returns the poll an opened run needs.
+func (m *tuiModel) openFromFocus() tea.Cmd {
 	switch m.focus {
 	case focusTasks, focusNode:
 		if t, ok := m.selectedTask(); ok {
@@ -44,16 +46,19 @@ func (m *tuiModel) openFromFocus() {
 		events := m.timelineEvents()
 		i, ok := m.selectedEvent(events)
 		if !ok {
-			return
+			return nil
 		}
 		e := events[i]
 		switch {
+		case e.Run != "":
+			return m.openRun(e.Run)
 		case e.Seq > 0:
 			m.openMessage(e.Seq)
 		case m.taskByID(e.Who).ID != "":
 			m.openTask(e.Who, e.At)
 		}
 	}
+	return nil
 }
 
 // openTask shows a task's view. With at set, the view opens on that moment

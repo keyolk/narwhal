@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // editorDoneMsg carries what the editor saved, or why it did not.
@@ -90,6 +92,44 @@ func finishEditor(path string, runErr error) editorDoneMsg {
 	return editorDoneMsg{text: stripEditorComments(string(data))}
 }
 
+// notesTemplate follows a flow's notes in the editor.
+const notesTemplate = `
+
+# Notes for this piece of work. Lines starting with # are ignored.
+# Every later step is planned with them: write what was decided, what is
+# out of scope, what to be careful of. Save to keep them; an empty file
+# clears them.
+`
+
+// openNotesEditor edits a flow's notes in $EDITOR. A run from before flows
+// is adopted into one first, so it has notes to keep.
+func (m *tuiModel) openNotesEditor(flowID string) tea.Cmd {
+	if err := m.adoptFlow(flowID); err != nil {
+		return func() tea.Msg { return noticeMsg{err: err} }
+	}
+	f, err := store.LoadFlow(flowID)
+	if err != nil {
+		return func() tea.Msg { return noticeMsg{err: err} }
+	}
+	tmp, err := os.CreateTemp("", "narwhal-notes-*.md")
+	if err != nil {
+		return func() tea.Msg { return noticeMsg{err: err} }
+	}
+	path := tmp.Name()
+	_, werr := fmt.Fprintf(tmp, "%s"+notesTemplate, f.Notes)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		os.Remove(path)
+		return func() tea.Msg { return noticeMsg{err: werr} }
+	}
+	m.editorNotes = flowID
+	c := editorCommand(path)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	return tea.ExecProcess(c, func(err error) tea.Msg { return finishEditor(path, err) })
+}
+
 // stripEditorComments drops # lines and the blank lines around the text.
 func stripEditorComments(s string) string {
 	var keep []string
@@ -106,6 +146,21 @@ func stripEditorComments(s string) string {
 // is — the editor was where it was finished. Saved empty, nothing happens
 // and the line keeps what it had.
 func (m tuiModel) editorDone(msg editorDoneMsg) (tea.Model, tea.Cmd) {
+	if flow := m.editorNotes; flow != "" {
+		m.editorNotes = ""
+		if msg.err != nil {
+			m.setNotice("", msg.err)
+			return m, nil
+		}
+		f, err := store.SetFlowNotes(flow, msg.text)
+		if err != nil {
+			m.setNotice("", err)
+			return m, nil
+		}
+		m.flows[f.ID] = f
+		m.setNotice("notes saved — every later step is planned with them", nil)
+		return m, nil
+	}
 	if msg.err != nil {
 		m.homeErr, m.composing = msg.err, true
 		return m, nil

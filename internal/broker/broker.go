@@ -319,6 +319,10 @@ type Run struct {
 	fileClaims map[string]string
 	claimMu    sync.RWMutex
 
+	// parentRun and flow place the run in a piece of work larger than
+	// itself. See Snapshot.Flow. Guarded by mu.
+	parentRun, flow string
+
 	// usageProbe measures a task's cost when it stops running. Nil in
 	// tests that do not care about accounting. Guarded by mu.
 	usageProbe UsageProbe
@@ -501,6 +505,9 @@ type Task struct {
 	// them — a gate that demands one from every task teaches workers to
 	// write filler.
 	Check string
+	// Artifacts are what the worker recorded making: branches, commits,
+	// PRs, files. See result.go.
+	Artifacts Artifacts
 	// CheckResult is what the worker reported when it ran the check.
 	// Guarded with Check by the task lock. See check.go for why this is
 	// recorded rather than enforced.
@@ -789,6 +796,10 @@ func (t *Task) snapshot() TaskSnapshot {
 	}
 	ts.Check = t.Check
 	ts.CheckResult = t.CheckResult
+	if !t.Artifacts.Empty() {
+		a := t.Artifacts.clone()
+		ts.Artifacts = &a
+	}
 	if t.Usage != nil {
 		// Copied rather than aliased: the snapshot outlives the lock and
 		// is handed to callers that persist it, and a pointer shared with
@@ -1169,10 +1180,17 @@ type Snapshot struct {
 	// Verdicts are the judgements made on this run's dispatch calls. They
 	// are durable because they explain a task's fate: a task retried on a
 	// verdict reads, without it, as a worker that failed for no reason.
-	Verdicts []Verdict        `json:"verdicts,omitempty"`
-	Tasks    []TaskSnapshot   `json:"tasks"`
-	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []*Message       `json:"messages"`
+	Verdicts []Verdict `json:"verdicts,omitempty"`
+	// Flow is the piece of work this run is a step of, and ParentRun the
+	// step before it. A request big enough to need several rounds —
+	// plan, then build, then verify — was several unrelated runs, each
+	// starting from its prompt alone. Empty on a run that is not part of
+	// one, which is every run before flows existed.
+	Flow      string           `json:"flow,omitempty"`
+	ParentRun string           `json:"parent_run,omitempty"`
+	Tasks     []TaskSnapshot   `json:"tasks"`
+	Threads   []ThreadSnapshot `json:"threads"`
+	Messages  []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1213,6 +1231,9 @@ type TaskSnapshot struct {
 	// its answer are what make that run legible in hindsight.
 	Check       string `json:"check,omitempty"`
 	CheckResult string `json:"check_result,omitempty"`
+	// Artifacts are what the task recorded producing. Nil when it
+	// recorded nothing.
+	Artifacts *Artifacts `json:"artifacts,omitempty"`
 	// StartedAt and EndedAt are the latest dispatch's start and end. They
 	// place the task on the run's timeline; without them the record says
 	// what a task concluded and never when, and a history of the run could
@@ -1262,6 +1283,8 @@ func (r *Run) Snapshot() Snapshot {
 		StartedAt:      r.CreatedAt.Unix(),
 		HarnessVersion: HarnessVersion(),
 		Verdicts:       append([]Verdict(nil), r.verdicts...),
+		Flow:           r.flow,
+		ParentRun:      r.parentRun,
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

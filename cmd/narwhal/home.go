@@ -45,14 +45,14 @@ type requestStartedMsg struct {
 // startRequest asks the daemon to plan a new request, starting the daemon
 // first if it is not running. A variable so tests can stand in for it: the
 // real one launches a planner, which is a Claude session.
-var startRequest = func(cwd, prompt string) (store.LiveRun, error) {
+var startRequest = func(cwd, prompt, flow string) (store.LiveRun, error) {
 	url, err := nd.URL()
 	if err != nil {
 		if url, err = autoStartDaemon(); err != nil {
 			return store.LiveRun{}, err
 		}
 	}
-	body, _ := json.Marshal(map[string]string{"cwd": cwd, "prompt": prompt})
+	body, _ := json.Marshal(map[string]string{"cwd": cwd, "prompt": prompt, "flow": flow})
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Post(url+"/api/v1/control/plan", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -62,6 +62,7 @@ var startRequest = func(cwd, prompt string) (store.LiveRun, error) {
 	var out struct {
 		RunID     string `json:"run_id"`
 		BrokerURL string `json:"broker_url"`
+		Flow      string `json:"flow"`
 		Error     string `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -72,7 +73,7 @@ var startRequest = func(cwd, prompt string) (store.LiveRun, error) {
 	}
 	return store.LiveRun{
 		RunID: out.RunID, BrokerURL: out.BrokerURL, Prompt: prompt, CWD: cwd,
-		StartedAt: time.Now().Unix(), State: "active",
+		StartedAt: time.Now().Unix(), State: "active", Flow: out.Flow,
 	}, nil
 }
 
@@ -86,13 +87,41 @@ func launchDir() string {
 	return d
 }
 
-// submitRequest starts the typed request in the background.
+// submitRequest starts the typed request in the background: a new flow in
+// the launch directory, or the next step of composeFlow in its own.
 func (m tuiModel) submitRequest(prompt string) tea.Cmd {
-	cwd := m.homeCWD
+	cwd, flow := m.homeCWD, m.composeFlow
+	if flow != "" {
+		// A run from before flows is adopted into one before it can be
+		// continued: the daemon plans a step only for a flow on disk.
+		if err := m.adoptFlow(flow); err != nil {
+			return func() tea.Msg { return requestStartedMsg{err: err} }
+		}
+	}
 	return func() tea.Msg {
-		run, err := startRequest(cwd, prompt)
+		run, err := startRequest(cwd, prompt, flow)
 		return requestStartedMsg{run: run, err: err}
 	}
+}
+
+// startCompose opens the request line: for a new flow when flow is "",
+// else for the next step of that flow.
+func (m *tuiModel) startCompose(flow string) {
+	m.composing, m.composeFlow, m.homeErr = true, flow, nil
+}
+
+// composeLine is the request line as typed, for a footer.
+func (m tuiModel) composeLine(w int) string {
+	text := string(m.composeBuf)
+	more := ""
+	if first, rest, ok := strings.Cut(text, "\n"); ok {
+		text, more = first, styDim.Render(fmt.Sprintf("  (+%d lines)", strings.Count(rest, "\n")+1))
+	}
+	lead := "» next step: "
+	if m.composeFlow == "" {
+		lead = "» "
+	}
+	return ansi.Truncate(styCyanBold.Render(lead)+text+styCyan.Render("▏")+more, max(1, w), "…")
 }
 
 // handleComposeKey drives the new-request line. Every key belongs to it
@@ -197,7 +226,7 @@ func (m tuiModel) viewHome() string {
 		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-4))
 	}
 
-	keys := "enter open · n new request · e write in $EDITOR · j/k move · ? help · q quit"
+	keys := "enter open · n new request · e write in $EDITOR · u flow · j/k move · ? help · q quit"
 	if m.composing {
 		keys = "enter start · ctrl-e open in $EDITOR · esc cancel"
 	}
@@ -206,21 +235,28 @@ func (m tuiModel) viewHome() string {
 	return pinFooter(top+m.homeList(w, room), styDim.Render(keys), m.height)
 }
 
-// homeList is the requests, grouped, in at most rows lines, scrolled so the
-// selection is on screen.
+// homeList is the work, grouped by how it stands, in at most rows lines,
+// scrolled so the selection is on screen. A flow of several runs is its
+// title over its steps; a flow of one is that run.
 func (m tuiModel) homeList(width, rows int) string {
 	if len(m.runs) == 0 {
 		return styDim.Render("\n   Nothing yet. Press n to start the first request.")
 	}
 	var lines []string
 	selTop := 0
-	group := -1
+	group, flow := -1, ""
 	counts := map[int]int{}
+	seen := map[string]bool{}
 	for _, r := range m.runs {
-		counts[runGroup(r)]++
+		if id := m.flowOf(r); !seen[id] {
+			seen[id] = true
+			counts[m.flowGroup(id)]++
+		}
 	}
 	for i, r := range m.runs {
-		if g := runGroup(r); g != group {
+		id := m.flowOf(r)
+		steps := m.flowRuns(id)
+		if g := m.flowGroup(id); g != group {
 			group = g
 			style := styTitle
 			if g == 1 {
@@ -228,8 +264,16 @@ func (m tuiModel) homeList(width, rows int) string {
 			}
 			lines = append(lines, " "+style.Render(groupTitles[g])+styDim.Render(fmt.Sprintf(" · %d", counts[g])))
 		}
+		if len(steps) > 1 && id != flow {
+			flow = id
+			lines = append(lines, m.flowHeaderRow(id, steps, width))
+		}
 		if i == m.runCur {
 			selTop = len(lines)
+		}
+		if len(steps) > 1 {
+			lines = append(lines, m.stepRow(r, steps, i == m.runCur, width))
+			continue
 		}
 		lines = append(lines, m.homeRow(r, i == m.runCur, width)...)
 	}
@@ -242,6 +286,49 @@ func (m tuiModel) homeList(width, rows int) string {
 		end = min(end, start+rows)
 	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// flowHeaderRow names a flow of several runs: its title, how many steps,
+// and where its latest step stands.
+func (m tuiModel) flowHeaderRow(id string, steps []store.LiveRun, width int) string {
+	last := steps[len(steps)-1]
+	icon, style := runIcon(last, m.frame)
+	right := progressBar(last.Done, last.Failed, last.Tasks, 10) + " " + padRight(fmt.Sprintf("%d/%d", last.Done, last.Tasks), 5) +
+		" " + styDim.Render(fmt.Sprintf("%4s", ago(runStartTime(last))))
+	extra := ""
+	if f, ok := m.flows[id]; ok && f.Closed {
+		extra = styDim.Render("  closed")
+	}
+	left := "   " + style.Render(icon) + " " + styTitle.Render(truncate(m.flowTitle(id), max(10, width-ansi.StringWidth(right)-24))) +
+		styDim.Render(fmt.Sprintf("  %d steps", len(steps))) + extra
+	return left + strings.Repeat(" ", max(1, width-ansi.StringWidth(left)-ansi.StringWidth(right))) + right
+}
+
+// stepRow is one run of a multi-step flow, under its flow's title.
+func (m tuiModel) stepRow(r store.LiveRun, steps []store.LiveRun, selected bool, width int) string {
+	pos, n := 0, len(steps)
+	for i, s := range steps {
+		if s.RunID == r.RunID {
+			pos = i
+		}
+	}
+	branch := "├"
+	if pos == n-1 {
+		branch = "└"
+	}
+	icon, style := runIcon(r, m.frame)
+	f := m.flows[m.flowOf(r)]
+	right := styDim.Render(fmt.Sprintf("%d/%d  %4s", r.Done, r.Tasks, ago(runStartTime(r))))
+	label := truncate(fmt.Sprintf("%d %s", pos+1, m.stepRequest(f, pos, r)), max(10, width-ansi.StringWidth(right)-14))
+	marker := "      "
+	if selected {
+		marker = "    " + styCyanBold.Render("▸") + " "
+		label = styTitle.Render(label)
+	} else if runGroup(r) == 2 {
+		label = styDim.Render(label)
+	}
+	left := marker + styDim.Render(branch+" ") + style.Render(icon) + " " + label
+	return left + strings.Repeat(" ", max(1, width-ansi.StringWidth(left)-ansi.StringWidth(right))) + right
 }
 
 // homeRow is one request: what was asked and how far it has got, then

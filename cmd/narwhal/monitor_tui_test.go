@@ -503,9 +503,9 @@ func TestSwitchStopsAtEnds(t *testing.T) {
 
 func TestPickerOpensAndSelects(t *testing.T) {
 	m := multiRunModel(3)
-	m = press(m, "r")
+	m = press(m, "esc")
 	if !m.picker {
-		t.Fatal("r should open the run picker")
+		t.Fatal("esc should open the run picker")
 	}
 	m = press(m, "j", "j")
 	if m.runCur != 2 {

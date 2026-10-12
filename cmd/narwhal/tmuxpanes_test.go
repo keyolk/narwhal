@@ -61,8 +61,24 @@ func TestWOpensThePanes(t *testing.T) {
 	t.Setenv("TMUX", "/tmp/x,1,0")
 	_, cmd = m.Update(keyMsg("w"))
 	msg := cmd().(noticeMsg)
-	if msg.err != nil || len(ran) != 1 || ran[0][1] != "new-window" || !strings.Contains(ran[0][6], "--task api") {
+	if msg.err != nil || len(ran) != 2 || ran[0][1] != "list-windows" || ran[1][1] != "new-window" ||
+		!strings.Contains(ran[1][6], "--task api") {
 		t.Errorf("inside tmux: %+v ran %v", msg, ran)
+	}
+
+	// Pressed again while the window is open: switch to it, open nothing.
+	ran = nil
+	runTmux = func(c []string) (string, error) {
+		ran = append(ran, c)
+		if c[1] == "list-windows" {
+			return "zsh\nnw:replay-safe\n", nil
+		}
+		return "", nil
+	}
+	_, cmd = m.Update(keyMsg("w"))
+	msg = cmd().(noticeMsg)
+	if len(ran) != 2 || ran[1][1] != "select-window" || !strings.Contains(msg.text, "already open") {
+		t.Errorf("second w: %+v ran %v", msg, ran)
 	}
 }
 

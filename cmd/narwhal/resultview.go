@@ -11,7 +11,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -55,12 +57,26 @@ func (m tuiModel) prStatusCmd() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// artifactLines lists a result's artifacts. With numbered set, PRs carry
-// the digit that opens them.
+// openables are the artifacts a digit opens, in the order they are
+// numbered: PRs, then files. Branches and commits have nothing to open.
+func openables(a broker.Artifacts) []string {
+	return append(append([]string(nil), a.PRs...), a.Files...)
+}
+
+// artifactLines lists a result's artifacts. With numbered set, PRs and
+// files carry the digit that opens them.
 func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) []string {
 	var out []string
 	label := func(s string) string { return styDim.Render(padRight(s, 8)) }
-	for i, u := range res.Artifacts.PRs {
+	n := 0
+	key := func() string {
+		n++
+		if numbered && n <= 9 {
+			return styCyanBold.Render(fmt.Sprintf("%d", n)) + " "
+		}
+		return "  "
+	}
+	for _, u := range res.Artifacts.PRs {
 		state := m.prState[u]
 		st := styDim.Render("…")
 		switch state {
@@ -73,11 +89,11 @@ func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) 
 		case "?":
 			st = styDim.Render("?")
 		}
-		key := "  "
-		if numbered && i < 9 {
-			key = styCyanBold.Render(fmt.Sprintf("%d", i+1)) + " "
-		}
-		out = append(out, ansi.Truncate(key+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width, "…"))
+		out = append(out, ansi.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width, "…"))
+	}
+	// Files one to a line: each is something to open.
+	for _, f := range res.Artifacts.Files {
+		out = append(out, ansi.Truncate(key()+label("file")+abbreviatePath(f)+styDim.Render("  "+f), width, "…"))
 	}
 	list := func(name string, vals []string) {
 		if len(vals) == 0 {
@@ -88,11 +104,36 @@ func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) 
 	}
 	list("branch", res.Artifacts.Branches)
 	list("commit", res.Artifacts.Commits)
-	list("file", res.Artifacts.Files)
 	if res.Extracted > 0 {
 		out = append(out, styDim.Render(fmt.Sprintf("  %d read from the outcome text rather than recorded by a worker", res.Extracted)))
 	}
 	return out
+}
+
+// openArtifact opens the n-th openable (1-based): a PR in the browser, a
+// file in $PAGER. A relative path is the run's directory's.
+func openArtifact(a broker.Artifacts, n int, cwd string) tea.Cmd {
+	list := openables(a)
+	if n < 1 || n > len(list) {
+		return nil
+	}
+	target := list[n-1]
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return openURLCmd(target)
+	}
+	path := target
+	if !filepath.IsAbs(path) && cwd != "" {
+		path = filepath.Join(cwd, path)
+	}
+	if fi, err := os.Stat(path); err != nil || fi.IsDir() {
+		return func() tea.Msg {
+			if err == nil {
+				err = fmt.Errorf("%s is a directory", path)
+			}
+			return noticeMsg{err: fmt.Errorf("cannot open %s: %w", target, err)}
+		}
+	}
+	return pagerCmd(path, false)
 }
 
 // prShort is "owner/repo#123" for a PR URL.
@@ -143,7 +184,7 @@ func (m tuiModel) viewResult() string {
 		body = append(body, ansi.Truncate(line, w, "…"))
 	}
 
-	keys := "e write report · y copy answer · 1-9 open PR · n next step · esc back"
+	keys := "e write report · y copy answer · 1-9 open a PR or file · n next step · esc back"
 	if m.composing {
 		keys = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
 	} else if n := m.noticeLine(w); n != "" {
@@ -175,11 +216,7 @@ func (m tuiModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		}
 		return m, copyCmd(res.Answer), true
 	case len(k) == 1 && k[0] >= '1' && k[0] <= '9':
-		prs := m.snap.Result().Artifacts.PRs
-		if i := int(k[0] - '1'); i < len(prs) {
-			return m, openURLCmd(prs[i]), true
-		}
-		return m, nil, true
+		return m, openArtifact(m.snap.Result().Artifacts, int(k[0]-'0'), m.snap.CWD), true
 	case k == "n" || k == "i":
 		m.startCompose(m.flowOf(m.live))
 		return m, nil, true

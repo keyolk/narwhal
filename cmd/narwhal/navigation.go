@@ -301,7 +301,7 @@ func (m tuiModel) viewTaskView() string {
 	if tab == taskTabActivity && m.sessionTail {
 		follow = styCyan.Render("  [following]")
 	}
-	keys := "esc back · tab next tab · j/k scroll · enter open the request · n/p task · a attach"
+	keys := "esc back · tab next tab · j/k scroll · enter open the request · 1-9 open a PR or file · n/p task · a attach"
 	switch tab {
 	case taskTabActivity:
 		keys = "esc back · j/k entry · enter open/fold · o $PAGER · E open all · tab · n/p task · a attach"

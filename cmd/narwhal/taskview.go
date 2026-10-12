@@ -378,6 +378,12 @@ func (m tuiModel) pageEntry() tea.Cmd {
 		os.Remove(path)
 		return func() tea.Msg { return noticeMsg{err: werr} }
 	}
+	return pagerCmd(path, true)
+}
+
+// pagerCmd shows a file in $PAGER (less -R if unset), removing it after
+// when temp is set.
+func pagerCmd(path string, temp bool) tea.Cmd {
 	pager := os.Getenv("PAGER")
 	if pager == "" {
 		pager = "less -R"
@@ -385,7 +391,9 @@ func (m tuiModel) pageEntry() tea.Cmd {
 	c := exec.Command("sh", "-c", pager+` "$1"`, "narwhal-pager", path)
 	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return tea.ExecProcess(c, func(err error) tea.Msg {
-		os.Remove(path)
+		if temp {
+			os.Remove(path)
+		}
 		if err != nil {
 			return noticeMsg{err: fmt.Errorf("pager: %w", err)}
 		}
@@ -426,6 +434,9 @@ func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.detailScroll = 1 << 20
 		case "enter":
 			m.summaryAskOpen = !m.summaryAskOpen
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+			res := broker.Snapshot{Tasks: []broker.TaskSnapshot{t}}.Result()
+			return m, openArtifact(res.Artifacts, int(msg.String()[0]-'0'), m.snap.CWD), true
 		default:
 			return m, nil, false
 		}
@@ -586,7 +597,7 @@ func (m tuiModel) taskSummaryLines(t broker.TaskSnapshot, width int) []string {
 	res := broker.Snapshot{Tasks: []broker.TaskSnapshot{t}}.Result()
 	if !res.Artifacts.Empty() {
 		section("Artifacts")
-		out = append(out, m.artifactLines(res, width, false)...)
+		out = append(out, m.artifactLines(res, width, true)...)
 	}
 	return out
 }

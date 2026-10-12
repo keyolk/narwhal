@@ -189,6 +189,11 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "x":
 		return m, m.exportFlow(m.flowID)
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		if m.flowSel < len(steps) {
+			snap := m.runSnapshot(steps[m.flowSel].RunID)
+			return m, openArtifact(snap.Result().Artifacts, int(msg.String()[0]-'0'), snap.CWD)
+		}
 	case "c":
 		f, ok := m.flows[m.flowID]
 		if ok {
@@ -241,7 +246,7 @@ func (m tuiModel) flowGeometry() flowGeom {
 	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
 	keys := "j/k step · l/tab read the step · z widen · enter open run · r result · n next step · e notes · x export · c close · esc home"
 	if m.flowDetail {
-		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · h/tab back to steps · z widen · n next step · esc home"
+		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · 1-9 open a PR or file · h/tab back to steps · z widen · n next step · esc home"
 	}
 	g.footer = styDim.Render(ansi.Truncate(keys, w, "…"))
 	if m.composing {
@@ -381,7 +386,7 @@ func (m tuiModel) flowStepLines(w int) []string {
 	}
 	if !res.Artifacts.Empty() {
 		add("Artifacts")
-		lines = append(lines, m.artifactLines(res, w, false)...)
+		lines = append(lines, m.artifactLines(res, w, true)...)
 	}
 	return lines
 }

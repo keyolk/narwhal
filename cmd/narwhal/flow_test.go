@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -218,8 +220,14 @@ func TestResultActions(t *testing.T) {
 	if _, cmd, ok := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")}); !ok || cmd == nil {
 		t.Error("1 did not open the first PR")
 	}
-	if _, cmd, _ := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}); cmd != nil {
-		t.Error("2 opened a PR that does not exist")
+	// 2 is the file, which is not on disk here: it says so.
+	if _, cmd, _ := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}); cmd == nil {
+		t.Error("2 did nothing for the file")
+	} else if msg, ok := cmd().(noticeMsg); !ok || msg.err == nil || !strings.Contains(msg.err.Error(), "internal/api/mw.go") {
+		t.Errorf("a missing file: %+v", msg)
+	}
+	if _, cmd, _ := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")}); cmd != nil {
+		t.Error("3 opened an artifact that does not exist")
 	}
 }
 
@@ -309,5 +317,34 @@ func TestALongStepScrollsInTheFlowView(t *testing.T) {
 	}
 	if m = press(m, "esc"); !m.picker {
 		t.Fatal("esc from the steps")
+	}
+}
+
+// A file a worker recorded opens in $PAGER, numbered after the PRs.
+func TestAFileArtifactOpensInThePager(t *testing.T) {
+	m := flowModel(t)
+	dir := t.TempDir()
+	plan := dir + "/PLAN.md"
+	must(t, os.WriteFile(plan, []byte("# the plan\n"), 0o644))
+	seen := dir + "/seen"
+	pager := dir + "/pager"
+	must(t, os.WriteFile(pager, []byte("#!/bin/sh\ncp \"$1\" "+seen+"\n"), 0o755))
+	t.Setenv("PAGER", pager)
+
+	a := broker.Artifacts{PRs: []string{"https://github.com/o/r/pull/7"}, Files: []string{"PLAN.md"}}
+	res := broker.RunResult{Artifacts: a}
+	got := ansi.Strip(strings.Join(m.artifactLines(res, 100, true), "\n"))
+	if !strings.Contains(got, "1 PR") || !strings.Contains(got, "2 file") {
+		t.Fatalf("not numbered:\n%s", got)
+	}
+	cmd := openArtifact(a, 2, dir)
+	if cmd == nil {
+		t.Fatal("no command for the file")
+	}
+	// What tea.ExecProcess runs: the pager on the file, resolved against
+	// the run's directory.
+	must(t, exec.Command("sh", "-c", pager+` "$1"`, "x", plan).Run())
+	if b, _ := os.ReadFile(seen); string(b) != "# the plan\n" {
+		t.Errorf("pager saw %q", b)
 	}
 }

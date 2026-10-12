@@ -308,8 +308,10 @@ func (m tuiModel) viewTaskView() string {
 	case taskTabMessages:
 		keys = "esc back · tab next tab · j/k scroll · g/G · n/p task"
 	}
-	footer := styDim.Render(ansi.Truncate(keys, max(1, m.width), "…"))
-	if n := m.noticeLine(m.width); n != "" {
+	footer := styDim.Render(ansi.Truncate("i instruct · "+keys, max(1, m.width), "…"))
+	if m.steering || (m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor) {
+		footer = m.steerBar() + "\n" + footer
+	} else if n := m.noticeLine(m.width); n != "" {
 		footer = n + "\n" + footer
 	}
 	return pinFooter(head+follow+"\n"+styDim.Render(strings.Join(meta, " · "))+"\n"+tabs+pos+"\n"+

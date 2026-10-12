@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -124,19 +125,69 @@ func TestSendResultShowsInTheFooter(t *testing.T) {
 	}
 }
 
-// A run read from disk has no daemon to post to; say so instead of failing
-// quietly.
-func TestSteeringAFinishedRunSaysWhy(t *testing.T) {
+// A finished run has nothing running to read an instruction to no one;
+// say so rather than posting it to a radio nobody reads.
+func TestAnUnaddressedInstructionToAFinishedRunSaysWhy(t *testing.T) {
 	m := steerModel(t, "")
+	m.snap.State = broker.RunDone
 	m = press(m, "i")
 	m = typeKeys(m, "anything")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(tuiModel)
 	if cmd != nil {
-		t.Error("tried to send to a run with no daemon")
+		t.Error("sent an instruction no one can read")
 	}
-	if !strings.Contains(ansi.Strip(m.viewFooter()), "no live daemon") {
+	if !strings.Contains(ansi.Strip(m.viewFooter()), "address a task with @task") {
 		t.Errorf("footer = %q", ansi.Strip(m.viewFooter()))
+	}
+}
+
+// Addressed to a task, the same instruction goes to the daemon running
+// now — the one that ran the run may be gone — and reopens the task.
+func TestAnInstructionToAFinishedTaskReachesTheRunningDaemon(t *testing.T) {
+	var got steerRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"seq":9,"reopened":["schema"]}`))
+	}))
+	defer srv.Close()
+	saved := daemonURL
+	daemonURL = func() (string, error) { return srv.URL, nil }
+	t.Cleanup(func() { daemonURL = saved })
+
+	m := steerModel(t, "")
+	m.snap.State = broker.RunDone
+	m = press(m, "i")
+	m = typeKeys(m, "@schema also cover the legacy payload")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(tuiModel)
+	if cmd == nil {
+		t.Fatal("an instruction to a finished task was not sent")
+	}
+	next, _ = m.Update(cmd())
+	m = next.(tuiModel)
+	if len(got.Mentions) != 1 || got.Mentions[0] != "worker-schema" {
+		t.Errorf("mentions = %v", got.Mentions)
+	}
+	if foot := ansi.Strip(m.viewFooter()); !strings.Contains(foot, "reopened schema") {
+		t.Errorf("footer does not say the task was reopened: %q", foot)
+	}
+}
+
+// From a task's view, i starts an instruction already addressed to it.
+func TestInstructingFromATaskAddressesIt(t *testing.T) {
+	m := fixtureRun(t)
+	m.openTask("client", time.Time{})
+	m = press(m, "i")
+	if !m.steering || string(m.steerBuf) != "@client " {
+		t.Fatalf("steering=%v buf=%q, want the line open with @client", m.steering, string(m.steerBuf))
+	}
+	m = typeKeys(m, "더 짧게")
+	if string(m.steerBuf) != "@client 더 짧게" {
+		t.Errorf("typed into the task view rather than the line: %q", string(m.steerBuf))
+	}
+	if view := ansi.Strip(m.View()); !strings.Contains(view, "» @client 더 짧게") {
+		t.Errorf("the task view does not show the line being typed:\n%s", view)
 	}
 }
 

@@ -80,6 +80,11 @@ func (r *Run) routeInstruction(m *Message) {
 		}
 	}
 	if len(running) == 0 {
+		// Nobody to route to. Saying nothing left the instruction on the
+		// radio as if it had been delivered; say where it can go instead.
+		r.PostMessage(WorklogThread, "coordinator", []string{"main"}, PriorityUrgent,
+			fmt.Sprintf("%s no worker is running to take this instruction. Address a task with @task "+
+				"to reopen it with this instruction, or start a next step: %s", RelayPrefix, m.Content))
 		return
 	}
 
@@ -152,21 +157,33 @@ func (r *Run) needsRouting(m *Message) bool {
 	if m == nil || m.Sender != "main" || strings.HasPrefix(m.Content, RelayPrefix) {
 		return false
 	}
-	for _, id := range m.Mentions {
-		if r.GetTask(strings.TrimPrefix(id, "worker-")) != nil {
-			return false
+	return len(r.AddressedTasks(m.Mentions, m.Content)) == 0
+}
+
+// AddressedTasks are the tasks an operator message names, by mention or by
+// "@task" in its text, each once.
+func (r *Run) AddressedTasks(mentions []string, content string) []*Task {
+	var out []*Task
+	seen := map[string]bool{}
+	add := func(id string) {
+		id = strings.TrimPrefix(id, "worker-")
+		if seen[id] {
+			return
+		}
+		if t := r.GetTask(id); t != nil {
+			seen[id] = true
+			out = append(out, t)
 		}
 	}
-	for _, f := range strings.Fields(m.Content) {
-		if !strings.HasPrefix(f, "@") {
-			continue
-		}
-		id := strings.TrimPrefix(strings.TrimPrefix(strings.Trim(f, "@,.:;!?"), "@"), "worker-")
-		if r.GetTask(id) != nil {
-			return false
+	for _, id := range mentions {
+		add(id)
+	}
+	for _, f := range strings.Fields(content) {
+		if strings.HasPrefix(f, "@") {
+			add(strings.TrimPrefix(strings.Trim(f, "@,.:;!?"), "@"))
 		}
 	}
-	return true
+	return out
 }
 
 // liveTasks returns the run's tasks themselves rather than snapshots, for

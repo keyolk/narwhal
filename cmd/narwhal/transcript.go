@@ -23,6 +23,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/keyolk/narwhal/internal/launcher"
 )
 
 // transcriptEntry is one rendered line of a worker's activity.
@@ -50,23 +52,7 @@ type transcriptEntry struct {
 // transcript for a run whose cwd was recorded as /tmp/x is filed under
 // -private-tmp-x.
 func transcriptPath(cwd, sessionID string) string {
-	home, err := os.UserHomeDir()
-	if err != nil || sessionID == "" {
-		return ""
-	}
-	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
-		cwd = resolved
-	}
-	var b strings.Builder
-	for _, r := range cwd {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	return filepath.Join(home, ".claude", "projects", b.String(), sessionID+".jsonl")
+	return launcher.TranscriptPath(cwd, sessionID)
 }
 
 // findTranscript locates a session's transcript without knowing its

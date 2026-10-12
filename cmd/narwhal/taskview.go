@@ -405,6 +405,13 @@ func pagerCmd(path string, temp bool) tea.Cmd {
 // to the detail handler.
 func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	switch msg.String() {
+	case "i":
+		// An instruction for this task: read on the radio while it runs,
+		// or reopening it when it has finished. See steer.go.
+		if t, ok := m.selectedTask(); ok {
+			m.startSteer(t.ID)
+		}
+		return m, nil, true
 	case "O":
 		// This run's outputs, this task's first. See outputs.go.
 		if t, ok := m.selectedTask(); ok {

@@ -155,7 +155,7 @@ func TestAFinishedRequestSaysItCannotBeSteered(t *testing.T) {
 	m = press(m, "enter")
 	m.snap = broker.Snapshot{RunID: "r1", State: broker.RunDone,
 		Tasks: []broker.TaskSnapshot{{ID: "a", State: broker.TaskCompleted}}}
-	if got := ansi.Strip(m.steerBar()); !strings.Contains(got, "this request has finished") {
+	if got := ansi.Strip(m.steerBar()); !strings.Contains(got, "this request has finished") || !strings.Contains(got, "@task reopens") {
 		t.Errorf("steer bar: %q", got)
 	}
 }

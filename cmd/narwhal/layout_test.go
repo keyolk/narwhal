@@ -3,14 +3,13 @@ package main
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Graph and Node share one framed band, Timeline and Radio another, and
-// each band is split at one height across both columns.
-func TestThePanesSitInTwoBands(t *testing.T) {
+// The run view is the graph beside one pane being read, in one frame; the
+// pane's title names the others by the keys that show them.
+func TestTheRunViewIsTheGraphBesideOneReader(t *testing.T) {
 	m := fixtureRun(t)
 	m.width, m.height = 160, 40
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
@@ -21,20 +20,38 @@ func TestThePanesSitInTwoBands(t *testing.T) {
 			tops = append(tops, i)
 		}
 	}
-	if len(tops) != 2 {
-		t.Fatalf("%d band tops, want 2:\n%s", len(tops), strings.Join(lines, "\n"))
+	if len(tops) != 1 {
+		t.Fatalf("%d frames, want 1:\n%s", len(tops), strings.Join(lines, "\n"))
 	}
-	for i, want := range [][2]string{{"1 Graph", "2 Node"}, {"3 Timeline", "4 Radio"}} {
-		top := lines[tops[i]]
-		a, b := strings.Index(top, want[0]), strings.Index(top, want[1])
-		if a < 0 || b < a || !strings.Contains(top[a:b], "┬") {
-			t.Errorf("band %d top %q does not hold %s then %s", i+1, top, want[0], want[1])
+	top := lines[tops[0]]
+	g, split, tabs := strings.Index(top, "1 Graph"), strings.Index(top, "┬"), strings.Index(top, "2 Task · 3 Timeline · 4 Radio")
+	if g < 0 || split < g || tabs < split {
+		t.Errorf("the frame's top %q does not hold the graph, then the tabs", top)
+	}
+	// Each number shows its pane in the right column, alone.
+	for key, want := range map[string]string{"2": "activity", "3": "started", "4": "LockKey is missing"} {
+		got := ansi.Strip(press(m, "1", key).View())
+		if !strings.Contains(got, want) {
+			t.Errorf("%s does not show %q:\n%s", key, want, got)
 		}
 	}
-	// One split column for both bands: the divider is at the same cell.
-	col := func(l, r string) int { return ansi.StringWidth(l[:strings.Index(l, r)]) }
-	if a, b := col(lines[tops[0]], "┬"), col(lines[tops[1]], "┬"); a != b {
-		t.Errorf("the bands split at columns %d and %d", a, b)
+	if got := ansi.Strip(press(m, "3").View()); strings.Contains(got, "Radio (") {
+		t.Errorf("the radio is still on screen beside the timeline:\n%s", got)
+	}
+}
+
+// Moving to the graph keeps the right column on what was being read.
+func TestTheGraphKeepsWhatIsBeingRead(t *testing.T) {
+	m := fixtureRun(t)
+	m.width, m.height = 160, 40
+	m = press(m, "3", "1", "j")
+	if m.readerPane() != focusTimeline {
+		t.Errorf("after 3 then the graph, the right column shows %v", m.readerPane())
+	}
+	// l steps through the tabs from the right column.
+	m = press(m, "3", "l")
+	if m.focus != focusRadio {
+		t.Errorf("l from the timeline went to %v, want the radio", m.focus)
 	}
 }
 
@@ -59,34 +76,7 @@ func TestTheBorderTitleKeepsTheFocusColour(t *testing.T) {
 	m.width, m.height = 140, 36
 	m.focus = focusNode
 	top := strings.Split(m.viewBands(m.layout()), "\n")[0]
-	if !strings.Contains(top, styCyanBold.Render("Node")) {
+	if !strings.Contains(top, styCyanBold.Render("Task")) {
 		t.Errorf("the focused title lost its colour: %q", top)
-	}
-}
-
-// A run with nothing of its own for pane 3 — recorded before task times —
-// folds it: the radio takes the band, and the edge says why.
-func TestASparseTimelineFoldsIntoTheRadiosBand(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 40
-	m.snap.Messages = briefModel(t).snap.Messages
-	got := ansi.Strip(m.View())
-	if strings.Contains(got, "╭─ 3 Timeline") {
-		t.Fatalf("a near-empty timeline kept its column:\n%s", got)
-	}
-	if !strings.Contains(got, "3 Timeline folded · this run predates task times") {
-		t.Errorf("the fold is not explained:\n%s", got)
-	}
-	// 3 still shows it.
-	if got := ansi.Strip(press(m, "3").View()); !strings.Contains(got, "3 Timeline") || strings.Contains(got, "4 Radio") {
-		t.Errorf("3 on a folded timeline:\n%s", got)
-	}
-	// With task times it has its column.
-	at := time.Now()
-	for i := range m.snap.Tasks {
-		m.snap.Tasks[i].StartedAt = at
-	}
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "╭─ 3 Timeline") {
-		t.Errorf("a timeline with events did not get its column:\n%s", got)
 	}
 }

@@ -63,7 +63,7 @@ func TestBothColumnsAreTheSameHeight(t *testing.T) {
 	// three columns: the two columns end together.
 	l := m.layout()
 	lines := strings.Split(stripEscapes(m.viewBands(l)), "\n")
-	if want := l.top + l.bottom + 2*bandBorderRows; len(lines) != want {
+	if want := l.top + bandBorderRows; len(lines) != want {
 		t.Fatalf("the bands drew %d rows, want %d", len(lines), want)
 	}
 	for i, line := range lines {
@@ -86,35 +86,13 @@ func TestAFullChannelIsUnaffected(t *testing.T) {
 	}
 }
 
-func TestTheNodePaneDoesNotTakeSpaceItCannotUse(t *testing.T) {
-	// The other half of what makes the layout look unfinished. The
-	// inspector took a fixed two fifths of the body — 25 rows of a 63-row
-	// terminal — whether or not it had that much to show. A node with no
-	// activity yet fills five of them and pads the other twenty, so the
-	// Radio rule starts a third of the way down the screen with nothing
-	// above it, which is what reads as floating.
-	m := fillModel(t, 17)
-	m.height = 66
-	m.boxMode = false
-	body := m.bodyHeight()
-
-	// A selected task with no worker output: headline, model, blocks,
-	// activity heading, one line saying there is nothing. The band is
-	// sized to the larger of that and the graph, and no more.
-	got := m.nodeBandRows()
-	want := max(m.graphContentHeight(m.graphPaneWidth())-1, m.inspectorContentHeight()-1, minTopBand)
-	if got > want {
-		t.Errorf("the top band claims %d rows for %d rows of content on a "+
-			"%d-row body", got, want, body)
-	}
-}
-
 func TestTheNodePaneStillGrowsForABusyWorker(t *testing.T) {
 	// And the guard on the other side: activity is the reason this pane
 	// exists, so a worker with plenty of it must still get room.
 	m := fillModel(t, 17)
 	m.height = 66
 	m.taskCur = 0
+	m.focus = focusNode
 	giveNodeActivity(t, &m, "task-1", 200)
 	if got := m.nodeBandRows(); got < 12 {
 		t.Errorf("a worker with 200 lines of activity got %d rows", got)

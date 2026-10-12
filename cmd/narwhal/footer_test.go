@@ -279,43 +279,6 @@ func TestPaneTitlesShowTheirNumber(t *testing.T) {
 	}
 }
 
-func TestRadioTitleStaysBelowTheInspector(t *testing.T) {
-	// The two panes are stacked, and the Radio rule is the boundary. What
-	// can be checked here is that the boundary is where it should be —
-	// below the inspector's fields, not interleaved with them.
-	//
-	// The blank row between them cannot be asserted from the rendered
-	// output: the inspector pads itself to a fixed height, so its last
-	// rows are blank either way. It is a layout constant, visible in
-	// View() and not separable from that padding.
-	t.Setenv("HOME", t.TempDir())
-	m := testModel(0, 2)
-	m.width, m.height = 100, 30
-	m.snap.RunID = "r1"
-	m.snap.Tasks = []broker.TaskSnapshot{
-		{ID: "a", State: broker.TaskDispatched, Model: "opus"},
-	}
-
-	lines := strings.Split(m.View(), "\n")
-	nodeAt, radioAt := -1, -1
-	for i, l := range lines {
-		p := stripEscapes(l)
-		if nodeAt < 0 && strings.Contains(p, "Node") {
-			nodeAt = i
-		}
-		if radioAt < 0 && strings.Contains(p, "Radio (") {
-			radioAt = i
-		}
-	}
-	if nodeAt < 0 || radioAt < 0 {
-		t.Fatalf("expected both panes; Node=%d Radio=%d", nodeAt, radioAt)
-	}
-	if radioAt <= nodeAt+3 {
-		t.Errorf("the Radio rule sits %d rows below Node — too close to have "+
-			"cleared the inspector's fields", radioAt-nodeAt)
-	}
-}
-
 func TestNoViewOverflowsItsTerminal(t *testing.T) {
 	// A view that writes past the last row scrolls the terminal, and what
 	// scrolls away is the top — which is how the run picker ended up with

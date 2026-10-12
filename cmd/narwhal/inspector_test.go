@@ -143,31 +143,6 @@ func TestInspectorKeepsAFixedHeight(t *testing.T) {
 	}
 }
 
-func TestInspectorIsDroppedOnAShortTerminal(t *testing.T) {
-	// Squeezing the radio to nothing to keep a summary pane is the wrong
-	// trade: the radio is the run's actual content.
-	m := inspectorModel(t)
-	m.height = 13
-	if got := m.nodeBandRows(); got != 0 {
-		t.Errorf("node pane has %d rows on a 13-row terminal, want 0", got)
-	}
-	m.height = 33
-	if got := m.nodeBandRows(); got == 0 {
-		t.Error("no node pane on a 33-row terminal")
-	}
-}
-
-// With nothing to show, the top band shrinks to its floor and the radio's
-// band has the body.
-func TestTheTopBandIsSmallWithNoTasks(t *testing.T) {
-	m := inspectorModel(t)
-	m.height = 33
-	m.snap.Tasks = nil
-	if got := m.nodeBandRows(); got != minTopBand {
-		t.Errorf("top band is %d rows with no tasks, want %d", got, minTopBand)
-	}
-}
-
 // lineContaining returns the first line of s holding sub, or "".
 func lineContaining(s, sub string) string {
 	for _, l := range strings.Split(s, "\n") {

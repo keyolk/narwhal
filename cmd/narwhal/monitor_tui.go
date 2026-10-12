@@ -204,6 +204,16 @@ type tuiModel struct {
 	flowID     string
 	flowSel    int
 	flowScroll int
+	// The task view's cursor and what has been opened in it. taskSel is
+	// an entry, -1 following the newest. See taskview.go.
+	taskSel     int
+	taskToggled map[string]bool
+	taskOpenAll bool
+	// taskTab is the open tab, taskTabAuto to pick by state, and
+	// summaryAskOpen unfolds a long request on Summary.
+	taskTab        int
+	summaryAskOpen bool
+
 	// flowDetail puts j/k on the step's detail rather than the step list,
 	// and flowZoom gives the detail the full width.
 	flowDetail bool
@@ -242,6 +252,8 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		client:      &http.Client{Timeout: 5 * time.Second},
 		focus:       focusRadio,
 		timelineSel: timelineFollow,
+		taskSel:     -1,
+		taskTab:     taskTabAuto,
 		homeCWD:     launchDir(),
 		snapCache:   map[string]cachedSnap{},
 		prState:     map[string]string{},
@@ -856,6 +868,11 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.detail == detailSession {
+		if next, cmd, ok := m.handleTaskKey(msg); ok {
+			return next, cmd
+		}
+	}
 	if m.detail == detailResult {
 		if next, cmd, ok := m.handleResultKey(msg); ok {
 			return next, cmd
@@ -928,6 +945,7 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.taskCur++
 				m.detailScroll = 0
 				m.sessionTail = true
+				m.resetTaskView()
 			}
 		}
 	case "p":
@@ -943,6 +961,7 @@ func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.taskCur--
 				m.detailScroll = 0
 				m.sessionTail = true
+				m.resetTaskView()
 			}
 		}
 	}

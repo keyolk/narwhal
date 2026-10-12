@@ -158,7 +158,7 @@ func briefInstructions(s broker.Snapshot) []briefInstruction {
 	}
 	var out []briefInstruction
 	for i, m := range s.Messages {
-		if m == nil || m.Sender != "main" {
+		if m == nil || m.Sender != "main" || broker.IsProtocol(m.Content) {
 			continue
 		}
 		in := briefInstruction{text: oneLine(m.Content), addressed: recipients(m, "", tasks)}

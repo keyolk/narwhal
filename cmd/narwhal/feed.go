@@ -114,7 +114,7 @@ func (m tuiModel) taskInputs(taskID string) []transcriptEntry {
 	}
 	var out []transcriptEntry
 	for _, msg := range m.snap.Messages {
-		if msg == nil || msg.Sender != "main" {
+		if msg == nil || msg.Sender != "main" || broker.IsProtocol(msg.Content) {
 			continue
 		}
 		to := recipients(msg, "", tasks)
@@ -179,17 +179,4 @@ func inputsSig(inputs []transcriptEntry) string {
 		}
 	}
 	return fmt.Sprintf("%d@%d", len(inputs), newest.UnixNano())
-}
-
-// feedLinesBefore is how many rendered lines of a task's full feed come
-// before the first entry at or after at — where to scroll so the task view
-// opens on that moment.
-func (m tuiModel) feedLinesBefore(taskID string, at time.Time, width int) int {
-	sid := m.workerSessionID(taskID)
-	if sid == "" {
-		return 0
-	}
-	merged := mergeFeed(globalTranscripts.read(transcriptPath(m.live.CWD, sid)), m.taskInputs(taskID))
-	k := sort.Search(len(merged), func(i int) bool { return !merged[i].at.Before(at) })
-	return len(renderTranscript(merged[:k], width))
 }

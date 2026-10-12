@@ -50,8 +50,16 @@ func TestAnInstructionShowsOnlyWhereItWent(t *testing.T) {
 func TestARetriedTaskShowsTheJudgesCall(t *testing.T) {
 	m := press(fixtureRun(t), "1")
 	m.taskCur = indexOf(t, m, "client")
+	// Summary: the call reached it, and its answer.
 	got := viewText(press(m, "enter"))
-	for _, w := range []string{"judge: no-result 0.86 → retry", "try 2 of 3", "── final answer ──"} {
+	for _, w := range []string{"Received", "judge: no-result 0.86 → retry", "try 2 of 3", "Result", "response mapping in one place"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("client's summary lacks %q:\n%s", w, got)
+		}
+	}
+	// Activity: the call heads the second attempt, the answer ends it.
+	got = viewText(press(m, "enter", "tab"))
+	for _, w := range []string{"judge: no-result 0.86 → retry", "── final answer ──"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("client's view lacks %q:\n%s", w, got)
 		}

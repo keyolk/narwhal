@@ -118,6 +118,7 @@ func Timeline(s Snapshot) []TimelineEvent {
 			continue
 		}
 		switch {
+		case m.Sender == "main" && IsProtocol(m.Content):
 		case m.Sender == "main":
 			addMsg(m, TimelineInstruction, "operator", m.Content)
 		case m.Sender == "coordinator" && strings.HasPrefix(m.Content, RelayPrefix):
@@ -155,6 +156,11 @@ func Timeline(s Snapshot) []TimelineEvent {
 // a file claim, a split, a dep edge, an escalation — rather than something
 // one of them said.
 func IsProtocol(content string) bool {
+	// The planner's sign-off. It is posted as the operator's agent, so
+	// without this it read as an instruction the operator gave.
+	if strings.TrimSpace(content) == "PLAN_DONE" {
+		return true
+	}
 	if _, _, _, _, ok := ParseSplitRequest(content); ok {
 		return true
 	}

@@ -44,7 +44,7 @@ func (m tuiModel) viewHelp() string {
 		"",
 		section("Results and the next step"),
 		key("r", "the run's result: its answer, what it produced, each task's conclusion"),
-		key("", "there: e write the report · y copy the answer · 1-9 open a PR"),
+		key("", "there: e write the report · y copy the answer · 1-9 open a PR or a file"),
 		key("n", "in a run, result or flow: the next step, planned with what came before"),
 		key("u", "the flow a run belongs to: e edit its notes · x export it · c close it"),
 		key("[ ]", "the previous / next step of the flow"),

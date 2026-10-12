@@ -252,3 +252,62 @@ func selectRun(t *testing.T, m tuiModel, id string) tuiModel {
 	t.Fatalf("no run %s", id)
 	return m
 }
+
+// A long request reads in full: l moves into the step's detail, where j/k
+// and pages scroll it to its end and no further, and the paragraphs and
+// markdown it was written with survive.
+func TestALongStepScrollsInTheFlowView(t *testing.T) {
+	m := flowModel(t)
+	long := "## Build the collector\n\n" + strings.Repeat("A paragraph of the request that runs on. ", 40) +
+		"\n\n- first point\n- second point\n\nLAST LINE OF THE REQUEST"
+	if _, err := store.UpdateFlow("p1", false, func(f *store.Flow) error {
+		f.Steps[1].Request = long
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.applyFlows(store.ListFlows())
+	m.width, m.height = 100, 24
+	m.openFlow("p1", "b2")
+
+	got := ansi.Strip(m.View())
+	if strings.Contains(got, "LAST LINE OF THE REQUEST") {
+		t.Fatal("setup: the request already fits")
+	}
+	if !strings.Contains(got, "Build the collector") || strings.Contains(got, "## Build") {
+		t.Errorf("the request's markdown was not rendered:\n%s", got)
+	}
+	// j on the step list selects; it does not scroll.
+	if m = press(m, "l"); !m.flowDetail {
+		t.Fatal("l did not move into the detail")
+	}
+	m = press(m, "G")
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "LAST LINE OF THE REQUEST") && !strings.Contains(got, "Artifacts") {
+		t.Errorf("G did not reach the end:\n%s", got)
+	}
+	end := m.flowScroll
+	m = press(m, "j", "j", "j")
+	if m.flowScroll != end {
+		t.Errorf("scrolled past the end: %d > %d", m.flowScroll, end)
+	}
+	if m = press(m, "k"); m.flowScroll != end-1 {
+		t.Errorf("one k from the end is %d, want %d", m.flowScroll, end-1)
+	}
+	if m = press(m, "g"); m.flowScroll != 0 || m.flowSel != 1 {
+		t.Errorf("g in the detail: scroll %d sel %d", m.flowScroll, m.flowSel)
+	}
+	// z widens; esc unwinds widened → detail → steps → home.
+	m = press(m, "z")
+	if got := ansi.Strip(m.View()); strings.Contains(got, "Goal") {
+		t.Errorf("z did not give the detail the width:\n%s", got)
+	}
+	if m = press(m, "esc"); m.flowZoom || !m.flowDetail {
+		t.Fatal("esc from widened")
+	}
+	if m = press(m, "esc"); m.flowDetail || !m.flowView {
+		t.Fatal("esc from the detail")
+	}
+	if m = press(m, "esc"); !m.picker {
+		t.Fatal("esc from the steps")
+	}
+}

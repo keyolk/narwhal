@@ -104,7 +104,7 @@ func (m *tuiModel) applyFlows(flows []store.Flow) {
 // openFlow shows a flow, with the step holding runID selected.
 func (m *tuiModel) openFlow(flowID, runID string) {
 	m.flowView, m.flowID = true, flowID
-	m.flowSel, m.flowScroll = 0, 0
+	m.flowSel, m.flowScroll, m.flowDetail, m.flowZoom = 0, 0, false, false
 	for i, r := range m.flowRuns(flowID) {
 		if r.RunID == runID {
 			m.flowSel = i
@@ -121,21 +121,55 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quit = true
 		return m, tea.Quit
 	case "esc":
-		m.flowView, m.picker = false, true
+		// Back out one level: the widened detail, then the step list,
+		// then home.
+		switch {
+		case m.flowZoom:
+			m.flowZoom = false
+		case m.flowDetail:
+			m.flowDetail = false
+		default:
+			m.flowView, m.picker = false, true
+		}
+	case "tab", "l", "right":
+		// Into the step's detail, where j/k read rather than select.
+		m.flowDetail = true
+	case "shift+tab", "h", "left":
+		m.flowDetail = false
+	case "z":
+		// The detail across the whole width, for a long result.
+		m.flowZoom = !m.flowZoom
+		m.flowDetail = m.flowZoom || m.flowDetail
 	case "j", "down":
-		if m.flowSel < len(steps)-1 {
+		if m.flowDetail {
+			m.scrollFlow(1)
+		} else if m.flowSel < len(steps)-1 {
 			m.flowSel++
 			m.flowScroll = 0
 		}
 	case "k", "up":
-		if m.flowSel > 0 {
+		if m.flowDetail {
+			m.scrollFlow(-1)
+		} else if m.flowSel > 0 {
 			m.flowSel--
 			m.flowScroll = 0
 		}
-	case "ctrl+d", "pgdown", "J":
-		m.flowScroll += 10
+	case "ctrl+d", "pgdown", "J", " ":
+		m.scrollFlow(m.flowDetailRows() / 2)
 	case "ctrl+u", "pgup", "K":
-		m.flowScroll = max(0, m.flowScroll-10)
+		m.scrollFlow(-m.flowDetailRows() / 2)
+	case "g", "home":
+		if m.flowDetail {
+			m.flowScroll = 0
+		} else {
+			m.flowSel, m.flowScroll = 0, 0
+		}
+	case "G", "end":
+		if m.flowDetail {
+			m.scrollFlow(1 << 20)
+		} else {
+			m.flowSel, m.flowScroll = max(0, len(steps)-1), 0
+		}
 	case "enter":
 		if m.flowSel < len(steps) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
@@ -179,49 +213,87 @@ func (m *tuiModel) openRun(runID string) tea.Cmd {
 	return nil
 }
 
-// viewFlow draws the flow view: the work on the left — goal, notes, steps
-// — and the selected step's input and result on the right.
-func (m tuiModel) viewFlow() string {
+// flowGeom is the flow view's layout, shared by drawing and scrolling so
+// a scroll step moves exactly what is on screen.
+type flowGeom struct {
+	head, title, footer string
+	lw, rw, bodyH       int
+}
+
+func (m tuiModel) flowGeometry() flowGeom {
 	f := m.flows[m.flowID]
 	steps := m.flowRuns(m.flowID)
 	w := max(m.width, 1)
-
 	state := styCyan.Render("open")
 	if f.Closed {
 		state = styDim.Render("closed")
 	}
 	all := broker.Artifacts{}
-	snaps := make([]broker.Snapshot, len(steps))
-	for i, r := range steps {
-		snaps[i] = m.runSnapshot(r.RunID)
-		all.Merge(snaps[i].Result().Artifacts)
+	for _, r := range steps {
+		all.Merge(m.runSnapshot(r.RunID).Result().Artifacts)
 	}
-	head := styDim.Render("‹ ") + styCyanBold.Render("Narwhal") + styDim.Render(" › flow   ") + state +
+	g := flowGeom{}
+	g.head = styDim.Render("‹ ") + styCyanBold.Render("Narwhal") + styDim.Render(" › flow   ") + state +
 		styDim.Render(fmt.Sprintf("   %d steps · %d artifacts", len(steps), all.Count()))
-	if ref := styDim.Render(m.flowID); ansi.StringWidth(head)+ansi.StringWidth(ref)+3 < w {
-		head += strings.Repeat(" ", w-ansi.StringWidth(head)-ansi.StringWidth(ref)) + ref
+	if ref := styDim.Render(m.flowID); ansi.StringWidth(g.head)+ansi.StringWidth(ref)+3 < w {
+		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
-	title := "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
-	footer := styDim.Render("enter open run · r result · n next step · e edit notes · x export · c close/reopen · esc home")
+	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
+	keys := "j/k step · l/tab read the step · z widen · enter open run · r result · n next step · e notes · x export · c close · esc home"
+	if m.flowDetail {
+		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · h/tab back to steps · z widen · n next step · esc home"
+	}
+	g.footer = styDim.Render(ansi.Truncate(keys, w, "…"))
 	if m.composing {
-		footer = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
+		g.footer = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
+	} else if n := m.noticeLine(w); n != "" {
+		g.footer = n + "\n" + g.footer
 	}
-	bodyH := max(1, m.height-lipgloss.Height(head+"\n"+title)-lipgloss.Height(footer))
-
-	lw := min(max(w*2/5, 30), w-24)
-	rw := max(10, w-lw-bandBorderCols)
-	left := m.flowLeft(f, steps, lw, bodyH-1)
-	right := m.flowStepDetail(f, steps, snaps, rw, bodyH-1)
-	body := framedBand(lw, rw, bodyH-2, left, right)
 	if m.homeErr != nil {
-		footer = styRedBold.Render("✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-3)) + "\n" + footer
+		g.footer = styRedBold.Render("✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
 	}
-	return pinFooter(head+"\n"+title+"\n"+body, footer, m.height)
+	g.bodyH = max(3, m.height-lipgloss.Height(g.head+"\n"+g.title)-lipgloss.Height(g.footer))
+	if m.flowZoom {
+		g.lw, g.rw = 0, max(10, w-4)
+	} else {
+		g.lw = min(max(w*2/5, 30), w-24)
+		g.rw = max(10, w-g.lw-bandBorderCols)
+	}
+	return g
+}
+
+// flowDetailRows is how many lines of the step's detail are on screen.
+func (m tuiModel) flowDetailRows() int {
+	return max(1, m.flowGeometry().bodyH-3)
+}
+
+// scrollFlow moves the detail, clamped to its length: past the end, and
+// a step back up took as many presses as the overshoot.
+func (m *tuiModel) scrollFlow(delta int) {
+	g := m.flowGeometry()
+	total := len(m.flowStepLines(g.rw))
+	m.flowScroll = min(max(0, m.flowScroll+delta), max(0, total-m.flowDetailRows()))
+}
+
+// viewFlow draws the flow view: the work on the left — goal, notes, steps
+// — and the selected step's input and result on the right.
+func (m tuiModel) viewFlow() string {
+	f := m.flows[m.flowID]
+	steps := m.flowRuns(m.flowID)
+	g := m.flowGeometry()
+	right := m.flowStepDetail(g.rw, g.bodyH-1)
+	var body string
+	if m.flowZoom {
+		body = framedSingle(g.rw, g.bodyH-2, right, "")
+	} else {
+		body = framedBand(g.lw, g.rw, g.bodyH-2, m.flowLeft(f, steps, g.lw, g.bodyH-1), right)
+	}
+	return pinFooter(g.head+"\n"+g.title+"\n"+body, g.footer, m.height)
 }
 
 // flowLeft is the work's input and its runs.
 func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string {
-	rows := []string{paneTitle("Work", true, w)}
+	rows := []string{paneTitle("Work", !m.flowDetail, w)}
 	section := func(s string) { rows = append(rows, styTitle.Render(s)) }
 	section("Goal")
 	goal := f.Goal
@@ -266,26 +338,38 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	return padRows(rows, w, h)
 }
 
-// stepRequest is what a step was asked: the flow's record, else its prompt.
+// stepRequest is a step's request on one line, for a list.
 func (m tuiModel) stepRequest(f store.Flow, i int, r store.LiveRun) string {
+	return flattenMarkdown(m.stepRequestText(f, i, r))
+}
+
+// stepRequestText is what a step was asked, as written: the flow's record,
+// else the run's prompt. Flattening it to one line, as the list needs,
+// ran a paragraphed request together and lost its markdown.
+func (m tuiModel) stepRequestText(f store.Flow, i int, r store.LiveRun) string {
 	if i < len(f.Steps) && f.Steps[i].RunID == r.RunID && f.Steps[i].Request != "" {
-		return oneLine(f.Steps[i].Request)
+		return f.Steps[i].Request
+	}
+	if strings.TrimSpace(r.Prompt) != "" {
+		return r.Prompt
 	}
 	return runLabel(r)
 }
 
-// flowStepDetail is the selected step's input and result.
-func (m tuiModel) flowStepDetail(f store.Flow, steps []store.LiveRun, snaps []broker.Snapshot, w, h int) string {
+// flowStepLines is the selected step's input and result, rendered to w.
+func (m tuiModel) flowStepLines(w int) []string {
+	f := m.flows[m.flowID]
+	steps := m.flowRuns(m.flowID)
 	if m.flowSel >= len(steps) {
-		return padRows([]string{paneTitle("Step", false, w)}, w, h)
+		return nil
 	}
-	r, s := steps[m.flowSel], snaps[m.flowSel]
-	res := s.Result()
+	r := steps[m.flowSel]
+	res := m.runSnapshot(r.RunID).Result()
 	var lines []string
 	add := func(name string) { lines = append(lines, "", styTitle.Render(name)) }
 	lines = append(lines, styDim.Render(fmt.Sprintf("run %s · %s · %s", r.RunID, plainOutcome(r), ago(runStartTime(r))+" ago")))
 	add("Asked")
-	lines = append(lines, renderMarkdown(m.stepRequest(f, m.flowSel, r), w, lipgloss.NewStyle())...)
+	lines = append(lines, renderMarkdown(m.stepRequestText(f, m.flowSel, r), w, lipgloss.NewStyle())...)
 	add("Result")
 	if res.Answer == "" {
 		lines = append(lines, styDim.Render("nothing yet"))
@@ -299,13 +383,27 @@ func (m tuiModel) flowStepDetail(f store.Flow, steps []store.LiveRun, snaps []br
 		add("Artifacts")
 		lines = append(lines, m.artifactLines(res, w, false)...)
 	}
-	scroll := min(m.flowScroll, max(0, len(lines)-(h-1)))
-	end := min(len(lines), scroll+h-1)
-	title := fmt.Sprintf("Step %d", m.flowSel+1)
-	if len(lines) > h-1 {
-		title += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
+	return lines
+}
+
+// flowStepDetail is the selected step's detail as a pane h rows tall,
+// scrolled; its title says where in it the pane is.
+func (m tuiModel) flowStepDetail(w, h int) string {
+	lines := m.flowStepLines(w)
+	if lines == nil {
+		return padRows([]string{paneTitle("Step", m.flowDetail, w)}, w, h)
 	}
-	return padRows(append([]string{paneTitle(title, false, w)}, lines[scroll:end]...), w, h)
+	rows := max(1, h-1)
+	scroll := min(m.flowScroll, max(0, len(lines)-rows))
+	end := min(len(lines), scroll+rows)
+	title := fmt.Sprintf("Step %d", m.flowSel+1)
+	if len(lines) > rows {
+		title += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
+		if end < len(lines) {
+			title += " ↓"
+		}
+	}
+	return padRows(append([]string{paneTitle(title, m.flowDetail, w)}, lines[scroll:end]...), w, h)
 }
 
 // runIcon is a run's state glyph and colour.

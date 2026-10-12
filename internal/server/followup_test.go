@@ -144,3 +144,44 @@ func TestAnInstructionToARunningTaskOnlyGoesOnTheRadio(t *testing.T) {
 		t.Error("a running task was reopened")
 	}
 }
+
+func TestReopeningATaskReportsWhatReopensBehindIt(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := broker.New()
+	run := b.CreateRun("r-casc", "p", t.TempDir(), "main")
+	run.CreateStandardThreads()
+	for _, s := range []struct{ id, name, dep string }{{"a", "a", ""}, {"synthesis", "synthesis", "a"}} {
+		var deps []string
+		if s.dep != "" {
+			deps = []string{s.dep}
+		}
+		task := run.AddTask(s.id, s.name, "do "+s.id, deps)
+		task.StartDispatch("d1", "worker-"+s.id)
+		task.CompleteDispatch(s.id+" done", run)
+	}
+	run.SetState(broker.RunDone)
+	addr := startWith(t, b, &reopenController{cancelController: cancelController{l: launcher.New("http://x", "r-casc", t.TempDir())}})
+
+	_, out := sendAs(t, addr, map[string]any{"run_id": "r-casc", "content": "@a redo with v2"})
+	if got, _ := json.Marshal(out["reopened"]); string(got) != `["a","synthesis"]` {
+		t.Errorf("reopened = %s, want a then synthesis", got)
+	}
+	var note string
+	for _, m := range run.MessagesSince(0) {
+		if m.Sender == "coordinator" {
+			note = m.Content
+		}
+	}
+	if !strings.Contains(note, "reopened a") || !strings.Contains(note, "synthesis, which build on it") {
+		t.Errorf("the coordinator's note does not say what reopened behind: %q", note)
+	}
+}
+
+func TestTheResumePromptOffersToExtendTheGraph(t *testing.T) {
+	p := followUpPrompt("a", "do more")
+	for _, want := range []string{"split", "dep-add", "folded into that answer"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the resume prompt does not mention %q:\n%s", want, p)
+		}
+	}
+}

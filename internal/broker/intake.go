@@ -52,6 +52,7 @@ func (r *Run) IntakeSplitRequests(cursor int64) int64 {
 		r.AddTask(taskID, name, assignment, deps)
 		log.Printf("[intake] split-request accepted: %s (%s) deps=%v from %s",
 			taskID, name, deps, m.Sender)
+		r.foldIntoAnswer(taskID, name, m.Sender)
 	}
 	if len(msgs) > 0 {
 		return msgs[len(msgs)-1].Seq

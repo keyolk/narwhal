@@ -163,3 +163,68 @@ func TestThePlannersQuestionIsThePlans(t *testing.T) {
 		t.Errorf("an answer to the planner reopened %v", got)
 	}
 }
+
+// A checkpoint's task-done holds until the operator answers what it raised,
+// hands the answers back, and completes on the next call.
+func TestACheckpointWaitsForTheOperatorsChoices(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("r-cp", "p", t.TempDir(), "main")
+	run.CreateStandardThreads()
+	res := run.AddTask("research", "research", "find options", nil)
+	res.StartDispatch("d1", "worker-research")
+	cp := run.AddTask("checkpoint", "checkpoint", "This is the checkpoint task.", []string{"research"})
+	impl := run.AddTask("impl", "impl", "build it", []string{"checkpoint"})
+	cp.StartDispatch("d1", "worker-checkpoint")
+	agent := reg.Register("worker-checkpoint", "r-cp", false)
+	srv := New(b, reg)
+	addr, err := srv.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Shutdown()
+
+	q := run.Ask("research", "sqlite or postgres?", "sqlite", false)
+	if !q.Candidate {
+		t.Fatal("setup: the research question did not wait for the checkpoint")
+	}
+	out := postJSON(t, addr+"/api/v1/agents/"+agent.Token+"/resolve", map[string]any{
+		"resolutions": []map[string]any{{"id": q.ID, "raise": true, "options": []string{"sqlite", "postgres"}, "recommended": 1}}})
+	if out["raised"].(float64) != 1 {
+		t.Fatalf("resolve: %v", out)
+	}
+	res.CompleteDispatch("both work; sqlite is simpler", run)
+
+	done := make(chan map[string]any, 1)
+	go func() {
+		done <- postJSON(t, addr+"/api/v1/agents/"+agent.Token+"/task/checkpoint/done",
+			map[string]any{"outcome": "findings: both work", "timeout_ms": 5000})
+	}()
+	select {
+	case out := <-done:
+		t.Fatalf("the checkpoint completed with a question open: %v", out)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := run.Answer(q.ID, "postgres", false); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if !strings.Contains(strings.Join(func() []string {
+		var s []string
+		for _, a := range got["answers"].([]any) {
+			s = append(s, a.(string))
+		}
+		return s
+	}(), " "), "postgres") {
+		t.Fatalf("the checkpoint was not handed the answer: %v", got)
+	}
+	if impl.CurrentState() != broker.TaskPending {
+		t.Fatalf("impl started before the checkpoint completed: %s", impl.CurrentState())
+	}
+	out = postJSON(t, addr+"/api/v1/agents/"+agent.Token+"/task/checkpoint/done",
+		map[string]any{"outcome": "findings: both work; operator chose postgres"})
+	if out["state"] != "completed" || impl.CurrentState() != broker.TaskReady {
+		t.Errorf("after the answer: %v, impl %s", out, impl.CurrentState())
+	}
+}

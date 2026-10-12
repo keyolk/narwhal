@@ -43,6 +43,7 @@ func (m tuiModel) viewHelp() string {
 		key("a", "attach to the selected worker's live Claude session"),
 		key("esc  [ ]", "home: every request    previous / next request"),
 		key("n", "on home, start a new request in the directory narwhal was opened in"),
+		key("e  ctrl-e", "write it in $VISUAL / $EDITOR instead (vi if neither is set)"),
 		"",
 		section("Layout"),
 		key("b", "boxes ↔ lanes for the graph"),

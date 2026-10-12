@@ -38,16 +38,18 @@ import (
 type outputKind int
 
 const (
-	outFile   outputKind = iota // a file a task recorded
-	outPR                       // a pull request
-	outBranch                   // a branch pushed
-	outCommit                   // a commit made
-	outReport                   // a post to the results thread
-	outAnswer                   // a task's outcome
+	outFile    outputKind = iota // a file a task recorded
+	outPR                        // a pull request
+	outBranch                    // a branch pushed
+	outCommit                    // a commit made
+	outReport                    // a post to the results thread
+	outAnswer                    // a task's outcome
+	outRequest                   // what a flow step was asked, listed in the flow view
 )
 
 var outputLabels = map[outputKind]string{
 	outFile: "file", outPR: "PR", outBranch: "branch", outCommit: "commit", outReport: "report", outAnswer: "answer",
+	outRequest: "asked",
 }
 
 // output is one readable thing a run produced.
@@ -286,6 +288,9 @@ func (m tuiModel) handleOutputsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		if sel == nil {
 			return m, nil
+		}
+		if sel.kind == outRequest {
+			return m, openOutput(*sel)
 		}
 		if sel.kind != outAnswer && sel.kind != outReport {
 			return m, openOutput(*sel)

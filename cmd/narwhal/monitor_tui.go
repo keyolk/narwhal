@@ -204,6 +204,10 @@ type tuiModel struct {
 	flowID     string
 	flowSel    int
 	flowScroll int
+	// flowDetail puts j/k on the step's detail rather than the step list,
+	// and flowZoom gives the detail the full width.
+	flowDetail bool
+	flowZoom   bool
 	snapCache  map[string]cachedSnap
 
 	// prState is each PR's state as gh reported it; notice is the last

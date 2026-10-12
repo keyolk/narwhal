@@ -22,20 +22,19 @@ func timedLiveModel(t *testing.T) tuiModel {
 	return m
 }
 
-// 3 focuses pane 3 where it is, under the graph; it does not move into
-// another pane's slot.
-func TestThreeFocusesTheTimelineUnderTheGraph(t *testing.T) {
+// 3 shows pane 3 in the right column, in the radio's place.
+func TestThreeShowsTheTimeline(t *testing.T) {
 	m := timedLiveModel(t)
 	m = press(m, "3")
 	if m.focus != focusTimeline {
 		t.Fatalf("3: focus=%v", m.focus)
 	}
 	got := ansi.Strip(m.View())
-	if g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "3 Timeline"); g < 0 || tl < g {
-		t.Fatalf("pane 3 is not under the graph:\n%s", got)
+	if !strings.Contains(got, "1 Graph") || strings.Contains(got, "Radio (6)") {
+		t.Fatalf("pane 3 is not beside the graph in the radio's place:\n%s", got)
 	}
-	if !strings.Contains(got, "4 Radio (6)") {
-		t.Errorf("focusing pane 3 replaced the radio:\n%s", got)
+	if !strings.Contains(lineContaining(got, "» operator"), "@schema add the LockKey field") {
+		t.Errorf("the timeline left out the operator's instruction:\n%s", got)
 	}
 }
 
@@ -46,26 +45,6 @@ func TestTabReachesTheTimeline(t *testing.T) {
 		if m = press(m, "tab"); m.focus != want {
 			t.Fatalf("tab %d: focus=%v, want %v", i+1, m.focus, want)
 		}
-	}
-}
-
-// Where there is room for only one band, focusing pane 3 shows it across
-// the body, and leaving it brings the band back.
-func TestThreeOnAShortTerminalShowsTheTimelineZoomed(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 14
-	m.snap.Messages = briefModel(t).snap.Messages
-	m = press(m, "3")
-	got := ansi.Strip(m.View())
-	if !strings.Contains(got, "3 Timeline") || strings.Contains(got, "1 Graph") {
-		t.Fatalf("pane 3 not shown across the body:\n%s", got)
-	}
-	if !strings.Contains(got, "» operator @schema add the LockKey field") {
-		t.Errorf("zoomed pane 3 left out the operator's instruction:\n%s", got)
-	}
-	m = press(m, "1")
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "1 Graph") || !strings.Contains(got, "4 Radio") {
-		t.Errorf("leaving pane 3 did not restore the band:\n%s", got)
 	}
 }
 
@@ -97,46 +76,13 @@ func TestTheTimelineSelectionMoves(t *testing.T) {
 	}
 }
 
-// The history is on screen without a key: under the graph, in the room the
-// graph does not use.
-func TestTheTimelineSitsUnderTheGraph(t *testing.T) {
+// The timeline records the tasks' lifecycle.
+func TestTheTimelineRecordsTheTasks(t *testing.T) {
 	m := timedLiveModel(t)
 	m.snap.Tasks[2].EndedAt = m.snap.Tasks[2].StartedAt.Add(time.Minute)
 	m.snap.Tasks[2].Outcome = "gamma found the leak"
-	got := ansi.Strip(m.View())
-	g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "3 Timeline")
-	if g < 0 || tl < 0 || tl < g {
-		t.Fatalf("no timeline under the graph:\n%s", got)
-	}
-	if !strings.Contains(got, "gamma found the leak") {
+	if got := ansi.Strip(press(m, "3").View()); !strings.Contains(got, "gamma found the leak") {
 		t.Errorf("task lifecycle missing from the timeline:\n%s", got)
-	}
-}
-
-// With the radio beside it, the timeline under the graph does not repeat
-// it: an instruction or urgent post appears once on screen, in the radio.
-func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
-	m := timedLiveModel(t)
-	got := ansi.Strip(m.View())
-	for _, msg := range []string{"@schema add the LockKey field", "nonce passes twice on replay"} {
-		if n := strings.Count(got, msg); n != 1 {
-			t.Errorf("%q is on screen %d times, want once:\n%s", msg, n, got)
-		}
-	}
-	// With the brief in the radio's place nothing else shows them, so the
-	// timeline keeps them.
-	m = press(m, "1", "4", "4")
-	if got := ansi.Strip(m.View()); !strings.Contains(lineContaining(got, "» operator"), "@schema add the LockKey field") {
-		t.Errorf("the timeline beside the brief dropped the operator's instruction:\n%s", got)
-	}
-}
-
-// A short terminal keeps the graph's whole column.
-func TestAShortTerminalGivesTheGraphItsColumn(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 14
-	if got := ansi.Strip(m.View()); strings.Contains(got, "3 Timeline") {
-		t.Errorf("timeline squeezed in on a short terminal:\n%s", got)
 	}
 }
 

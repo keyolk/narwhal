@@ -147,11 +147,13 @@ type tuiModel struct {
 	// to be the screen for a moment, and going through a separate detail
 	// view to get it loses the place you were in.
 	zoom focusPane
-	// widthDelta and heightDelta are the user's adjustments to the pane
-	// split, in columns and rows. Kept as deltas rather than absolute
-	// sizes so the layout still adapts when the terminal is resized.
-	widthDelta  int
-	heightDelta int
+	// widthDelta is the user's adjustment to the column split. Kept as a
+	// delta rather than an absolute size so the layout still adapts when
+	// the terminal is resized.
+	widthDelta int
+	// reader is the pane the right column showed last; it stays while the
+	// graph has the keys. See readerPane.
+	reader focusPane
 	// nodeScroll is how far the node pane has been scrolled through the
 	// worker's activity, or nodeScrollTail to stay on the newest.
 	nodeScroll int
@@ -611,7 +613,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.poll()
 
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		next, cmd := m.handleKey(msg)
+		if nm, ok := next.(tuiModel); ok && nm.focus != focusTasks {
+			// The right column keeps showing the pane last read when
+			// the graph takes the keys. See layout.go.
+			nm.reader = nm.focus
+			return nm, cmd
+		}
+		return next, cmd
 	}
 	return m, nil
 }
@@ -766,10 +775,6 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.widthDelta += 4
 	case "<":
 		m.widthDelta -= 4
-	case "+", "=":
-		m.heightDelta += 2
-	case "-", "_":
-		m.heightDelta -= 2
 	case "j", "down":
 		switch m.focus {
 		case focusTasks:
@@ -859,7 +864,8 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.focus == focusTasks {
 			m.moveHorizontal(1)
 		} else {
-			m.focus = focusRadio
+			// The next of the right column's tabs.
+			m.focus = map[focusPane]focusPane{focusNode: focusTimeline, focusTimeline: focusRadio, focusRadio: focusNode}[m.focus]
 		}
 	case "esc":
 		// Back out one level: to the flow a run is a step of, or home.
@@ -1068,7 +1074,7 @@ func (m tuiModel) nodeActivityRows() int {
 	switch {
 	case l.zoom == focusNode:
 		h = l.top
-	case l.zoom >= 0 || l.single:
+	case l.zoom >= 0 || m.readerPane() != focusNode:
 		return 1
 	default:
 		h = l.top + 1
@@ -1780,7 +1786,7 @@ func (m tuiModel) footerKeys() string {
 	case focusTasks:
 		parts = append(parts, "enter open task", "hjkl move", "b lanes", "< > width")
 	case focusNode:
-		parts = append(parts, "enter open task", "jk scroll", "+ - height")
+		parts = append(parts, "enter open task", "jk scroll", "l next tab")
 	case focusRadio:
 		tab := "4 → brief"
 		if m.briefTab {
@@ -1791,7 +1797,7 @@ func (m tuiModel) footerKeys() string {
 		}
 		parts = append(parts, "jk move", "f follow", tab)
 	case focusTimeline:
-		parts = append(parts, "enter open event", "jk select", "g/G oldest/newest")
+		parts = append(parts, "enter open event", "jk select", "l next tab")
 	}
 	zoomKey := "z zoom"
 	if m.zoom >= 0 {

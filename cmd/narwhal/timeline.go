@@ -17,25 +17,15 @@ import (
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
-// timelineEvents is what pane 3 lists where it is drawn now.
+// timelineEvents is what pane 3 lists: everything, the radio's own lines —
+// instructions, relays, urgent posts — included.
 //
-// Under the graph, beside the radio, it leaves out the radio's own lines —
-// instructions, relays, urgent posts — which are one glance to the right,
-// and keeps what only the task states and verdicts record. Beside the
-// brief nothing else on screen shows those lines, and zoomed it is the
-// only pane, so there it lists everything.
+// It used to leave those out while it sat beside the radio, which showed
+// them one glance away. The two are tabs of one column now and never on
+// screen together, so a timeline without them would be the run's history
+// with the operator's part missing.
 func (m tuiModel) timelineEvents() []broker.TimelineEvent {
-	all := broker.Timeline(m.snap)
-	if m.briefTab || m.timelineZoomed() {
-		return all
-	}
-	var own []broker.TimelineEvent
-	for _, e := range all {
-		if !e.Kind.FromRadio() {
-			own = append(own, e)
-		}
-	}
-	return own
+	return broker.Timeline(m.snap)
 }
 
 // timelineZoomed reports whether pane 3 is drawn across the body.
@@ -49,10 +39,10 @@ func (m tuiModel) timelineRows() int {
 	switch {
 	case l.zoom == focusTimeline:
 		return l.top - 1
-	case l.zoom >= 0 || l.single:
+	case l.zoom >= 0 || m.readerPane() != focusTimeline:
 		return 1
 	}
-	return l.bottom
+	return l.top
 }
 
 // timelineFollow selects the newest event and keeps it selected as more

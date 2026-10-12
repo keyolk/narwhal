@@ -1,26 +1,25 @@
-// layout.go arranges the four panes as two framed bands.
+// layout.go arranges the run view as two columns in one frame.
 //
-//	╭─ 1 Graph ──────┬─ 2 Node ──────────────────╮
-//	│                │                           │   what the run is: its
-//	╰────────────────┴───────────────────────────╯   shape and one task
-//	╭─ 3 Timeline ───┬─ 4 Radio │ Brief ─────────╮
-//	│                │                           │   what the run did: its
-//	╰────────────────┴───────────────────────────╯   history and channel
+//	╭─ 1 Graph ──────┬─ 2 Task · 3 Timeline · 4 Radio ─╮
+//	│                │                                 │
+//	│  pick a task   │  read one thing, at full height │
+//	│                │                                 │
+//	╰────────────────┴─────────────────────────────────╯
 //
-// The panes used to be four titled regions floating on one background, the
-// left column split at one height and the right at another. Graph and Node
-// are one question — pick a task, read it — and Timeline and Radio are
-// another — what has happened. Framing each pair as one box, split at one
-// shared height, says that, and gives the eye two things to look at rather
-// than four. The numbers follow reading order, band by band.
+// It was four panes in two bands — graph and node over timeline and radio
+// — all on screen at once. Each got a quarter of the screen, so the node's
+// feed and the radio's posts were cut to a few lines, and the eye had four
+// places to look with nothing to say which mattered. The flow and Outputs
+// views had already settled on the shape that reads: a list on the left,
+// one thing read on the right. The run view now has it too. The graph is
+// the list; the right column is whichever of the task, the timeline or the
+// radio was last chosen, with the others a key away in its title.
 package main
 
 import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // paneLayout is where everything goes in the main view. It is computed in
@@ -28,126 +27,111 @@ import (
 // numbers: a pane drawn at one height and scrolled at another moves the
 // offset without moving the screen.
 type paneLayout struct {
-	// zoom is the pane drawn across the body, or -1 for the bands.
+	// zoom is the pane drawn across the body, or -1 for the two columns.
 	zoom focusPane
-	// single means the body is too short for two bands: one band holds the
-	// graph and pane 4, and the other two panes show zoomed when focused.
-	single bool
-	// left and right are the widths the panes in each column are drawn
-	// at; top and bottom the inner heights of the two bands.
+	// left and right are the widths the two columns are drawn at; top is
+	// their inner height.
 	left, right int
-	top, bottom int
+	top         int
 }
 
-// Band geometry. A band costs a border row above and below; the columns
-// cost three border cells and a cell of air inside each left border, so
-// text does not sit against the line.
+// Frame geometry. The frame costs a border row above and below; the
+// columns cost three border cells and a cell of air inside each left
+// border, so text does not sit against the line.
 const (
 	bandBorderRows = 2
 	bandBorderCols = 5
-	minTopBand     = 4
-	minBottomBand  = 5
 )
 
-// singleBand reports whether the body is too short for two bands.
-func (m tuiModel) singleBand() bool {
-	return m.bodyHeight() < 2*bandBorderRows+minTopBand+minBottomBand
-}
-
 // effectiveZoom is the pane drawn across the body, or -1.
-//
-// A pane that has no place in a single band still shows when focused —
-// across the body, as a zoom would — so its number means the same on every
-// terminal, and leaving it restores the band. Derived from the body height
-// alone, so the width functions can use it without a cycle.
 func (m tuiModel) effectiveZoom() focusPane {
 	if m.zoom >= 0 {
 		return m.zoom
 	}
-	if (m.focus == focusNode || m.focus == focusTimeline) && m.singleBand() {
-		return m.focus
-	}
-	if m.focus == focusTimeline && m.timelineSparse() {
-		// Folded away beside the radio; focused, it still shows.
-		return m.focus
-	}
 	return -1
 }
 
-// timelineSparse reports whether pane 3 has too little of its own to be
-// worth a column: a run from before task times were recorded has its start
-// and nothing else, and a column holding one line beside a busy radio was
-// the emptiest thing on screen. The radio takes the band then, and the
-// band's edge says what was folded.
-func (m tuiModel) timelineSparse() bool {
-	n := 0
-	for _, e := range broker.Timeline(m.snap) {
-		if !e.Kind.FromRadio() {
-			n++
-		}
+// readerPane is the pane the right column shows: the focused one, or with
+// the graph focused, the one last read — choosing a task should not change
+// what is being read about it.
+func (m tuiModel) readerPane() focusPane {
+	if m.focus != focusTasks {
+		return m.focus
 	}
-	return n < 3 && len(m.snap.Tasks) > 0
+	if m.reader == focusTasks {
+		return focusNode
+	}
+	return m.reader
 }
 
 func (m tuiModel) layout() paneLayout {
 	body := m.bodyHeight()
-	l := paneLayout{zoom: m.effectiveZoom(), single: m.singleBand()}
+	l := paneLayout{zoom: m.effectiveZoom()}
 	if l.zoom >= 0 {
 		l.left, l.right, l.top = m.width, m.width, body
 		return l
 	}
 	l.left = m.columnWidth()
 	l.right = max(20, m.width-l.left-bandBorderCols)
-	if l.single {
-		l.top = max(1, body-bandBorderRows)
-		return l
-	}
-	inner := body - 2*bandBorderRows
-	// The top band is sized to what it holds — the graph's drawing, the
-	// node's fields and feed — and the bottom band, whose radio grows
-	// without bound, takes the rest. + and - move the split from there.
-	//
-	// The node's feed alone could claim the screen: a busy worker has
-	// hundreds of lines, and the pane scrolls. It gets up to two fifths of
-	// the body, as it had before the bands. The graph gets what its
-	// drawing needs, since a box cut off at the band's edge cannot be
-	// scrolled to the way a feed can.
-	node := min(m.inspectorContentHeight()-1, inner*2/5)
-	want := max(m.graphContentHeight(l.left)-1, node) + m.heightDelta
-	l.top = min(max(want, minTopBand), inner-minBottomBand)
-	l.bottom = inner - l.top
+	l.top = max(1, body-bandBorderRows)
 	return l
 }
 
-// viewBands draws the main view's body.
+// viewBands draws the main view's body: the graph, and the pane being
+// read under a title that names the others.
 func (m tuiModel) viewBands(l paneLayout) string {
-	if l.single {
-		return framedBand(l.left, l.right, l.top,
-			m.viewTasks(l.left, l.top+1), m.viewChannel(l.right, l.top+1))
-	}
-	top := framedBand(l.left, l.right, l.top,
-		m.viewTasks(l.left, l.top+1), m.viewInspector(l.right, l.top+1))
-	if m.timelineSparse() {
-		w := l.left + l.right + bandBorderCols - 3
-		return top + "\n" + framedSingle(w, l.bottom, m.viewChannel(w, l.bottom+1), m.foldedTimelineNote())
-	}
-	return top + "\n" +
-		framedBand(l.left, l.right, l.bottom,
-			m.renderTimeline(m.timelineEvents(), l.left, l.bottom+1), m.viewChannel(l.right, l.bottom+1))
+	return framedBand(l.left, l.right, l.top, m.viewTasks(l.left, l.top+1), m.viewReader(l.right, l.top+1))
 }
 
-// foldedTimelineNote says, on the band's edge, that pane 3 is folded and
-// why.
-func (m tuiModel) foldedTimelineNote() string {
-	why := "little to show"
-	recorded := false
-	for _, t := range m.snap.Tasks {
-		recorded = recorded || !t.StartedAt.IsZero()
+// viewReader is the right column: the chosen pane, its own title replaced
+// by the tabs.
+func (m tuiModel) viewReader(w, h int) string {
+	var pane string
+	switch m.readerPane() {
+	case focusTimeline:
+		pane = m.renderTimeline(m.timelineEvents(), w, h)
+	case focusRadio:
+		pane = m.viewChannel(w, h)
+	default:
+		pane = m.viewInspector(w, h)
 	}
-	if !recorded {
-		why = "this run predates task times"
+	lines := strings.Split(pane, "\n")
+	lines[0] = m.readerTabs(w)
+	return strings.Join(lines, "\n")
+}
+
+// readerTabs is the right column's title: each pane it can show, by the
+// number that shows it, the shown one marked.
+func (m tuiModel) readerTabs(w int) string {
+	focused := m.focus != focusTasks
+	cur := m.readerPane()
+	tab := func(n string, label string, p focusPane) string {
+		switch {
+		case p == cur && focused:
+			return styCyan.Render(n+" ") + styCyanBold.Render(label)
+		case p == cur:
+			return styDim.Render(n+" ") + styTitle.Render(label)
+		}
+		return styDim.Render(n + " " + label)
 	}
-	return "3 Timeline folded · " + why
+	radio := "Radio"
+	if m.briefTab {
+		radio = "Brief"
+	}
+	sep := styDim.Render(" · ")
+	title := tab("2", "Task", focusNode) + sep + tab("3", "Timeline", focusTimeline) + sep + tab("4", radio, focusRadio)
+	if cur == focusRadio {
+		other := "Brief"
+		if m.briefTab {
+			other = "Radio"
+		}
+		title += styDim.Render("  (4 again → " + other + ")")
+	}
+	rule := w - ansi.StringWidth(title) - 1
+	if rule < 1 {
+		return ansi.Truncate(title, w, "…")
+	}
+	return title + " " + styDim.Render(strings.Repeat("─", rule))
 }
 
 // framedSingle is framedBand with one pane across the band, and a note at
@@ -245,7 +229,7 @@ func (m tuiModel) graphContentHeight(width int) int {
 // bands do not show it — a zoomed pane, or a single band.
 func (m tuiModel) nodeBandRows() int {
 	l := m.layout()
-	if l.zoom >= 0 || l.single {
+	if l.zoom >= 0 || m.readerPane() != focusNode {
 		return 0
 	}
 	return l.top

@@ -334,6 +334,10 @@ type Run struct {
 	// sceneNotes are one-line summaries of closed scenes, by scene key.
 	// See scenes.go.
 	sceneNotes map[string]string
+	// questions are what workers and the planner asked the operator, and
+	// answerWaiters the blocking askers waiting on each. See questions.go.
+	questions     []Question
+	answerWaiters map[int][]chan struct{}
 }
 
 // ClaimFiles records ownership of paths for a task. Paths already held by
@@ -1207,6 +1211,9 @@ type Snapshot struct {
 	// SceneNotes are one-line summaries the daemon wrote for scenes of the
 	// workers' exchanges, by scene key. See scenes.go.
 	SceneNotes map[string]string `json:"scene_notes,omitempty"`
+	// Questions are what the run's workers and planner asked the operator,
+	// answered or open. See questions.go.
+	Questions []Question `json:"questions,omitempty"`
 	// Flow is the piece of work this run is a step of, and ParentRun the
 	// step before it. A request big enough to need several rounds —
 	// plan, then build, then verify — was several unrelated runs, each
@@ -1319,6 +1326,7 @@ func (r *Run) Snapshot() Snapshot {
 		HarnessVersion: HarnessVersion(),
 		Verdicts:       append([]Verdict(nil), r.verdicts...),
 		SceneNotes:     r.copySceneNotes(),
+		Questions:      append([]Question(nil), r.questions...),
 		Flow:           r.flow,
 		ParentRun:      r.parentRun,
 	}

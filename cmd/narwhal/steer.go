@@ -295,6 +295,16 @@ func (m tuiModel) steerBar() string {
 		}
 		return fit(styGreenBold.Render("✓ ") + m.steerMsg)
 	}
+	if open, blocking := openQuestionCount(m.snap); open > 0 {
+		lead := styYellow.Render(fmt.Sprintf("? the workers asked %d question", open))
+		if open > 1 {
+			lead += styYellow.Render("s")
+		}
+		if blocking > 0 {
+			lead += styRedBold.Render(fmt.Sprintf(", %d waiting for you", blocking))
+		}
+		return fit(lead + styDim.Render(" · ") + styCyanBold.Render("Q") + styDim.Render(" to answer them together · i steer"))
+	}
 	if !m.runIsLive() {
 		why := "this request has finished"
 		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {

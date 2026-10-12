@@ -353,6 +353,19 @@ curl -s -X POST %s/send \
   -H "Content-Type: application/json" \
   -d "$(python3 -c 'import json,sys; print(json.dumps({"thread_id":"worklog","content":sys.argv[1],"mentions":[],"priority":"urgent"}))' "$BODY")"
 `, base),
+		"ask": fmt.Sprintf(`#!/bin/bash
+# usage: ask "<question>" "<what you will assume>" [assume|blocking]
+# Ask the operator about an ambiguity you cannot settle from the code or the
+# request. The question is collected with the run's others and answered
+# together. assume (default): returns at once; carry on with your assumption.
+# blocking: waits for the answer (up to 30 minutes) and prints it; use only
+# when no reasonable assumption lets you go on.
+set -euo pipefail
+QUESTION="$1"; ASSUMED="${2:-}"; MODE="${3:-assume}"
+curl -s --max-time 1900 -X POST %s/ask \
+  -H "Content-Type: application/json" \
+  -d "$(python3 -c 'import json,sys; print(json.dumps({"question":sys.argv[1],"assumed":sys.argv[2],"blocking":sys.argv[3]=="blocking"}))' "$QUESTION" "$ASSUMED" "$MODE")"
+`, base),
 		"judge": fmt.Sprintf(`#!/bin/bash
 # usage: judge "<yes/no question>" "<state>"   (or pipe the state on stdin)
 # Ask a fast decision model a yes/no question about some state and get a
@@ -451,6 +464,15 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    Ask to be retried on a stronger model. Use when the area needs more\n")
 	fmt.Fprintf(&b, "    than the tier you were given — a thin answer from a model that cannot\n")
 	fmt.Fprintf(&b, "    do the work is worse than a retry. Say concretely what exceeded you.\n")
+	fmt.Fprintf(&b, "- bash %s/ask \"<question>\" \"<what you will assume>\" [assume|blocking]\n", scriptsDir)
+	fmt.Fprintf(&b, "    Ask the OPERATOR when the request or the code leaves a choice open\n")
+	fmt.Fprintf(&b, "    that would change your result — which of two readings was meant,\n")
+	fmt.Fprintf(&b, "    whether something is in scope, which behaviour to keep. Do not invent\n")
+	fmt.Fprintf(&b, "    an answer silently: ask, state what you will assume, and carry on\n")
+	fmt.Fprintf(&b, "    (assume, the default). The operator answers the run's questions\n")
+	fmt.Fprintf(&b, "    together; if the answer differs, your task is reopened with it. Use\n")
+	fmt.Fprintf(&b, "    blocking only when no reasonable assumption lets you go on — it waits\n")
+	fmt.Fprintf(&b, "    for the answer. Not for things you can find out yourself.\n")
 	fmt.Fprintf(&b, "- bash %s/judge \"<yes/no question>\" \"<state>\"\n", scriptsDir)
 	fmt.Fprintf(&b, "    Ask a fast decision model a yes/no question about concrete state —\n")
 	fmt.Fprintf(&b, "    a test log, a diff, a peer's message — and get a probability in about\n")

@@ -218,6 +218,16 @@ type tuiModel struct {
 	// summaryAskOpen unfolds a long request on Summary.
 	taskTab        int
 	summaryAskOpen bool
+	// questionsView shows what the run's workers asked; questionSel is the
+	// question selected, answering whether an answer is being written into
+	// answerBuf, and pendingAnswers what is written and not yet sent. See
+	// questions.go.
+	questionsView  bool
+	questionSel    int
+	answering      bool
+	answerBuf      []rune
+	pendingAnswers map[int]pendingAnswer
+
 	// outputsView shows the watched run's outputs; outputSel and
 	// outputScroll are its list and reading positions. See outputs.go.
 	outputsView  bool
@@ -532,6 +542,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case noticeMsg:
 		m.setNotice(msg.text, msg.err)
 		return m, nil
+	case answersSentMsg:
+		return m.answersSent(msg)
 	case outputDetailMsg:
 		if m.outputDetails == nil {
 			m.outputDetails = map[string]outputDetail{}
@@ -696,6 +708,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.composing {
 		return m.handleComposeKey(msg)
+	}
+	if m.questionsView {
+		return m.handleQuestionsKey(msg)
 	}
 	if m.outputsView {
 		return m.handleOutputsKey(normalizeCJKKey(msg))
@@ -885,6 +900,9 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "o", "O":
 		// Everything the run produced, readable in place. See outputs.go.
 		return m, m.openOutputs("")
+	case "Q":
+		// What the workers asked, answered together. See questions.go.
+		m.openQuestions()
 	case "w":
 		// The working tasks as tmux panes. See tmuxpanes.go.
 		return m, m.openTmuxPanes()
@@ -1246,6 +1264,9 @@ func (m tuiModel) View() string {
 	}
 	if m.picker {
 		return m.viewHome()
+	}
+	if m.questionsView {
+		return m.viewQuestions()
 	}
 	if m.outputsView {
 		return m.viewOutputs()
@@ -1648,6 +1669,17 @@ func (m tuiModel) viewHeader() string {
 		icon + " " + state + "   " + m.taskCounts()
 	if m.err != nil {
 		left += "   " + styRed.Render("daemon unreachable — showing the saved copy")
+	}
+	// Questions first: they are the operator's to act on.
+	if open, blocking := openQuestionCount(m.snap); open > 0 {
+		q := styYellow.Render(fmt.Sprintf("? %d question", open))
+		if open > 1 {
+			q += styYellow.Render("s")
+		}
+		if blocking > 0 {
+			q += styRedBold.Render(fmt.Sprintf(" · %d waiting", blocking))
+		}
+		left += "   " + q + styDim.Render(" (Q)")
 	}
 	if sum := verdictSummary(m.snap.Verdicts); sum != "" {
 		left += "   " + sum

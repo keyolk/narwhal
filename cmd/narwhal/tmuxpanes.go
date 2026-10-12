@@ -77,7 +77,9 @@ func shellQuote(s string) string {
 // openTmuxPanes runs the plan for the watched run.
 func (m tuiModel) openTmuxPanes() tea.Cmd {
 	if os.Getenv("TMUX") == "" {
-		return func() tea.Msg { return noticeMsg{err: fmt.Errorf("not inside tmux — w opens panes in the current tmux session")} }
+		return func() tea.Msg {
+			return noticeMsg{err: fmt.Errorf("not inside tmux — w opens panes in the current tmux session")}
+		}
 	}
 	self, err := os.Executable()
 	if err != nil {

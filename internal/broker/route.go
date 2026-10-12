@@ -153,8 +153,17 @@ func stripWorker(ids []string) []string {
 
 // needsRouting reports whether a message is an operator instruction that
 // names no task, so routing should find its workers.
+//
+// The planner posts as "main" too, and its PLAN_DONE sign-off was routed as
+// if the operator had said it: on run s1791819873389-1 both verdicts on
+// record asked every worker whether "PLAN_DONE" bore on its task. Protocol
+// lines and the planning thread are the run organising itself, not the
+// operator steering it.
 func (r *Run) needsRouting(m *Message) bool {
 	if m == nil || m.Sender != "main" || strings.HasPrefix(m.Content, RelayPrefix) {
+		return false
+	}
+	if m.ThreadID == PlanningThread || IsProtocol(m.Content) {
 		return false
 	}
 	return len(r.AddressedTasks(m.Mentions, m.Content)) == 0

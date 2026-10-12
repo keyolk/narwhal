@@ -166,3 +166,16 @@ func TestRoutingKeepsOnlyWorkersNearTheBest(t *testing.T) {
 		t.Errorf("relays = %+v, want only worker-api (0.75 is over the threshold but far from 0.96)", relays)
 	}
 }
+
+// The planner signs off as "main"; its PLAN_DONE is the run organising
+// itself, not the operator steering it, and is not routed.
+func TestThePlannersSignOffIsNotRouted(t *testing.T) {
+	j := &assignJudge{match: "token"}
+	r := routeRun(t, j)
+	r.PostMessage(PlanningThread, "main", nil, PriorityNormal, "PLAN_DONE")
+	r.PostMessage(WorklogThread, "main", nil, PriorityNormal, "PLAN_DONE")
+	r.IntakeGraphRequests(0)
+	if j.calls != 0 || len(r.Verdicts()) != 0 || len(messagesFrom(r, "coordinator")) != 0 {
+		t.Errorf("PLAN_DONE was routed: %d judge calls, %d verdicts", j.calls, len(r.Verdicts()))
+	}
+}

@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -29,6 +30,9 @@ type transcriptEntry struct {
 	at   time.Time
 	kind string // "text", "thinking", "tool", "result"
 	text string
+	// detail is what the one-line text stands for, kept for when the
+	// entry is opened: a tool call's full input, a check's result.
+	detail string
 	// user marks text that came in on a user record — the assignment and
 	// any steer sent later — rather than something the worker wrote. Both
 	// read as prose in the feed, but only the worker's own words say what
@@ -229,6 +233,7 @@ func parseContent(raw json.RawMessage, at time.Time) []transcriptEntry {
 		case "tool_use":
 			out = append(out, transcriptEntry{
 				at: at, kind: "tool", text: summarizeToolUse(b.Name, b.Input),
+				detail: prettyInput(b.Input),
 			})
 		case "tool_result":
 			text := decodeResult(b.Content)
@@ -280,6 +285,40 @@ func summarizeToolUse(name string, input json.RawMessage) string {
 		}
 		return name
 	}
+}
+
+// prettyInput is a tool call's input as indented JSON, with string values
+// that hold newlines — a file written, a command — kept readable.
+func prettyInput(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return string(raw)
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		b, _ := json.MarshalIndent(v, "", "  ")
+		return string(b)
+	}
+	keys := make([]string, 0, len(obj))
+	for k := range obj {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		switch val := obj[k].(type) {
+		case string:
+			if strings.Contains(val, "\n") {
+				fmt.Fprintf(&b, "%s:\n%s\n", k, val)
+				continue
+			}
+			fmt.Fprintf(&b, "%s: %s\n", k, val)
+		default:
+			j, _ := json.Marshal(val)
+			fmt.Fprintf(&b, "%s: %s\n", k, j)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // decodeResult pulls readable text out of a tool result, which is either a

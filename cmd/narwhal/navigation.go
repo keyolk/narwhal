@@ -25,6 +25,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -73,9 +74,17 @@ func (m *tuiModel) openTask(id string, at time.Time) {
 	m.detail = detailSession
 	m.detailScroll = 0
 	m.sessionTail = at.IsZero()
+	m.resetTaskView()
 	if !at.IsZero() {
-		// Two lines of what came before, so the moment is read in context.
-		m.detailScroll = max(0, m.feedLinesBefore(id, at, m.width-2)-2)
+		// The cursor on the moment, with what came before above it.
+		m.taskTab = taskTabActivity
+		if t, ok := m.selectedTask(); ok {
+			l := m.layoutTask(t, m.width-2)
+			if i := m.entryAt(t, at); i >= 0 {
+				m.taskSel = i
+				m.detailScroll = max(0, l.starts[i]-2)
+			}
+		}
 	}
 }
 
@@ -206,21 +215,22 @@ func (m tuiModel) viewMessageDetail() string {
 		strings.Join(body[scroll:end], "\n"), footer, m.height)
 }
 
-// viewTaskView is a task's whole story in one place: what it is and how it
-// stands, then the assignment, the operator's instructions, the judge's
-// calls and the worker's reasoning, calls and results in the order they
-// happened, and the final answer last.
+// viewTaskView is a task in three tabs: Summary — what it was asked,
+// where it stands and what it concluded; Activity — how it got there,
+// entry by entry; Messages — what it said and was told on the radio.
 //
-// It replaces two screens. The task detail showed the assignment and a
-// dozen lines of activity, the session view the activity and not the
-// task, and s flipped between them; the question either answered was half
-// of what you opened it for.
+// It was one feed, everything at once and in order, so the answer was at
+// the bottom of hundreds of lines and the check scrolled off the top. The
+// things read together are together on Summary; the long tail of tool
+// calls is a tab away. A running task opens on Activity, a finished one
+// on Summary.
 func (m tuiModel) viewTaskView() string {
 	t, ok := m.selectedTask()
 	if !ok {
 		return "no tasks"
 	}
 	width := m.width - 2
+	tab := m.currentTaskTab(t)
 
 	icon, style := taskIconStyle(t.State)
 	head := fmt.Sprintf("%s  %s %s  %s",
@@ -249,77 +259,59 @@ func (m tuiModel) viewTaskView() string {
 		}
 		meta = append(meta, span)
 	}
-	top := []string{head, styDim.Render(strings.Join(meta, " · "))}
-	if c := strings.TrimSpace(t.Check); c != "" {
-		line := styDim.Render("check ") + truncate(oneLine(c), width-6)
-		if r := strings.TrimSpace(t.CheckResult); r != "" {
-			line += "\n" + styDim.Render("  ↳ ") + truncate(oneLine(r), width-4)
-		}
-		top = append(top, line)
-	}
 
-	// The transcript only: the captured output is the final answer, added
-	// below, and taking it here too printed it twice when the transcript
-	// was gone.
 	var body []string
-	if sid := m.workerSessionID(t.ID); sid != "" {
-		body = globalTranscripts.render(transcriptPath(m.live.CWD, sid), width, m.taskInputs(t.ID))
-	}
-	if len(body) == 0 && strings.TrimSpace(t.Assignment) != "" {
-		// No transcript yet: the assignment is still worth reading.
-		var st feedState
-		body = renderEntry(transcriptEntry{kind: "text", user: true, text: t.Assignment}, width, &st)
-	}
-
-	// The final answer only exists once the worker has exited. Appended
-	// rather than shown instead: it is the end of the same story.
-	//
-	// Two sources say it, and they outlive each other. claude-output.txt is
-	// this machine's stdout capture — richer, but gone if the session
-	// directory was cleaned or the run was adopted from elsewhere. The
-	// snapshot outcome is what the worker declared at task-done and
-	// survives persistence, so it is the one still there after a restart.
-	final := m.workerOutputLines(t.ID)
-	if len(final) == 0 && t.Outcome != "" {
-		final = strings.Split(t.Outcome, "\n")
-	}
-	if len(final) > 0 {
-		label := "── final answer ──"
-		lstyle := styGreen
-		if t.State == broker.TaskFailed {
-			label, lstyle = "── why it failed ──", styRedBold
+	var l taskLayout
+	switch tab {
+	case taskTabActivity:
+		l = m.layoutTask(t, width)
+		body = l.lines
+		if len(body) == 0 {
+			body = wrapText(m.noActivityReason(t), width)
 		}
-		body = append(body, "", lstyle.Render(label))
-		body = append(body, renderMarkdown(strings.Join(final, "\n"), width, lipgloss.NewStyle())...)
+	case taskTabMessages:
+		body = m.taskMessageLines(t, width)
+	default:
+		body = m.taskSummaryLines(t, width)
 	}
-	if len(body) == 0 {
-		// Say which is true rather than leaving a blank pane.
-		var reason string
-		switch {
-		case t.Dispatches == 0:
-			reason = "not dispatched yet — nothing to show"
-		case t.State == broker.TaskDispatched:
-			reason = "the worker has started but has not written its first event yet"
-		default:
-			reason = "no transcript found. This run predates session pinning, so " +
-				"the worker's session cannot be located; only its final output " +
-				"would be available, at " + m.sessionLogPath(t.ID)
-		}
-		body = wrapText(reason, width)
-	}
+	tabs := m.taskTabsLine(t, tab)
 
-	header := strings.Join(top, "\n")
-	avail := max(1, m.height-strings.Count(header, "\n")-4)
-	// Following pins the view to the end as the worker works.
-	if m.sessionTail && len(body) > avail {
-		m.detailScroll = len(body) - avail
+	avail := max(1, m.height-7)
+	scrollAt := m.detailScroll
+	if tab == taskTabActivity && m.sessionTail && len(body) > avail {
+		// Following pins the feed to the end as the worker works.
+		scrollAt = len(body) - avail
 	}
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
+	scroll, end, pos := scrollWindow(scrollAt, avail, len(body))
+
+	sel := -1
+	if tab == taskTabActivity {
+		sel = m.selectedEntry(len(l.entries))
+	}
+	shown := make([]string, 0, end-scroll)
+	for n := scroll; n < end; n++ {
+		gutter := " "
+		if sel >= 0 && n >= l.starts[sel] && n < l.starts[sel+1] {
+			// The entry under the cursor carries a bar down its left edge.
+			gutter = styCyanBold.Render("▌")
+		}
+		shown = append(shown, gutter+body[n])
+	}
 	follow := ""
-	if m.sessionTail {
+	if tab == taskTabActivity && m.sessionTail {
 		follow = styCyan.Render("  [following]")
 	}
-	footer := styDim.Render("j/k scroll · g/G top/end · f follow · n/p task · a attach · esc back")
-	return pinFooter(top[0]+pos+follow+"\n"+strings.Join(top[1:], "\n")+"\n\n"+
-		strings.Join(body[scroll:end], "\n"), footer, m.height)
+	keys := "esc back · tab next tab · j/k scroll · enter open the request · n/p task · a attach"
+	switch tab {
+	case taskTabActivity:
+		keys = "esc back · j/k entry · enter open/fold · o $PAGER · E open all · tab · n/p task · a attach"
+	case taskTabMessages:
+		keys = "esc back · tab next tab · j/k scroll · g/G · n/p task"
+	}
+	footer := styDim.Render(ansi.Truncate(keys, max(1, m.width), "…"))
+	if n := m.noticeLine(m.width); n != "" {
+		footer = n + "\n" + footer
+	}
+	return pinFooter(head+follow+"\n"+styDim.Render(strings.Join(meta, " · "))+"\n"+tabs+pos+"\n"+
+		strings.Join(shown, "\n"), footer, m.height)
 }

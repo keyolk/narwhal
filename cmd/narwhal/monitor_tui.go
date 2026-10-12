@@ -924,7 +924,7 @@ func (m *tuiModel) moveCursor(delta int) {
 	case focusTasks:
 		m.taskCur += delta
 	case focusRadio:
-		m.radioCur += delta
+		m.stepRadio(delta)
 		m.followTail = false
 	}
 	m.clampCursors()
@@ -1448,30 +1448,44 @@ func (m tuiModel) viewHeader() string {
 		icon = styCyan.Render(spinnerAt(m.frame))
 	}
 	// Where you are, and the way back: this is one request of several.
-	line := styDim.Render("‹ ") + styCyanBold.Render("Narwhal") + styDim.Render(" › ") +
-		icon + " " + state + "  " + m.taskCounts()
+	left := styDim.Render("‹ ") + styCyanBold.Render("Narwhal") + styDim.Render("   ") +
+		icon + " " + state + "   " + m.taskCounts()
 	if m.err != nil {
-		line += "  " + styRed.Render("(daemon unreachable — showing the saved copy)")
+		left += "   " + styRed.Render("daemon unreachable — showing the saved copy")
 	}
 	if sum := verdictSummary(m.snap.Verdicts); sum != "" {
-		line += "  " + sum
+		left += "   " + sum
 	}
 	// The id is what `narwhal show` takes, and with several runs the
-	// position says [ and ] have somewhere to go.
+	// position says [ and ] have somewhere to go. It is reference, not
+	// news, so it sits at the far edge in the dimmest weight.
 	ref := m.runID()
 	if len(m.runs) > 1 {
-		ref += fmt.Sprintf(" [%d/%d]", m.runCur+1, len(m.runs))
+		ref += fmt.Sprintf("  %d/%d", m.runCur+1, len(m.runs))
 	}
-	line += styDim.Render("  " + ref)
-	line = ansi.Truncate(line, max(1, m.width), "…")
+	w := max(1, m.width)
+	line := left
+	if gap := w - ansi.StringWidth(left) - ansi.StringWidth(ref); gap >= 3 {
+		line += strings.Repeat(" ", gap) + styDim.Render(ref)
+	}
+	line = ansi.Truncate(line, w, "…")
+
 	prompt := oneLine(m.snap.Prompt)
 	if prompt == "" {
 		return line
 	}
-	// The prompt is what the run is *for*, and it was the dimmest thing on
-	// screen. Leave it unstyled so it reads at full contrast against the
-	// furniture around it.
-	return line + "\n" + truncate(prompt, max(10, m.width-1))
+	// The prompt is what the run is *for*: at full contrast, wrapped to
+	// two lines rather than cut at one, and indented under the title so
+	// it reads as its subject rather than a second header.
+	lines := wrapSpans([]span{{prompt, lipgloss.NewStyle()}}, max(10, w-3), "")
+	if len(lines) > 2 {
+		lines = lines[:2]
+		lines[1] = runewidth.Truncate(lines[1], max(10, w-3)-1, "") + "…"
+	}
+	for i := range lines {
+		lines[i] = "  " + lines[i]
+	}
+	return line + "\n" + strings.Join(lines, "\n")
 }
 
 // taskCounts is how far the run has got: done out of all, and what is
@@ -1928,98 +1942,6 @@ func boolIndex(b bool) int {
 	return 0
 }
 
-func (m tuiModel) viewRadio(width, height int) string {
-	title := m.channelTitle(width)
-
-	rows := make([]string, 0, height)
-	rows = append(rows, title)
-
-	msgs := m.snap.Messages
-	visible := height - 1
-	start := scrollStart(m.radioCur, visible, len(msgs))
-	for i := start; i < len(msgs) && len(rows) < height; i++ {
-		selected := i == m.radioCur && m.focus == focusRadio
-		rows = append(rows, m.radioRow(msgs[i], width, selected))
-	}
-	if len(msgs) == 0 {
-		rows = append(rows, styDim.Render("(no messages yet)"))
-	}
-	return padRows(rows, width, height)
-}
-
-// radioRow renders one message line, fitted to width.
-//
-// The line is assembled and truncated as plain text first, then styled.
-// Doing it the other way round means measuring and cutting a string full of
-// ANSI escapes, which is what made every frame cost ~34ms.
-func (m tuiModel) radioRow(msg *broker.Message, width int, selected bool) string {
-	prioCh, prioStyle := priorityGlyph(msg.Priority)
-	sender := shortName(msg.Sender)
-	// The time is what turns a list into a channel: it says whether two
-	// findings landed together or an hour apart, which the sequence number
-	// alone cannot.
-	stamp := clock(msg.CreatedAt)
-	prefix := fmt.Sprintf("%s %s %s ", stamp, prioCh, sender)
-
-	// A mention says the message is addressed at someone, which changes
-	// how you read the rest of it — so it is kept as its own coloured
-	// fragment rather than folded into the body.
-	mention := ""
-	if len(msg.Mentions) > 0 && !strings.HasPrefix(msg.Content, broker.RelayPrefix) {
-		// A relay's summary already says where it went.
-		mention = "→" + strings.Join(msg.Mentions, ",") + " "
-	}
-
-	// Protocol messages are a wire format, not prose. Rendered raw they
-	// read as noise — FILE_CLAIM|api|internal/api/router.go tells you a
-	// worker claimed a file only after you split it on pipes yourself.
-	summary, isProtocol := radioSummary(msg.Content)
-	marker := ""
-	if isProtocol {
-		// These summaries lead with the task they concern, which is
-		// usually the sender: "api  ⋮ api claims router.go" says it twice.
-		summary = strings.TrimPrefix(summary, sender+" ")
-		marker = "⋮ "
-	}
-
-	// Measure and cut as plain text, then style the pieces. truncate()
-	// counts rune widths, so a styled string miscounts its escapes as
-	// content and a cut mid-escape bleeds into the rows below.
-	rest := truncate(mention+marker+summary, width-displayWidth(prefix))
-
-	if selected {
-		// A reversed row reads better without competing colors inside it.
-		return stySel.Render(padRight(prefix+rest, width))
-	}
-
-	// Re-split the truncated text so each piece keeps its own colour.
-	body := rest
-	styledMention := ""
-	if mention != "" && strings.HasPrefix(body, mention) {
-		styledMention = styMagenta.Render(mention)
-		body = strings.TrimPrefix(body, mention)
-	}
-	if isProtocol {
-		// Coordination traffic is context for the prose around it, so it
-		// recedes rather than competing with a worker's actual finding.
-		body = styDim.Render(body)
-	} else if msg.Priority == broker.PriorityUrgent {
-		// An urgent message may invalidate what a peer is doing right now.
-		// That is the one kind of traffic worth pulling the eye across a
-		// full pane for.
-		body = styRedBold.Render(body)
-	}
-	senderStyle := styBlue
-	if msg.Sender == "main" {
-		// The operator's own words, in the colour they carry everywhere.
-		senderStyle = styYellowBold
-		body = styYellow.Render(body)
-	}
-	return fmt.Sprintf("%s %s %s %s",
-		styDim.Render(stamp), prioStyle.Render(prioCh),
-		senderStyle.Render(sender), styledMention+body)
-}
-
 func priorityGlyph(p broker.Priority) (string, lipgloss.Style) {
 	switch p {
 	case broker.PriorityUrgent:
@@ -2321,21 +2243,16 @@ func wrapText(s string, width int) []string {
 	if width < 20 {
 		width = 20
 	}
+	// By display cells, not bytes. Counting bytes cut Hangul — three
+	// bytes, two cells — a third short of the edge, and could cut inside a
+	// character and print the halves as garbage.
 	var out []string
 	for _, para := range strings.Split(s, "\n") {
 		if para == "" {
 			out = append(out, "")
 			continue
 		}
-		for len(para) > width {
-			cut := strings.LastIndex(para[:width], " ")
-			if cut <= 0 {
-				cut = width
-			}
-			out = append(out, para[:cut])
-			para = strings.TrimLeft(para[cut:], " ")
-		}
-		out = append(out, para)
+		out = append(out, wrapSpans([]span{{para, lipgloss.NewStyle()}}, width, "")...)
 	}
 	return out
 }

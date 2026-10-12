@@ -8,12 +8,24 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// timedLiveModel is liveModel with its tasks' times recorded, so pane 3 has
+// events of its own and keeps its column rather than folding.
+func timedLiveModel(t *testing.T) tuiModel {
+	t.Helper()
+	m := liveModel(t)
+	m.width, m.height = 160, 40
+	at := time.Date(2026, 10, 8, 10, 0, 0, 0, time.Local)
+	for i := range m.snap.Tasks {
+		m.snap.Tasks[i].StartedAt = at.Add(time.Duration(i) * time.Second)
+	}
+	m.snap.Messages = briefModel(t).snap.Messages
+	return m
+}
+
 // 3 focuses pane 3 where it is, under the graph; it does not move into
 // another pane's slot.
 func TestThreeFocusesTheTimelineUnderTheGraph(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 40
-	m.snap.Messages = briefModel(t).snap.Messages
+	m := timedLiveModel(t)
 	m = press(m, "3")
 	if m.focus != focusTimeline {
 		t.Fatalf("3: focus=%v", m.focus)
@@ -88,12 +100,9 @@ func TestTheTimelineSelectionMoves(t *testing.T) {
 // The history is on screen without a key: under the graph, in the room the
 // graph does not use.
 func TestTheTimelineSitsUnderTheGraph(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 40
-	at := time.Date(2026, 10, 8, 10, 0, 0, 0, time.Local)
-	m.snap.Tasks[2].StartedAt, m.snap.Tasks[2].EndedAt = at, at.Add(time.Minute)
+	m := timedLiveModel(t)
+	m.snap.Tasks[2].EndedAt = m.snap.Tasks[2].StartedAt.Add(time.Minute)
 	m.snap.Tasks[2].Outcome = "gamma found the leak"
-	m.snap.Messages = briefModel(t).snap.Messages
 	got := ansi.Strip(m.View())
 	g, tl := strings.Index(got, "1 Graph"), strings.Index(got, "3 Timeline")
 	if g < 0 || tl < 0 || tl < g {
@@ -107,9 +116,7 @@ func TestTheTimelineSitsUnderTheGraph(t *testing.T) {
 // With the radio beside it, the timeline under the graph does not repeat
 // it: an instruction or urgent post appears once on screen, in the radio.
 func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
-	m := liveModel(t)
-	m.width, m.height = 160, 40
-	m.snap.Messages = briefModel(t).snap.Messages
+	m := timedLiveModel(t)
 	got := ansi.Strip(m.View())
 	for _, msg := range []string{"@schema add the LockKey field", "nonce passes twice on replay"} {
 		if n := strings.Count(got, msg); n != 1 {
@@ -119,7 +126,7 @@ func TestTheTimelineBesideTheRadioDoesNotRepeatIt(t *testing.T) {
 	// With the brief in the radio's place nothing else shows them, so the
 	// timeline keeps them.
 	m = press(m, "1", "4", "4")
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "» operator @schema add the LockKey field") {
+	if got := ansi.Strip(m.View()); !strings.Contains(lineContaining(got, "» operator"), "@schema add the LockKey field") {
 		t.Errorf("the timeline beside the brief dropped the operator's instruction:\n%s", got)
 	}
 }

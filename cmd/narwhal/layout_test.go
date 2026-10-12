@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -10,9 +11,8 @@ import (
 // Graph and Node share one framed band, Timeline and Radio another, and
 // each band is split at one height across both columns.
 func TestThePanesSitInTwoBands(t *testing.T) {
-	m := liveModel(t)
+	m := fixtureRun(t)
 	m.width, m.height = 160, 40
-	m.snap.Messages = briefModel(t).snap.Messages
 	lines := strings.Split(ansi.Strip(m.View()), "\n")
 
 	var tops []int
@@ -61,5 +61,32 @@ func TestTheBorderTitleKeepsTheFocusColour(t *testing.T) {
 	top := strings.Split(m.viewBands(m.layout()), "\n")[0]
 	if !strings.Contains(top, styCyanBold.Render("Node")) {
 		t.Errorf("the focused title lost its colour: %q", top)
+	}
+}
+
+// A run with nothing of its own for pane 3 — recorded before task times —
+// folds it: the radio takes the band, and the edge says why.
+func TestASparseTimelineFoldsIntoTheRadiosBand(t *testing.T) {
+	m := liveModel(t)
+	m.width, m.height = 160, 40
+	m.snap.Messages = briefModel(t).snap.Messages
+	got := ansi.Strip(m.View())
+	if strings.Contains(got, "╭─ 3 Timeline") {
+		t.Fatalf("a near-empty timeline kept its column:\n%s", got)
+	}
+	if !strings.Contains(got, "3 Timeline folded · this run predates task times") {
+		t.Errorf("the fold is not explained:\n%s", got)
+	}
+	// 3 still shows it.
+	if got := ansi.Strip(press(m, "3").View()); !strings.Contains(got, "3 Timeline") || strings.Contains(got, "4 Radio") {
+		t.Errorf("3 on a folded timeline:\n%s", got)
+	}
+	// With task times it has its column.
+	at := time.Now()
+	for i := range m.snap.Tasks {
+		m.snap.Tasks[i].StartedAt = at
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "╭─ 3 Timeline") {
+		t.Errorf("a timeline with events did not get its column:\n%s", got)
 	}
 }

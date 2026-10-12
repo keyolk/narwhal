@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
@@ -162,7 +164,7 @@ func (m tuiModel) viewMessageDetail() string {
 	meta = append(meta, styDim.Render(fmt.Sprintf("seq %d", msg.Seq)))
 
 	width := m.width - 2
-	body := wrapText(msg.Content, width)
+	body := renderMarkdown(msg.Content, width, lipgloss.NewStyle())
 
 	if msg.Sender == "main" {
 		// What the operator most wants to know about their own message.
@@ -251,7 +253,13 @@ func (m tuiModel) viewTaskView() string {
 		top = append(top, line)
 	}
 
-	body := m.sessionActivityLines(t.ID, width)
+	// The transcript only: the captured output is the final answer, added
+	// below, and taking it here too printed it twice when the transcript
+	// was gone.
+	var body []string
+	if sid := m.workerSessionID(t.ID); sid != "" {
+		body = globalTranscripts.render(transcriptPath(m.live.CWD, sid), width, m.taskInputs(t.ID))
+	}
 	if len(body) == 0 && strings.TrimSpace(t.Assignment) != "" {
 		// No transcript yet: the assignment is still worth reading.
 		var st feedState
@@ -277,9 +285,7 @@ func (m tuiModel) viewTaskView() string {
 			label, lstyle = "── why it failed ──", styRedBold
 		}
 		body = append(body, "", lstyle.Render(label))
-		for _, l := range final {
-			body = append(body, wrapText(l, width)...)
-		}
+		body = append(body, renderMarkdown(strings.Join(final, "\n"), width, lipgloss.NewStyle())...)
 	}
 	if len(body) == 0 {
 		// Say which is true rather than leaving a blank pane.

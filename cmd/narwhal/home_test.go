@@ -139,7 +139,7 @@ func TestOpeningARequestShowsTheGraphAndTheSteeringLine(t *testing.T) {
 	m.snap = broker.Snapshot{RunID: "r1", State: broker.RunActive, Prompt: "p",
 		Tasks: []broker.TaskSnapshot{{ID: "a", State: broker.TaskDispatched}}}
 	got := ansi.Strip(m.View())
-	for _, w := range []string{"‹ Narwhal ›", "1 Graph", "press i to tell the workers"} {
+	for _, w := range []string{"‹ Narwhal", "1 Graph", "press i to tell the workers"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("run view lacks %q:\n%s", w, got)
 		}

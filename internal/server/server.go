@@ -690,6 +690,9 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 			hint = run.JudgeAnswered(task, req.Outcome)
 		}
 		if hint == "" {
+			hint = run.JudgeFollowed(task, req.Outcome)
+		}
+		if hint == "" {
 			hint = run.JudgeFolded(task, req.Outcome)
 		}
 		if hint != "" {

@@ -51,7 +51,7 @@ const answeredQuestion = "TASK is the assignment a worker was given, with any fo
 // JudgeAnswered asks whether outcome answers the task, once per dispatch.
 // It returns the reason to hand the call back, or "" to complete.
 func (r *Run) JudgeAnswered(t *Task, outcome string) string {
-	if r.currentJudge() == nil || strings.TrimSpace(outcome) == "" {
+	if !r.judging(QuestionAnswered) || strings.TrimSpace(outcome) == "" {
 		return ""
 	}
 	t.mu.Lock()
@@ -70,7 +70,7 @@ func (r *Run) JudgeAnswered(t *Task, outcome string) string {
 	}
 	state := "TASK:\n" + clip(task, 1500) + "\n\nOUTCOME:\n" + clip(outcome, 2500)
 	v := r.ask(t.ID, QuestionAnswered, state, answeredQuestion)
-	if v.Decided && v.P < AnsweredThreshold {
+	if v.Decided && v.P < threshold(QuestionAnswered) {
 		v.Action = ActionReturned
 		r.recordVerdict(v)
 		return fmt.Sprintf("The outcome you submitted does not read as an answer to your task "+
@@ -118,7 +118,7 @@ func (r *Run) judgeAffected(tasks []*Task, ans *Task, upstream, instruction stri
 	var wg sync.WaitGroup
 	for i, t := range tasks {
 		out[i] = true
-		if t == ans || t.CurrentState() != TaskCompleted || r.currentJudge() == nil {
+		if t == ans || t.CurrentState() != TaskCompleted || !r.judging(QuestionAffected) {
 			continue
 		}
 		wg.Add(1)
@@ -128,7 +128,7 @@ func (r *Run) judgeAffected(tasks []*Task, ans *Task, upstream, instruction stri
 			state := "UPSTREAM:\n" + clip(upstream, 800) + "\n\nINSTRUCTION:\n" + clip(instruction, 800) +
 				"\n\nTASK:\n" + clip(s.Assignment, 800) + "\n\nOUTCOME:\n" + clip(s.Outcome, 1500)
 			v := r.ask(t.ID, QuestionAffected, state, affectedQuestion)
-			if v.Decided && v.P < AffectedThreshold {
+			if v.Decided && v.P < threshold(QuestionAffected) {
 				v.Action = ActionSkipped
 				out[i] = false
 			} else if v.Decided {
@@ -166,7 +166,7 @@ const foldedQuestion = "ANSWER is a run's final answer, written by its synthesis
 // returns the reason to hand the call back, naming the peers left out, or
 // "" to complete.
 func (r *Run) JudgeFolded(t *Task, answer string) string {
-	if r.currentJudge() == nil || !t.IsSynthesis() || strings.TrimSpace(answer) == "" {
+	if !r.judging(QuestionFolded) || !t.IsSynthesis() || strings.TrimSpace(answer) == "" {
 		return ""
 	}
 	t.mu.Lock()
@@ -198,7 +198,7 @@ func (r *Run) JudgeFolded(t *Task, answer string) string {
 				"\nCONCLUDED: " + clip(p.Outcome, 1500)
 			v := r.ask(t.ID, QuestionFolded, state, foldedQuestion)
 			v.Ask = p.ID
-			if v.Decided && v.P < FoldedThreshold {
+			if v.Decided && v.P < threshold(QuestionFolded) {
 				v.Action = ActionReturned
 				missing[i] = true
 			} else if v.Decided {
@@ -251,12 +251,12 @@ const stuckQuestion = "TASK is a worker's assignment. RECENT is its last actions
 // and if it is, says so to the operator on the radio. It reports whether
 // the worker was flagged.
 func (r *Run) JudgeStuck(t *Task, recent []string) bool {
-	if r.currentJudge() == nil || len(recent) == 0 || t.CurrentState() != TaskDispatched {
+	if !r.judging(QuestionStuck) || len(recent) == 0 || t.CurrentState() != TaskDispatched {
 		return false
 	}
 	state := "TASK:\n" + clip(t.assignment(), 800) + "\n\nRECENT:\n" + clip(strings.Join(recent, "\n"), 4000)
 	v := r.ask(t.ID, QuestionStuck, state, stuckQuestion)
-	flagged := v.Decided && v.P >= StuckThreshold
+	flagged := v.Decided && v.P >= threshold(QuestionStuck)
 	if flagged {
 		v.Action = ActionFlagged
 	} else if v.Decided {

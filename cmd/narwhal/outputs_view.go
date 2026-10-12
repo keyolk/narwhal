@@ -166,6 +166,8 @@ func (m tuiModel) outputBody(o output, width int) []string {
 		return append([]string{head, ""}, cachedRender("git|"+o.key(), d.text, width, false)...)
 	case outReport, outAnswer:
 		src = styDim.Render(outputLabels[o.kind] + " · " + o.task + " · " + o.from)
+	case outRequest:
+		src = styDim.Render("what this step was asked")
 	}
 	return append([]string{src, ""}, cachedRender(o.key()+o.task+o.from, o.text, width, true)...)
 }
@@ -312,6 +314,8 @@ func (m tuiModel) outputList(outs []output, lw int) ([]string, int) {
 
 func kindHeading(k outputKind) string {
 	switch k {
+	case outRequest:
+		return "Asked"
 	case outFile:
 		return "Files"
 	case outPR:

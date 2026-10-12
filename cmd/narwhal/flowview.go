@@ -104,7 +104,7 @@ func (m *tuiModel) applyFlows(flows []store.Flow) {
 // openFlow shows a flow, with the step holding runID selected.
 func (m *tuiModel) openFlow(flowID, runID string) {
 	m.flowView, m.flowID = true, flowID
-	m.flowSel, m.flowScroll, m.flowDetail, m.flowZoom = 0, 0, false, false
+	m.flowSel, m.flowScroll, m.flowDetail, m.flowZoom, m.flowOutSel = 0, 0, false, false, -1
 	for i, r := range m.flowRuns(flowID) {
 		if r.RunID == runID {
 			m.flowSel = i
@@ -116,6 +116,11 @@ func (m *tuiModel) openFlow(flowID, runID string) {
 // handleFlowKey drives the flow view.
 func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	steps := m.flowRuns(m.flowID)
+	if m.flowDetail {
+		if next, cmd, ok := m.handleStepOutputKey(msg); ok {
+			return next, cmd
+		}
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		m.quit = true
@@ -132,8 +137,9 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.flowView, m.picker = false, true
 		}
 	case "tab", "l", "right":
-		// Into the step's detail, where j/k read rather than select.
+		// Into the step's outputs, where j/k choose one to read.
 		m.flowDetail = true
+		return m, m.fetchStepDetails()
 	case "shift+tab", "h", "left":
 		m.flowDetail = false
 	case "z":
@@ -141,35 +147,23 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.flowZoom = !m.flowZoom
 		m.flowDetail = m.flowZoom || m.flowDetail
 	case "j", "down":
-		if m.flowDetail {
-			m.scrollFlow(1)
-		} else if m.flowSel < len(steps)-1 {
+		if m.flowSel < len(steps)-1 {
 			m.flowSel++
-			m.flowScroll = 0
+			m.flowScroll, m.flowOutSel = 0, -1
 		}
 	case "k", "up":
-		if m.flowDetail {
-			m.scrollFlow(-1)
-		} else if m.flowSel > 0 {
+		if m.flowSel > 0 {
 			m.flowSel--
-			m.flowScroll = 0
+			m.flowScroll, m.flowOutSel = 0, -1
 		}
 	case "ctrl+d", "pgdown", "J", " ":
 		m.scrollFlow(m.flowDetailRows() / 2)
 	case "ctrl+u", "pgup", "K":
 		m.scrollFlow(-m.flowDetailRows() / 2)
 	case "g", "home":
-		if m.flowDetail {
-			m.flowScroll = 0
-		} else {
-			m.flowSel, m.flowScroll = 0, 0
-		}
+		m.flowSel, m.flowScroll, m.flowOutSel = 0, 0, -1
 	case "G", "end":
-		if m.flowDetail {
-			m.scrollFlow(1 << 20)
-		} else {
-			m.flowSel, m.flowScroll = max(0, len(steps)-1), 0
-		}
+		m.flowSel, m.flowScroll, m.flowOutSel = max(0, len(steps)-1), 0, -1
 	case "enter":
 		if m.flowSel < len(steps) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
@@ -223,6 +217,76 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleStepOutputKey drives the step's outputs once the detail has the
+// keys: j/k choose an output, J/K and pages read it, and o, e, y and enter
+// do what suits its kind — the Outputs view's keys, on one step.
+func (m tuiModel) handleStepOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+	outs := m.stepOutputs()
+	sel := m.stepOutputSel(outs)
+	switch msg.String() {
+	case "j", "down":
+		if sel < len(outs)-1 {
+			m.flowOutSel, m.flowScroll = sel+1, 0
+		}
+		return m, m.fetchStepDetails(), true
+	case "k", "up":
+		if sel > 0 {
+			m.flowOutSel, m.flowScroll = sel-1, 0
+		}
+		return m, nil, true
+	case "g", "home":
+		m.flowScroll = 0
+		return m, nil, true
+	case "G", "end":
+		m.scrollFlow(1 << 20)
+		return m, nil, true
+	}
+	if sel >= len(outs) {
+		return m, nil, false
+	}
+	o := outs[sel]
+	switch msg.String() {
+	case "o":
+		return m, openOutput(o), true
+	case "e":
+		if o.kind == outFile {
+			return m, editOutput(o.path), true
+		}
+	case "y":
+		text, what := copyable(o)
+		return m, copyCmd(text, what), true
+	case "enter":
+		if o.kind != outAnswer && o.kind != outReport {
+			return m, openOutput(o), true
+		}
+		// To the task that gave it, in its run.
+		cmd := m.openRun(o.run)
+		m.openTask(o.task, time.Time{})
+		return m, cmd, true
+	}
+	return m, nil, false
+}
+
+// fetchStepDetails asks gh and git about the selected step's PRs, branches
+// and commits, the way the Outputs view does.
+func (m *tuiModel) fetchStepDetails() tea.Cmd {
+	if m.outputDetails == nil {
+		m.outputDetails = map[string]outputDetail{}
+	}
+	var cmds []tea.Cmd
+	for _, o := range m.stepOutputs() {
+		if !o.fetched() {
+			continue
+		}
+		if _, ok := m.outputDetails[o.key()]; ok {
+			continue
+		}
+		m.outputDetails[o.key()] = outputDetail{pending: true}
+		cmds = append(cmds, detailCmd(o))
+	}
+	return tea.Batch(cmds...)
+}
+
 // openRun switches to a run by id and closes the flow view over it.
 func (m *tuiModel) openRun(runID string) tea.Cmd {
 	for i, r := range m.runs {
@@ -262,7 +326,7 @@ func (m tuiModel) flowGeometry() flowGeom {
 	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
 	keys := "j/k step · i resume the step · n next step · l/tab read · z widen · enter open run · o outputs · r result · e notes · x export · c close · esc home"
 	if m.flowDetail {
-		keys = "j/k scroll · space/ctrl-d ctrl-u page · g/G top/end · 1-9 open a PR or file · h/tab back to steps · z widen · n next step · esc home"
+		keys = "j/k choose output · J/K space read · o open · e edit · y copy · enter its task · h back to steps · z widen · esc"
 	}
 	g.footer = styDim.Render(ansi.Truncate(keys, w, "…"))
 	if m.composing {
@@ -285,9 +349,16 @@ func (m tuiModel) flowGeometry() flowGeom {
 	return g
 }
 
-// flowDetailRows is how many lines of the step's detail are on screen.
+// flowDetailRows is how many lines of the shown output are on screen: the
+// pane less its title, the step's head and the output's rule.
 func (m tuiModel) flowDetailRows() int {
-	return max(1, m.flowGeometry().bodyH-3)
+	g := m.flowGeometry()
+	outs := m.stepOutputs()
+	if len(m.flowRuns(m.flowID)) <= m.flowSel {
+		return 1
+	}
+	head := len(m.flowStepHead(g.rw, outs, m.stepOutputSel(outs)))
+	return max(1, g.bodyH-1-1-head-1)
 }
 
 // scrollFlow moves the detail, clamped to its length: past the end, and
@@ -379,54 +450,124 @@ func (m tuiModel) stepRequestText(f store.Flow, i int, r store.LiveRun) string {
 	return runLabel(r)
 }
 
-// flowStepLines is the selected step's input and result, rendered to w.
-func (m tuiModel) flowStepLines(w int) []string {
-	f := m.flows[m.flowID]
+// stepOutputs is the selected step's outputs, as the Outputs view lists
+// them: what was produced first, then reports, then answers.
+//
+// The step's request leads the list, so a long one can still be read in
+// full — the head shows only its first line.
+func (m tuiModel) stepOutputs() []output {
 	steps := m.flowRuns(m.flowID)
 	if m.flowSel >= len(steps) {
 		return nil
 	}
 	r := steps[m.flowSel]
-	res := m.runSnapshot(r.RunID).Result()
-	var lines []string
-	add := func(name string) { lines = append(lines, "", styTitle.Render(name)) }
-	lines = append(lines, styDim.Render(fmt.Sprintf("run %s · %s · %s", r.RunID, plainOutcome(r), ago(runStartTime(r))+" ago")))
-	add("Asked")
-	lines = append(lines, renderMarkdown(m.stepRequestText(f, m.flowSel, r), w, lipgloss.NewStyle())...)
-	add("Result")
-	if res.Answer == "" {
-		lines = append(lines, styDim.Render("nothing yet"))
-	} else {
-		if res.AnswerFrom != "" {
-			lines = append(lines, styDim.Render("from "+res.AnswerFrom))
-		}
-		lines = append(lines, renderMarkdown(res.Answer, w, lipgloss.NewStyle())...)
+	snap := m.runSnapshot(r.RunID)
+	text := m.stepRequestText(m.flows[m.flowID], m.flowSel, r)
+	req := output{kind: outRequest, run: r.RunID, step: m.flowSel, cwd: snap.CWD, task: "you",
+		title: titleOf(text), text: text, ref: "request"}
+	return append([]output{req}, runOutputs(snap, m.flowSel)...)
+}
+
+// stepOutputSel is the output shown: the chosen one, or before one is
+// chosen, the step's answer — what the detail showed when it was a single
+// block, so opening a step still reads its conclusion first.
+func (m tuiModel) stepOutputSel(outs []output) int {
+	if m.flowOutSel >= 0 && m.flowOutSel < len(outs) {
+		return m.flowOutSel
 	}
-	if !res.Artifacts.Empty() {
-		add("Artifacts")
-		lines = append(lines, m.artifactLines(res, w, true)...)
+	for i, o := range outs {
+		if o.kind == outAnswer {
+			return i
+		}
+	}
+	// Nothing answered yet: the first thing produced, else the request.
+	return min(1, len(outs)-1)
+}
+
+// flowListCap bounds the output list above the reading pane, so a step
+// that produced many things still leaves room to read one: a third of the
+// pane, and never fewer than four rows.
+func (m tuiModel) flowListCap() int {
+	return max(4, (m.flowGeometry().bodyH-2)/3)
+}
+
+// flowStepHead is the top of the step's pane: its run, and the list of
+// what it was asked and produced, the shown one marked.
+func (m tuiModel) flowStepHead(w int, outs []output, sel int) []string {
+	steps := m.flowRuns(m.flowID)
+	r := steps[m.flowSel]
+	lines := []string{styDim.Render(fmt.Sprintf("run %s · %s · %s", r.RunID, plainOutcome(r), ago(runStartTime(r))+" ago"))}
+	// A window of the list around the shown output.
+	limit := m.flowListCap()
+	top := 0
+	if len(outs) > limit {
+		top = min(max(0, sel-limit/2), len(outs)-limit)
+	}
+	end := min(len(outs), top+limit)
+	for i := top; i < end; i++ {
+		o := outs[i]
+		kind := outputKindStyle(o.kind).Render(padRight(outputLabels[o.kind], 7))
+		row := kind + styDim.Render(padRight(truncate(o.task, 10), 11)) + truncate(o.title, max(4, w-20))
+		if i == sel {
+			mark := styCyanBold.Render("▸ ")
+			if m.flowDetail {
+				row = mark + stySel.Render(padRight(ansi.Strip(row), w-2))
+			} else {
+				row = mark + row
+			}
+		} else {
+			row = "  " + row
+		}
+		lines = append(lines, row)
+	}
+	if len(outs) > limit {
+		lines = append(lines, styDim.Render(fmt.Sprintf("  %d-%d of %d", top+1, end, len(outs))))
+	}
+	if len(outs) <= 1 {
+		lines = append(lines, styDim.Render("  nothing produced yet"))
 	}
 	return lines
 }
 
-// flowStepDetail is the selected step's detail as a pane h rows tall,
-// scrolled; its title says where in it the pane is.
+// flowStepLines is the shown output's body, rendered to w: what scrolls.
+func (m tuiModel) flowStepLines(w int) []string {
+	outs := m.stepOutputs()
+	if len(outs) == 0 {
+		return nil
+	}
+	return m.outputBody(outs[m.stepOutputSel(outs)], w)
+}
+
+// flowStepDetail is the selected step's pane h rows tall: the list of
+// what it produced over the shown output, which scrolls on its own.
 func (m tuiModel) flowStepDetail(w, h int) string {
-	lines := m.flowStepLines(w)
-	if lines == nil {
+	steps := m.flowRuns(m.flowID)
+	if m.flowSel >= len(steps) {
 		return padRows([]string{paneTitle("Step", m.flowDetail, w)}, w, h)
 	}
-	rows := max(1, h-1)
+	outs := m.stepOutputs()
+	sel := m.stepOutputSel(outs)
+	head := m.flowStepHead(w, outs, sel)
+	title := fmt.Sprintf("Step %d", m.flowSel+1)
+	pane := []string{paneTitle(title, m.flowDetail, w)}
+	pane = append(pane, head...)
+	if len(outs) == 0 {
+		return padRows(pane, w, h)
+	}
+	lines := m.flowStepLines(w)
+	rows := max(1, h-len(pane)-1)
 	scroll := min(m.flowScroll, max(0, len(lines)-rows))
 	end := min(len(lines), scroll+rows)
-	title := fmt.Sprintf("Step %d", m.flowSel+1)
+	label := truncate(outs[sel].title, max(4, w-20))
 	if len(lines) > rows {
-		title += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
+		label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 		if end < len(lines) {
-			title += " ↓"
+			label += " ↓"
 		}
 	}
-	return padRows(append([]string{paneTitle(title, m.flowDetail, w)}, lines[scroll:end]...), w, h)
+	pane = append(pane, styDim.Render("─ ")+styTitle.Render(label)+" "+styDim.Render(strings.Repeat("─", max(0, w-ansi.StringWidth(label)-3))))
+	pane = append(pane, lines[scroll:end]...)
+	return padRows(pane, w, h)
 }
 
 // runIcon is a run's state glyph and colour.

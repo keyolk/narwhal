@@ -204,6 +204,9 @@ type tuiModel struct {
 	flowID     string
 	flowSel    int
 	flowScroll int
+	// flowOutSel is the output of the selected step being read in the
+	// flow view; -1 is its answer, until one is chosen.
+	flowOutSel int
 	// The task view's cursor and what has been opened in it. taskSel is
 	// an entry, -1 following the newest. See taskview.go.
 	taskSel     int
@@ -271,6 +274,7 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		focus:       focusRadio,
 		timelineSel: timelineFollow,
 		taskSel:     -1,
+		flowOutSel:  -1,
 		taskTab:     taskTabAuto,
 		homeCWD:     launchDir(),
 		snapCache:   map[string]cachedSnap{},

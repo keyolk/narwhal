@@ -84,8 +84,8 @@ func TestTheFlowViewShowsInputAndOutput(t *testing.T) {
 	}
 	got := ansi.Strip(m.View())
 	for _, w := range []string{"Goal", "plan the lock API", "Notes", "keep the v1 wire format",
-		"Steps", "1 " + icons.runDone + " plan the lock API", "2 " + icons.runDone + " build it", "Step 2", "Asked", "build it", "Result",
-		"o/r#7", "abc1234", "internal/api/mw.go", "2 steps · 4 artifacts"} {
+		"Steps", "1 " + icons.runDone + " plan the lock API", "2 " + icons.runDone + " build it", "Step 2", "asked  you        build it",
+		"file   api", "mw.go", "PR     api", "o/r#7", "commit", "abc1234", "answer", "2 steps · 4 artifacts"} {
 		if !strings.Contains(got, w) {
 			t.Errorf("flow view lacks %q:\n%s", w, got)
 		}
@@ -264,9 +264,9 @@ func selectRun(t *testing.T, m tuiModel, id string) tuiModel {
 	return m
 }
 
-// A long request reads in full: l moves into the step's detail, where j/k
-// and pages scroll it to its end and no further, and the paragraphs and
-// markdown it was written with survive.
+// A long request reads in full: l moves into the step's outputs, the
+// request leads them, and J/K and pages scroll it to its end and no
+// further, with its paragraphs and markdown.
 func TestALongStepScrollsInTheFlowView(t *testing.T) {
 	m := flowModel(t)
 	long := "## Build the collector\n\n" + strings.Repeat("A paragraph of the request that runs on. ", 40) +
@@ -281,6 +281,13 @@ func TestALongStepScrollsInTheFlowView(t *testing.T) {
 	m.width, m.height = 100, 24
 	m.openFlow("p1", "b2")
 
+	if m = press(m, "l"); !m.flowDetail {
+		t.Fatal("l did not move into the detail")
+	}
+	m = press(m, "g")
+	for m.stepOutputs()[m.stepOutputSel(m.stepOutputs())].kind != outRequest {
+		m = press(m, "k")
+	}
 	got := ansi.Strip(m.View())
 	if strings.Contains(got, "LAST LINE OF THE REQUEST") {
 		t.Fatal("setup: the request already fits")
@@ -288,21 +295,17 @@ func TestALongStepScrollsInTheFlowView(t *testing.T) {
 	if !strings.Contains(got, "Build the collector") || strings.Contains(got, "## Build") {
 		t.Errorf("the request's markdown was not rendered:\n%s", got)
 	}
-	// j on the step list selects; it does not scroll.
-	if m = press(m, "l"); !m.flowDetail {
-		t.Fatal("l did not move into the detail")
-	}
 	m = press(m, "G")
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "LAST LINE OF THE REQUEST") && !strings.Contains(got, "Artifacts") {
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "LAST LINE OF THE REQUEST") {
 		t.Errorf("G did not reach the end:\n%s", got)
 	}
 	end := m.flowScroll
-	m = press(m, "j", "j", "j")
+	m = press(m, "J", "J", "J")
 	if m.flowScroll != end {
 		t.Errorf("scrolled past the end: %d > %d", m.flowScroll, end)
 	}
-	if m = press(m, "k"); m.flowScroll != end-1 {
-		t.Errorf("one k from the end is %d, want %d", m.flowScroll, end-1)
+	if m = press(m, "K"); m.flowScroll >= end {
+		t.Errorf("K from the end did not scroll back: %d", m.flowScroll)
 	}
 	if m = press(m, "g"); m.flowScroll != 0 || m.flowSel != 1 {
 		t.Errorf("g in the detail: scroll %d sel %d", m.flowScroll, m.flowSel)
@@ -407,5 +410,37 @@ func TestNStillStartsANextStepInTheFlowView(t *testing.T) {
 	m = press(m, "enter", "n")
 	if !m.composing || m.steering {
 		t.Errorf("n: composing=%v steering=%v", m.composing, m.steering)
+	}
+}
+
+// In the flow view a step's outputs are a list: l moves into it, j/k
+// choose, and the chosen one is read below the list, each kind its own way.
+func TestAFlowStepsOutputsAreChosenFromAList(t *testing.T) {
+	m := flowModel(t)
+	m.openFlow("p1", "b2")
+	// Before choosing, the step's answer is shown.
+	outs := m.stepOutputs()
+	if got := outs[m.stepOutputSel(outs)].kind; got != outAnswer {
+		t.Fatalf("shown first: %s, want the answer", outputLabels[got])
+	}
+	if !strings.Contains(ansi.Strip(m.View()), "done: https://github.com/o/r/pull/7") {
+		t.Errorf("the answer is not shown:\n%s", ansi.Strip(m.View()))
+	}
+	m = press(m, "l", "g")
+	for outs[m.stepOutputSel(outs)].kind != outPR {
+		m = press(m, "k")
+	}
+	got := ansi.Strip(m.View())
+	if !strings.Contains(got, "▸ PR") || !strings.Contains(got, "PR · https://github.com/o/r/pull/7") {
+		t.Errorf("k did not show the PR:\n%s", got)
+	}
+	// j on the list does not change the step.
+	if m.flowSel != 1 {
+		t.Errorf("choosing an output moved the step to %d", m.flowSel)
+	}
+	// h goes back to the steps; j then moves the step and shows its answer.
+	m = press(m, "h", "k")
+	if m.flowSel != 0 || m.flowOutSel != -1 {
+		t.Errorf("after h k: step %d, output %d", m.flowSel, m.flowOutSel)
 	}
 }

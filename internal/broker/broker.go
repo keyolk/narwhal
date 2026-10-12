@@ -336,10 +336,10 @@ type Run struct {
 	sceneNotes map[string]string
 	// questions are what workers and the planner asked the operator, and
 	// answerWaiters the blocking askers waiting on each. See questions.go.
-	questions     []Question
+	questions []Question
 	// taskReasons are what the daemon read out of finished tasks'
 	// outcomes. See provenance.go.
-	taskReasons map[string]TaskReasons
+	taskReasons   map[string]TaskReasons
 	answerWaiters map[int][]chan struct{}
 }
 

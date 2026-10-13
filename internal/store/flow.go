@@ -82,8 +82,21 @@ func LoadFlow(id string) (Flow, error) {
 	return f, nil
 }
 
-// ListFlows reads every flow, newest first.
+// ListFlows reads every flow with steps, newest first. A flow emptied by
+// removing its steps is kept on disk for its Removed list, not listed.
 func ListFlows() []Flow {
+	var out []Flow
+	for _, f := range ListFlowFiles() {
+		if len(f.Steps) > 0 {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// ListFlowFiles reads every flow on disk, emptied ones included, newest
+// first: the monitor needs their Removed lists.
+func ListFlowFiles() []Flow {
 	entries, err := os.ReadDir(FlowsDir())
 	if err != nil {
 		return nil
@@ -195,8 +208,11 @@ func SetFlowClosed(flowID string, closed bool) (Flow, error) {
 
 // RemoveFlowStep takes a step out of a flow: it is no longer listed, read
 // into later steps' plans or counted in the flow's output. The run's own
-// record stays on disk. ref is a 1-based step number or a run id. Removing
-// the last step removes the flow.
+// record stays on disk. ref is a 1-based step number or a run id.
+//
+// A flow whose last step is removed is kept, empty, for its Removed list:
+// its runs still name it, and deleting the file would let them claim their
+// places back. ListFlows leaves empty flows out.
 func RemoveFlowStep(flowID, ref string) (Flow, FlowStep, error) {
 	var removed FlowStep
 	f, err := UpdateFlow(flowID, false, func(f *Flow) error {
@@ -209,15 +225,46 @@ func RemoveFlowStep(flowID, ref string) (Flow, FlowStep, error) {
 		f.Removed = append(f.Removed, removed.RunID)
 		return nil
 	})
-	if err != nil {
-		return f, removed, err
+	return f, removed, err
+}
+
+// RemoveRun takes a run off the lists: out of the flow it belongs to, or,
+// for a run that never had a flow file, recorded as removed in one of its
+// own. The run's record stays on disk.
+func RemoveRun(runID, flowID string) (FlowStep, error) {
+	if flowID == "" {
+		flowID = runID
 	}
-	if len(f.Steps) == 0 {
-		if err := os.Remove(flowPath(flowID)); err != nil && !os.IsNotExist(err) {
-			return f, removed, fmt.Errorf("remove empty flow %s: %w", flowID, err)
+	if f, err := LoadFlow(flowID); err == nil && f.stepIndex(runID) >= 0 {
+		_, st, err := RemoveFlowStep(flowID, runID)
+		return st, err
+	}
+	var st FlowStep
+	_, err := UpdateFlow(runID, true, func(f *Flow) error {
+		if f.IsRemoved(runID) {
+			return nil
+		}
+		if i := f.stepIndex(runID); i >= 0 {
+			st = f.Steps[i]
+			f.Steps = append(f.Steps[:i:i], f.Steps[i+1:]...)
+		} else {
+			st = FlowStep{RunID: runID}
+		}
+		f.Removed = append(f.Removed, runID)
+		return nil
+	})
+	return st, err
+}
+
+// AllRemoved is every run taken off the lists, across flows.
+func AllRemoved() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range ListFlowFiles() {
+		for _, r := range f.Removed {
+			out[r] = true
 		}
 	}
-	return f, removed, nil
+	return out
 }
 
 // stepIndex resolves a 1-based step number or a run id.

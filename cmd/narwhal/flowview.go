@@ -27,7 +27,7 @@ import (
 type flowsMsg []store.Flow
 
 func refreshFlows() tea.Cmd {
-	return func() tea.Msg { return flowsMsg(store.ListFlows()) }
+	return func() tea.Msg { return flowsMsg(store.ListFlowFiles()) }
 }
 
 // flowOf is the flow a run belongs to: its recorded one, or a flow file
@@ -60,9 +60,20 @@ func (m tuiModel) flowRuns(flowID string) []store.LiveRun {
 			}
 		}
 	}
+	// The rest claim the flow but its file does not list them. The file
+	// is the record of the flow's steps, so only a run started after its
+	// last listed step joins — a step the daemon has not written yet. One
+	// started earlier was taken out (before Removed existed, or by hand);
+	// putting it back at the bottom showed a removed step again.
+	var last time.Time
+	if f, ok := m.flows[flowID]; ok && len(f.Steps) > 0 {
+		last = f.Steps[len(f.Steps)-1].StartedAt
+	}
 	var rest []store.LiveRun
 	for _, r := range byID {
-		rest = append(rest, r)
+		if last.IsZero() || runStartTime(r).After(last) {
+			rest = append(rest, r)
+		}
 	}
 	sort.Slice(rest, func(i, j int) bool { return runStartTime(rest[i]).Before(runStartTime(rest[j])) })
 	return append(out, rest...)
@@ -256,6 +267,39 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// removeHomeRun takes the selected run off the home screen on a second d:
+// out of its flow, or, alone, off the list. Its record stays on disk.
+func (m tuiModel) removeHomeRun() (tea.Model, tea.Cmd) {
+	if m.runCur < 0 || m.runCur >= len(m.runs) {
+		return m, nil
+	}
+	r := m.runs[m.runCur]
+	flowID := m.flowOf(r)
+	where := "the list"
+	if n := len(m.flowRuns(flowID)); n > 1 {
+		where = fmt.Sprintf("its flow (%d steps)", n)
+	}
+	if m.removeStep != r.RunID {
+		m.removeStep = r.RunID
+		m.homeErr = nil
+		m.setNotice(fmt.Sprintf("remove %q from %s? d again to remove, any other key to keep it "+
+			"(the run's record stays on disk)", truncate(oneLine(r.Prompt), 40), where), nil)
+		return m, nil
+	}
+	m.removeStep = ""
+	if r.Running > 0 {
+		m.setNotice("", fmt.Errorf("%d workers are still running — cancel the run first", r.Running))
+		return m, nil
+	}
+	if _, err := store.RemoveRun(r.RunID, flowID); err != nil {
+		m.setNotice("", err)
+		return m, nil
+	}
+	m.setNotice(fmt.Sprintf("removed %q from %s", truncate(oneLine(r.Prompt), 50), where), nil)
+	m.runCur = max(0, min(m.runCur, len(m.runs)-2))
+	return m, refreshFlows()
 }
 
 // handleStepOutputKey drives the step's outputs once the detail has the

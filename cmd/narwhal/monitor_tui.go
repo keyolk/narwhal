@@ -654,7 +654,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // handlePickerKey drives the run list. It is a separate mode rather than a
 // third pane because switching runs replaces everything on screen.
 func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() != "d" {
+		// Any other key keeps a run a d asked to remove.
+		m.removeStep = ""
+	}
 	switch msg.String() {
+	case "d":
+		return m.removeHomeRun()
 	case "q", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit

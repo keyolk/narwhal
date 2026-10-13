@@ -60,6 +60,10 @@ type Question struct {
 	Options     []string `json:"options,omitempty"`
 	Context     string   `json:"context,omitempty"`
 	Recommended int      `json:"recommended,omitempty"`
+	// Grounds are what the question rests on, found for the operator:
+	// the passages of the asker's sources that define the labels it uses,
+	// or the asking task's assignment (grounds.go).
+	Grounds []string `json:"grounds,omitempty"`
 	// Candidate marks a question waiting for the run's synthesis or
 	// checkpoint to review before it reaches the operator.
 	Candidate bool `json:"candidate,omitempty"`
@@ -108,9 +112,11 @@ func (q Question) Differs() bool {
 // QuestionSpec is what an asker says.
 type QuestionSpec struct {
 	Text, Assumed, Context string
-	Options                []string
-	Recommended            int
-	Blocking               bool
+	// Sources are what the asker read, searched for the question's labels.
+	Sources     []string
+	Options     []string
+	Recommended int
+	Blocking    bool
 }
 
 // Ask records a question and returns it. A worker's assume question in a
@@ -122,8 +128,7 @@ func (r *Run) Ask(taskID, text, assumed string, blocking bool) Question {
 // AskSpec is Ask with options and context.
 func (r *Run) AskSpec(taskID string, sp QuestionSpec) Question {
 	reviewer := r.reviewer()
-	r.mu.Lock()
-	q := Question{ID: len(r.questions) + 1, TaskID: taskID, Text: strings.TrimSpace(sp.Text),
+	q := Question{TaskID: taskID, Text: strings.TrimSpace(sp.Text),
 		Assumed: strings.TrimSpace(sp.Assumed), Blocking: sp.Blocking, AskedAt: time.Now(),
 		Context: strings.TrimSpace(sp.Context), Recommended: sp.Recommended}
 	for _, o := range sp.Options {
@@ -134,11 +139,38 @@ func (r *Run) AskSpec(taskID string, sp QuestionSpec) Question {
 	if q.Recommended < 0 || q.Recommended > len(q.Options) {
 		q.Recommended = 0
 	}
+	q.Grounds = r.groundsFor(taskID, q.Text+" "+q.Context, sp.Sources)
 	q.Candidate = !sp.Blocking && taskID != PlanAsker && reviewer != nil && reviewer.ID != taskID &&
 		reviewer.CurrentState() != TaskCompleted && reviewer.CurrentState() != TaskFailed
+	r.mu.Lock()
+	q.ID = len(r.questions) + 1
 	r.questions = append(r.questions, q)
 	r.mu.Unlock()
 	return q
+}
+
+// groundsFor finds what a question rests on: the passages of the asker's
+// sources, the run's request and its tasks' assignments that define the
+// labels the question uses; failing that, for a worker, its assignment.
+func (r *Run) groundsFor(taskID, text string, sources []string) []string {
+	src := append([]string(nil), sources...)
+	r.mu.RLock()
+	src = append(src, r.Prompt)
+	r.mu.RUnlock()
+	var asker *Task
+	for _, t := range r.SnapshotTasks() {
+		src = append(src, t.Assignment)
+		if t.ID == taskID {
+			asker = r.GetTask(t.ID)
+		}
+	}
+	if g := GroundsFor(text, strings.Join(src, "\n")); len(g) > 0 {
+		return g
+	}
+	if asker != nil {
+		return []string{"task " + taskID + ": " + clipRunes(asker.assignment(), 300)}
+	}
+	return nil
 }
 
 // reviewer is the task that reviews workers' candidate questions: a
@@ -469,4 +501,33 @@ func (t *Task) IsCheckpoint() bool {
 func taskFinished(t *Task) bool {
 	s := t.CurrentState()
 	return s == TaskCompleted || s == TaskFailed
+}
+
+// SetPlanner records how the run's planner is launched, so it can be
+// started again with the operator's answers.
+func (r *Run) SetPlanner(model, instructions, token string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plannerModel, r.plannerInstructions, r.plannerToken = model, instructions, token
+}
+
+// Planner is what SetPlanner recorded.
+func (r *Run) Planner() (model, instructions, token string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.plannerModel, r.plannerInstructions, r.plannerToken
+}
+
+// SetPlannerRunning records whether the planner process is alive.
+func (r *Run) SetPlannerRunning(on bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.plannerRunning = on
+}
+
+// PlannerRunning reports whether the planner process is alive.
+func (r *Run) PlannerRunning() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.plannerRunning
 }

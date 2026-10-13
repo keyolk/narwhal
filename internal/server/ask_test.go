@@ -228,3 +228,28 @@ func TestACheckpointWaitsForTheOperatorsChoices(t *testing.T) {
 		t.Errorf("after the answer: %v, impl %s", out, impl.CurrentState())
 	}
 }
+
+// A blocking ask holds for one stretch, then says to wait again; the next
+// wait returns the answer when it comes.
+func TestABlockingAskWaitsInStretches(t *testing.T) {
+	old := askWait
+	askWait = 100 * time.Millisecond
+	t.Cleanup(func() { askWait = old })
+	addr, token, run := askFixture(t)
+	out := postJSON(t, addr+"/api/v1/agents/"+token+"/ask",
+		map[string]any{"question": "Which branch?", "assumed": "main", "blocking": true})
+	if out["status"] != "waiting" || !strings.Contains(out["hint"].(string), "ask --wait 1") {
+		t.Fatalf("first stretch: %v", out)
+	}
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		run.Answer(1, "release", false)
+	}()
+	again := postJSONGet(t, addr+"/api/v1/agents/"+token+"/ask-wait?id=1")
+	if again["status"] != "answered" || again["answer"] != "release" {
+		t.Fatalf("wait: %v", again)
+	}
+	if nope := postJSONGet(t, addr+"/api/v1/agents/"+token+"/ask-wait?id=9"); nope["error"] == nil {
+		t.Errorf("waiting on a question that does not exist: %v", nope)
+	}
+}

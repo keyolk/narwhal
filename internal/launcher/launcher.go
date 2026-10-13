@@ -364,11 +364,16 @@ curl -s -X POST %s/send \
 # Ask the operator about an ambiguity you cannot settle from the code or the
 # request. The question is collected with the run's others and answered
 # together. assume (default): returns at once; carry on with your assumption.
-# blocking: waits for the answer (up to 30 minutes) and prints it; use only
-# when no reasonable assumption lets you go on. When the choice is between
+# blocking: waits for the answer and prints it; use only when no reasonable
+# assumption lets you go on. It waits about a minute and a half at a time:
+# {"status":"waiting"} means ask again with: ask --wait <id> When the choice is between
 # options your research found, list them, say which you recommend, and give
 # the context that makes it a question.
 set -euo pipefail
+if [ "${1:-}" = "--wait" ]; then
+  curl -s --max-time 110 "%[1]s/ask-wait?id=${2:?usage: ask --wait <id>}"
+  exit 0
+fi
 # The arguments are read in Python: positionally as the usage says, or with
 # --assume/--blocking, which workers reach for — a shell shift took the
 # flag itself as the assumption.
@@ -394,7 +399,7 @@ if assumed is None:
 print(json.dumps({"question": q, "assumed": assumed, "blocking": mode == "blocking",
                   "options": opts, "context": ctx, "recommended": rec}))
 PY
-curl -s --max-time 1900 -X POST %s/ask -H "Content-Type: application/json" -d @/tmp/narwhal-ask-$$.json
+curl -s --max-time 110 -X POST %[1]s/ask -H "Content-Type: application/json" -d @/tmp/narwhal-ask-$$.json
 rm -f /tmp/narwhal-ask-$$.json
 `, base),
 		"candidates": fmt.Sprintf(`#!/bin/bash
@@ -520,9 +525,11 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "    (assume, the default). The operator answers the run's questions\n")
 	fmt.Fprintf(&b, "    together; if the answer differs, your task is reopened with it. Use\n")
 	fmt.Fprintf(&b, "    blocking only when no reasonable assumption lets you go on — it waits\n")
-	fmt.Fprintf(&b, "    for the answer. Not for things you can find out yourself. When the\n")
+	fmt.Fprintf(&b, "    about 90s at a time; on {\"status\":\"waiting\"} run ask --wait <id>\n")
+	fmt.Fprintf(&b, "    again until answered. Not for things you can find out yourself. When the\n")
 	fmt.Fprintf(&b, "    choice is between options your research found, add --option for each,\n")
-	fmt.Fprintf(&b, "    --recommend <n> and --context \"<what you found>\".\n")
+	fmt.Fprintf(&b, "    --recommend <n> and --context \"<what you found>\". The operator has not\n")
+	fmt.Fprintf(&b, "    read what you read: spell out labels and abbreviations in the question.\n")
 	if cfg.Reviewer {
 		fmt.Fprintf(&b, "\n## You review the workers' questions\n\n")
 		fmt.Fprintf(&b, "Your peers' questions reach you before the operator: you see their\n")
@@ -617,6 +624,10 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "let the holder either hand it over or make the change for you.\n")
 	return b.String()
 }
+
+// NewSessionUUID mints a Claude session id for an agent the launcher does
+// not start itself: the planner.
+func NewSessionUUID() (string, error) { return newSessionUUID() }
 
 // newSessionUUID mints the UUID a worker's Claude session will be recorded
 // under. Claude Code accepts --session-id, so choosing it here rather than

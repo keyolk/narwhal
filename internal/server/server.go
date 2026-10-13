@@ -24,6 +24,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -266,6 +269,8 @@ func (s *Server) handleAgent(w http.ResponseWriter, r *http.Request, parts []str
 		s.handleTaskAction(w, r, agent, run, parts[2:])
 	case "judge":
 		s.handleJudge(w, r, agent, run)
+	case "ask-wait":
+		s.handleAskWait(w, r, run)
 	case "ask":
 		s.handleAsk(w, r, agent, run)
 	case "candidates":
@@ -768,9 +773,13 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// askWait bounds how long a blocking ask holds its call open. The script's
-// own curl timeout is a little longer, so the server answers first.
-var askWait = 30 * time.Minute
+// askWait bounds how long a blocking ask holds its call open: one stretch
+// of waiting, under the two-minute timeout a worker's Bash call has by
+// default. A longer hold was cut by that timeout and moved to the
+// background, where the worker lost track of it. When it passes, the
+// worker is told to wait again (the ask script's --wait), as many times as
+// the operator takes.
+var askWait = 90 * time.Second
 
 // handleAsk records a worker's question for the operator. A blocking one
 // holds the call until it is answered, so the worker — inside its tool
@@ -802,7 +811,7 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 		taskID = broker.PlanAsker
 	}
 	q := run.AskSpec(taskID, broker.QuestionSpec{Text: req.Question, Assumed: req.Assumed, Blocking: req.Blocking,
-		Options: req.Options, Context: req.Context, Recommended: req.Recommended})
+		Options: req.Options, Context: req.Context, Recommended: req.Recommended, Sources: s.askSources(run)})
 	if q.Candidate {
 		// For the reviewer first; the operator sees it if it is raised.
 		run.PostMessage(broker.WorklogThread, "coordinator", nil, broker.PriorityFYI,
@@ -810,6 +819,15 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 	} else {
 		run.PostMessage(broker.WorklogThread, "coordinator", []string{"main"}, broker.PriorityNormal,
 			fmt.Sprintf("%s %s asks (#%d): %s", broker.RelayPrefix, taskID, q.ID, q.Text))
+	}
+	if taskID == broker.PlanAsker && req.Blocking {
+		// The planner does not wait: it is resumed with the answers
+		// (control.go resumePlanner). Holding the call only ran it into
+		// its tool timeout, after which it exited with no plan.
+		writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": "recorded",
+			"hint": "Recorded. Ask any others, then post PLAN_WAIT to the planning thread and end your turn " +
+				"without creating tasks. You will be resumed with the operator's answers."})
+		return
 	}
 	if !req.Blocking {
 		status := "recorded"
@@ -821,22 +839,53 @@ func (s *Server) handleAsk(w http.ResponseWriter, r *http.Request, agent *broker
 				"or, once your task is done, reopened with the answer."})
 		return
 	}
-	ch, done := run.AwaitAnswer(q.ID)
+	s.awaitOne(w, r, run, q.ID)
+}
+
+// askSources is what an asker in this run has read beyond the run itself:
+// the earlier steps of its flow, which the planner and every worker are
+// pointed at.
+func (s *Server) askSources(run *broker.Run) []string {
+	if s.control == nil {
+		return nil
+	}
+	l := s.control.LauncherFor(run.ID, run.Snapshot().CWD)
+	b, err := os.ReadFile(filepath.Join(l.SessionDir(), "flow-so-far.md"))
+	if err != nil {
+		return nil
+	}
+	return []string{string(b)}
+}
+
+// awaitOne holds a blocking question's call for one stretch and says
+// whether it was answered.
+func (s *Server) awaitOne(w http.ResponseWriter, r *http.Request, run *broker.Run, id int) {
+	ch, done := run.AwaitAnswer(id)
 	if !done {
 		select {
 		case <-ch:
 		case <-time.After(askWait):
-			writeJSON(w, http.StatusOK, map[string]any{"id": q.ID, "status": "unanswered",
-				"hint": "No answer yet. Go on with your assumption and say in your outcome that it is " +
-					"unconfirmed; if the operator answers otherwise, your task will be reopened with it."})
+			writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "waiting",
+				"hint": fmt.Sprintf("No answer yet. Wait again with: ask --wait %d — repeat until it is "+
+					"answered. If you can make progress on other parts meanwhile, do that between waits.", id)})
 			return
 		case <-r.Context().Done():
 			return
 		}
 	}
-	a, _ := run.Question(q.ID)
+	a, _ := run.Question(id)
 	writeJSON(w, http.StatusOK, map[string]any{"id": a.ID, "status": "answered", "answer": a.Answer,
 		"as_assumed": !a.Differs()})
+}
+
+// handleAskWait waits again on a blocking question the worker asked.
+func (s *Server) handleAskWait(w http.ResponseWriter, r *http.Request, run *broker.Run) {
+	id, err := strconv.Atoi(r.URL.Query().Get("id"))
+	if q, ok := run.Question(id); err != nil || !ok || q.Candidate {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such question"})
+		return
+	}
+	s.awaitOne(w, r, run, id)
 }
 
 // handleCandidates lists the workers' questions waiting for review, for the

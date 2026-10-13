@@ -87,7 +87,7 @@ func reasonsFor(s Snapshot, t TaskSnapshot) []Reason {
 		// outcome's first sentence: the outcome itself runs to a page.
 		concl := taskNote(s, t.ID)
 		if concl == "" {
-			concl = clipRunes(firstSentence(t.Outcome), 120)
+			concl = clipRunes(proseSentence(t.Outcome), 120)
 		}
 		if concl != "" {
 			add(ReasonConclusion, t.State == TaskFailed, "%s", concl)
@@ -200,6 +200,29 @@ func taskNote(s Snapshot, taskID string) string {
 		}
 	}
 	return ""
+}
+
+// proseSentence is the first sentence of the outcome's prose: headings,
+// rules, fences and table rows skipped, emphasis marks dropped. An outcome
+// that opened "# dayx 가이드 (…)" made its conclusion line a heading with
+// its marker and nothing it concluded.
+func proseSentence(s string) string {
+	inFence := false
+	for _, l := range strings.Split(s, "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "```"):
+			inFence = !inFence
+			continue
+		case inFence, t == "", strings.HasPrefix(t, "#"), strings.HasPrefix(t, "|"),
+			strings.Trim(t, "-=*_ ") == "":
+			continue
+		}
+		t = strings.TrimLeft(t, "-*>• ")
+		t = strings.NewReplacer("**", "", "__", "", "`", "").Replace(t)
+		return firstSentence(t)
+	}
+	return firstSentence(s)
 }
 
 // firstSentence is the text's first sentence, or its first line. A period

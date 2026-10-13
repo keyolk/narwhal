@@ -137,7 +137,9 @@ func TestARunInAFlowShowsAndWalksItsSteps(t *testing.T) {
 	m = press(m, "enter", "enter") // the flow, then step 1
 	m.snap, _ = store.LoadRun("p1")
 	got := ansi.Strip(m.viewHeader())
-	if !strings.Contains(got, "[1 "+icons.runDone+" plan the lock API 1/1]") || !strings.Contains(got, "2 "+icons.runDone+" build it") {
+	// The watched step by its request; the others by number and progress.
+	if !strings.Contains(got, "[1 "+icons.runDone+" plan the lock API 1/1]") || !strings.Contains(got, "2 "+icons.runDone+" 1/1") ||
+		strings.Contains(got, "build it") {
 		t.Fatalf("stages:\n%s", got)
 	}
 	if m = press(m, "]"); m.live.RunID != "b2" {
@@ -572,6 +574,13 @@ func TestAStepDroppedFromTheFileStaysOut(t *testing.T) {
 	for _, r := range m.flowRuns("p1") {
 		if r.RunID == "p1" {
 			t.Error("the dropped step is listed again")
+		}
+	}
+	// Nor on home, where it was drawn as step 1.
+	m.mergeRuns(m.runs)
+	for _, r := range m.runs {
+		if r.RunID == "p1" {
+			t.Error("the dropped step is on home")
 		}
 	}
 }

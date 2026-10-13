@@ -1044,7 +1044,7 @@ func fitDetail(detail string, w int) string {
 	}
 	if !strings.Contains(detail, "  ") {
 		// Prose, not "Tool  argument": cut it where it ends, and say so.
-		return truncate(detail, w-1) + "…"
+		return truncate(detail, w)
 	}
 	tool, arg, ok := strings.Cut(detail, "  ")
 	if !ok || displayWidth(tool)+4 > w {

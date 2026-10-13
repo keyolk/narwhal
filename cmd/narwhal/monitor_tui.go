@@ -435,12 +435,24 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	// however long ago it started.
 	// A step taken out of its flow is not listed: its record is kept, but
 	// showing it again on its own would undo what the person asked for.
+	//
+	// So is one its flow's file leaves out (flowRuns): listed on its own it
+	// was drawn as step 1 of a flow that does not have it.
 	sorted := make([]store.LiveRun, 0, len(runs))
 	for _, r := range runs {
 		if !m.removedRuns[r.RunID] {
 			sorted = append(sorted, r)
 		}
 	}
+	m.runs = sorted
+	kept := sorted[:0:0]
+	for _, r := range sorted {
+		id := m.flowOf(r)
+		if _, ok := m.flows[id]; !ok || containsRun(m.flowRuns(id), r.RunID) {
+			kept = append(kept, r)
+		}
+	}
+	sorted = kept
 	type flowKey struct {
 		group  int
 		latest time.Time
@@ -2171,7 +2183,19 @@ func padRows(rows []string, width, height int) string {
 			rows = append(rows, "")
 		}
 	}
-	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+	// Each row cut to the width, never wrapped here. lipgloss's Width
+	// wrapped an overlong row onto a row of its own, flush left — "know"
+	// alone under "none — e to write what every step should" — and pushed
+	// every row below it down, past the bottom. A row that should wrap is
+	// wrapped where it is made, with its indent (wrapText).
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = fitCells(r, width)
+		if ansi.StringWidth(r) > width {
+			out[i] = ansi.Truncate(r, width-1, "") + "…"
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // viewChannel is pane 4: the radio, or the operator's brief.
@@ -2439,7 +2463,11 @@ func shortName(s string) string {
 	return strings.TrimPrefix(s, "worker-")
 }
 
-// truncate cuts s to w display columns.
+// truncate cuts s to w display columns, ending a cut line with "…".
+//
+// Without the mark a cut line ran into the border and read as complete —
+// "전반적인 동작 방식과 사용법 등을 정리해서" with the rest of the request
+// simply gone. A line that fits is returned as it is.
 //
 // This is on the hot path: every visible row is truncated on every frame,
 // and a frame happens on every keystroke. The obvious implementation —
@@ -2457,13 +2485,16 @@ func truncate(s string, w int) string {
 		if len(s) <= w {
 			return s
 		}
-		return s[:w]
+		return s[:w-1] + "…"
+	}
+	if runewidth.StringWidth(s) <= w {
+		return s
 	}
 	total := 0
 	for i, r := range s {
 		rw := runewidth.RuneWidth(r)
-		if total+rw > w {
-			return s[:i]
+		if total+rw > w-1 {
+			return s[:i] + "…"
 		}
 		total += rw
 	}
@@ -2514,4 +2545,13 @@ func wrapText(s string, width int) []string {
 		out = append(out, wrapSpans([]span{{para, lipgloss.NewStyle()}}, width, "")...)
 	}
 	return out
+}
+
+func containsRun(runs []store.LiveRun, id string) bool {
+	for _, r := range runs {
+		if r.RunID == id {
+			return true
+		}
+	}
+	return false
 }

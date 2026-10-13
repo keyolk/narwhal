@@ -489,7 +489,9 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	rows = append(rows, "")
 	section("Notes")
 	if strings.TrimSpace(f.Notes) == "" {
-		rows = append(rows, styDim.Render("  none — e to write what every step should know"))
+		for _, l := range wrapText("none — e to write what every step should know", w-2) {
+			rows = append(rows, styDim.Render("  "+l))
+		}
 	} else {
 		n := renderMarkdown(f.Notes, w-2, styYellow)
 		if len(n) > 6 {
@@ -695,23 +697,39 @@ type cachedSnap struct {
 }
 
 // flowStages is the header's strip of a multi-step flow: each step's state
-// and progress, the watched one marked. "" for a run that is its flow.
+// and progress, and the watched one's request. "" for a run that is its
+// flow.
+//
+// Every step named its request, cut to eighteen columns: six steps came to
+// "내 claude 등을 통… 5/5 → 이제 이걸 구현해 … 5/5 → …", nothing readable,
+// and the watched step fell off the right edge. Now the others are a number
+// and their progress, and the watched one has the room that is left.
 func (m tuiModel) flowStages(width int) string {
 	steps := m.flowRuns(m.flowOf(m.live))
 	if len(steps) < 2 {
 		return ""
 	}
+	sep := styDim.Render(" → ")
+	others := 0
+	for i, r := range steps {
+		if r.RunID != m.live.RunID {
+			icon, _ := runIcon(r, m.frame)
+			others += ansi.StringWidth(fmt.Sprintf("%d %s %d/%d", i+1, icon, r.Done, r.Tasks)) + 3
+		}
+	}
 	var parts []string
 	for i, r := range steps {
 		icon, style := runIcon(r, m.frame)
-		label := fmt.Sprintf("%d %s %s %d/%d", i+1, icon, truncate(runLabel(r), 18), r.Done, r.Tasks)
-		if r.RunID == m.live.RunID {
-			parts = append(parts, style.Bold(true).Render("["+label+"]"))
-		} else {
-			parts = append(parts, styDim.Render(label))
+		if r.RunID != m.live.RunID {
+			parts = append(parts, styDim.Render(fmt.Sprintf("%d %s %d/%d", i+1, icon, r.Done, r.Tasks)))
+			continue
 		}
+		head, tail := fmt.Sprintf("[%d %s ", i+1, icon), fmt.Sprintf(" %d/%d]", r.Done, r.Tasks)
+		room := width - 2 - others - ansi.StringWidth(head+tail)
+		label := head + truncate(oneLine(runLabel(r)), max(8, room)) + tail
+		parts = append(parts, style.Bold(true).Render(label))
 	}
-	return ansi.Truncate("  "+strings.Join(parts, styDim.Render("  →  ")), width, "…")
+	return ansi.Truncate("  "+strings.Join(parts, sep), width, "…")
 }
 
 // stepRun moves to the previous or next step of the watched run's flow.

@@ -97,7 +97,31 @@ func TestRemovingAStepTakesItOutOfTheFlow(t *testing.T) {
 	if _, _, err := RemoveFlowStep("r1", "r1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadFlow("r1"); err == nil {
-		t.Error("a flow with no steps left is still on disk")
+	// Emptied, the flow is kept for its Removed list but not listed.
+	if f, err := LoadFlow("r1"); err != nil || len(f.Removed) != 3 {
+		t.Errorf("emptied flow: %+v %v", f, err)
+	}
+	for _, f := range ListFlows() {
+		if f.ID == "r1" {
+			t.Error("an emptied flow is listed")
+		}
+	}
+	if !AllRemoved()["r1"] {
+		t.Error("the removed runs are not reported")
+	}
+}
+
+// A run with no flow file is removed with one of its own, so it is not
+// listed again.
+func TestRemovingALoneRunWithoutAFlow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if _, err := RemoveRun("old-1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !AllRemoved()["old-1"] {
+		t.Error("the lone run is not removed")
+	}
+	if len(ListFlows()) != 0 {
+		t.Error("removing a lone run listed a flow")
 	}
 }

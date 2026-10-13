@@ -224,9 +224,11 @@ func (m tuiModel) viewHome() string {
 	box := framedBox(title+styDim.Render("  in "+where), []string{line}, w-2)
 	if m.homeErr != nil {
 		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-4))
+	} else if n := m.noticeLine(w - 2); n != "" {
+		box += "\n " + n
 	}
 
-	keys := "enter open · n new request · e write in $EDITOR · u flow · j/k move · ? help · q quit"
+	keys := "enter open · n new request · e write in $EDITOR · u flow · d remove · j/k move · ? help · q quit"
 	if m.composing {
 		keys = "enter start · ctrl-e open in $EDITOR · esc cancel"
 	}

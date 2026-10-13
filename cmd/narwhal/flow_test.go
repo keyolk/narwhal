@@ -503,3 +503,75 @@ func TestFlowCommandRemovesAStep(t *testing.T) {
 		t.Errorf("show:\n%s", out.String())
 	}
 }
+
+// d d on home takes the selected run off the list — a step out of its
+// flow, a lone run off on its own — and other keys keep it.
+func TestHomeRemovesARunOnASecondD(t *testing.T) {
+	m := flowModel(t)
+	press := func(m tuiModel, k string) tuiModel {
+		next, cmd := m.handlePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		nm := next.(tuiModel)
+		if cmd != nil {
+			if msg, ok := cmd().(flowsMsg); ok {
+				nm.applyFlows(msg)
+				nm.mergeRuns(nm.runs)
+			}
+		}
+		return nm
+	}
+	sel := func(m tuiModel, id string) tuiModel {
+		for i, r := range m.runs {
+			if r.RunID == id {
+				m.runCur = i
+			}
+		}
+		return m
+	}
+	m = press(sel(m, "x9"), "d")
+	if !strings.Contains(ansi.Strip(m.View()), "d again to remove") {
+		t.Errorf("no confirmation on home:\n%s", ansi.Strip(m.View()))
+	}
+	m = press(m, "k")
+	m = press(sel(m, "x9"), "d")
+	m = press(m, "d")
+	m = press(sel(m, "b2"), "d")
+	m = press(m, "d")
+	for _, r := range m.runs {
+		if r.RunID == "x9" || r.RunID == "b2" {
+			t.Errorf("%s is still listed", r.RunID)
+		}
+	}
+	got := ansi.Strip(m.View())
+	if strings.Contains(got, "audit TLS") || strings.Contains(got, "plan the lock API  2 steps") ||
+		!strings.Contains(got, "plan the lock API") {
+		t.Errorf("home after removing:\n%s", got)
+	}
+	// Survives a fresh start: the removal is on disk.
+	m2 := newTUIModel(store.Discover(nil), 0, 0, true)
+	m2.applyFlows(store.ListFlowFiles())
+	m2.mergeRuns(m2.runs)
+	for _, r := range m2.runs {
+		if r.RunID == "x9" || r.RunID == "b2" {
+			t.Errorf("%s came back after a restart", r.RunID)
+		}
+	}
+}
+
+// A step dropped from the flow file without a Removed record — taken out
+// by an older narwhal, or by hand — still claims the flow by its own
+// record. It must not reappear at the bottom of the steps.
+func TestAStepDroppedFromTheFileStaysOut(t *testing.T) {
+	m := flowModel(t)
+	if _, err := store.UpdateFlow("p1", false, func(f *store.Flow) error {
+		f.Steps = f.Steps[1:] // drop p1, the earlier step, and record nothing
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m.applyFlows(store.ListFlowFiles())
+	for _, r := range m.flowRuns("p1") {
+		if r.RunID == "p1" {
+			t.Error("the dropped step is listed again")
+		}
+	}
+}

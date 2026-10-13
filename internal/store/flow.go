@@ -48,6 +48,10 @@ type Flow struct {
 	Steps []FlowStep `json:"steps"`
 	// Closed marks the work finished; a closed flow takes no more steps.
 	Closed bool `json:"closed,omitempty"`
+	// Removed are runs taken out of the flow. A run records its flow too,
+	// so dropping it from Steps alone would let it claim its place back;
+	// the run's own record is kept, and the views leave these out.
+	Removed []string `json:"removed,omitempty"`
 }
 
 // FlowStep is one run of a flow and what it was asked.
@@ -187,6 +191,54 @@ func SetFlowClosed(flowID string, closed bool) (Flow, error) {
 		f.Closed = closed
 		return nil
 	})
+}
+
+// RemoveFlowStep takes a step out of a flow: it is no longer listed, read
+// into later steps' plans or counted in the flow's output. The run's own
+// record stays on disk. ref is a 1-based step number or a run id. Removing
+// the last step removes the flow.
+func RemoveFlowStep(flowID, ref string) (Flow, FlowStep, error) {
+	var removed FlowStep
+	f, err := UpdateFlow(flowID, false, func(f *Flow) error {
+		i := f.stepIndex(ref)
+		if i < 0 {
+			return fmt.Errorf("flow %s has no step %q", flowID, ref)
+		}
+		removed = f.Steps[i]
+		f.Steps = append(f.Steps[:i:i], f.Steps[i+1:]...)
+		f.Removed = append(f.Removed, removed.RunID)
+		return nil
+	})
+	if err != nil {
+		return f, removed, err
+	}
+	if len(f.Steps) == 0 {
+		if err := os.Remove(flowPath(flowID)); err != nil && !os.IsNotExist(err) {
+			return f, removed, fmt.Errorf("remove empty flow %s: %w", flowID, err)
+		}
+	}
+	return f, removed, nil
+}
+
+// stepIndex resolves a 1-based step number or a run id.
+func (f Flow) stepIndex(ref string) int {
+	ref = strings.TrimSpace(ref)
+	for i, s := range f.Steps {
+		if s.RunID == ref || fmt.Sprint(i+1) == ref {
+			return i
+		}
+	}
+	return -1
+}
+
+// IsRemoved reports whether runID was taken out of the flow.
+func (f Flow) IsRemoved(runID string) bool {
+	for _, r := range f.Removed {
+		if r == runID {
+			return true
+		}
+	}
+	return false
 }
 
 // flowTitle is a goal's first line, short enough for a list.

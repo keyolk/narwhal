@@ -449,3 +449,57 @@ func TestAFlowStepsOutputsAreChosenFromAList(t *testing.T) {
 		t.Errorf("after h k: step %d, output %d", m.flowSel, m.flowOutSel)
 	}
 }
+
+// d asks, a second d removes: the step leaves the flow and is listed
+// nowhere, while its run stays on disk. Any other key keeps it.
+func TestDRemovesAStepOnASecondPress(t *testing.T) {
+	m := flowModel(t)
+	m.openFlow("p1", "b2")
+	press := func(m tuiModel, k string) tuiModel {
+		next, cmd := m.handleFlowKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		nm := next.(tuiModel)
+		if cmd != nil {
+			if msg, ok := cmd().(flowsMsg); ok {
+				nm.applyFlows(msg)
+				nm.mergeRuns(nm.runs)
+			}
+		}
+		return nm
+	}
+	m = press(m, "d")
+	if f, _ := store.LoadFlow("p1"); len(f.Steps) != 2 {
+		t.Fatal("one d removed the step")
+	}
+	m = press(m, "j") // another key keeps it
+	m = press(m, "d")
+	m = press(m, "d")
+	f, err := store.LoadFlow("p1")
+	if err != nil || len(f.Steps) != 1 || f.Steps[0].RunID != "p1" {
+		t.Fatalf("after d d: %+v %v", f, err)
+	}
+	if _, err := store.LoadRun("b2"); err != nil {
+		t.Errorf("the run's record went with it: %v", err)
+	}
+	for _, r := range m.runs {
+		if r.RunID == "b2" {
+			t.Error("the removed step is still listed")
+		}
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "removed step 2: build it") ||
+		strings.Count(got, "build it") != 1 {
+		t.Errorf("the flow view still shows the removed step:\n%s", got)
+	}
+}
+
+func TestFlowCommandRemovesAStep(t *testing.T) {
+	flowModel(t)
+	var out strings.Builder
+	if err := runFlowCmd(&out, []string{"rm", "p1", "2"}); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	runFlowCmd(&out, []string{"show", "p1"})
+	if strings.Contains(out.String(), "b2  build it") || !strings.Contains(out.String(), "removed: [b2]") {
+		t.Errorf("show:\n%s", out.String())
+	}
+}

@@ -32,11 +32,19 @@ var (
 	mdTableSep = regexp.MustCompile(`^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$`)
 )
 
+// proseWidth is the widest a paragraph is wrapped to. The reader pane on a
+// wide terminal is two hundred columns; prose run across all of it is
+// hard to follow from the end of one line to the start of the next. Tables
+// and fences, which are read across rather than down, still get the pane.
+const proseWidth = 100
+
 // renderMarkdown renders text to lines at most width cells wide. base is
 // the style of plain text — italic for thinking, say — and inline markup
 // is layered on it.
 func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 	width = max(width, 8)
+	full := width
+	width = min(width, proseWidth)
 	lines := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
 	var out []string
 	blank := func() {
@@ -54,7 +62,7 @@ func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 			// one cut at the edge.
 			blank()
 			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```"); i++ {
-				out = append(out, styDim.Render("  "+ansi.Truncate(strings.ReplaceAll(lines[i], "\t", "    "), width-2, "…")))
+				out = append(out, styDim.Render("  "+ansi.Truncate(strings.ReplaceAll(lines[i], "\t", "    "), full-2, "…")))
 			}
 			blank()
 		case strings.HasPrefix(trim, "|") && i+1 < len(lines) && mdTableSep.MatchString(lines[i+1]):
@@ -64,7 +72,7 @@ func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 			}
 			i--
 			blank()
-			out = append(out, renderTable(rows, width, base)...)
+			out = append(out, renderTable(rows, full, base)...)
 			blank()
 		case trim == "":
 			blank()
@@ -72,15 +80,38 @@ func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 			out = append(out, styDim.Render(strings.Repeat("─", min(width, 24))))
 		default:
 			if m := mdHeading.FindStringSubmatch(trim); m != nil {
+				// A heading stands apart: air above it, and for the top
+				// two levels a rule under it, so a long answer's sections
+				// can be found by eye.
 				blank()
-				style := styTitle
+				style := styHeading
 				if len(m[1]) <= 2 {
 					style = styCyanBold
 				}
-				out = append(out, wrapSpans(inline(m[2], style), width, "")...)
+				head := wrapSpans(inline(m[2], style), width, "")
+				out = append(out, head...)
+				if len(m[1]) <= 2 {
+					hw := 0
+					for _, h := range head {
+						hw = max(hw, ansi.StringWidth(h))
+					}
+					out = append(out, styDim.Render(strings.Repeat("─", hw)))
+				}
+				continue
+			}
+			if r, _ := utf8DecodeFirst(trim); strings.ContainsRune(sectionMarks, r) {
+				// "■ (1) CLI", "▶ 결론": workers mark sections with a
+				// symbol rather than #. Read as a heading.
+				blank()
+				out = append(out, wrapSpans(inline(trim, styHeading), width, "")...)
 				continue
 			}
 			if m := mdBullet.FindStringSubmatch(line); m != nil {
+				// A list starting straight after prose gets air above it.
+				if len(out) > 0 && out[len(out)-1] != "" && i > 0 && mdBullet.FindStringSubmatch(lines[i-1]) == nil &&
+					!strings.HasPrefix(strings.TrimSpace(lines[i-1]), "#") {
+					blank()
+				}
 				indent := strings.Repeat(" ", min(len(m[1]), 6))
 				mark := "• "
 				if m[2][0] >= '0' && m[2][0] <= '9' {
@@ -96,13 +127,27 @@ func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 				}
 				continue
 			}
-			out = append(out, wrapSpans(inline(trim, base), width, "")...)
+			// A wrapped line's continuation is indented, so the next
+			// line of the source does not read as continuing it: in a
+			// list of commands, "[-q" then "검색어]" flush left read as a
+			// new command.
+			out = append(out, wrapSpans(inline(trim, base), width, "  ")...)
 		}
 	}
 	for len(out) > 0 && out[len(out)-1] == "" {
 		out = out[:len(out)-1]
 	}
 	return out
+}
+
+// sectionMarks are the symbols workers open a section line with.
+const sectionMarks = "■□▶►◆◇▸●"
+
+func utf8DecodeFirst(s string) (rune, int) {
+	for i, r := range s {
+		return r, i
+	}
+	return 0, 0
 }
 
 // renderTable lays a markdown table out in aligned columns, the header in

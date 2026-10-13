@@ -1464,6 +1464,10 @@ var (
 	styYellowBold = styYellow.Bold(true)
 	styCyanBold   = styCyan.Bold(true)
 	styRedBold    = styRed.Bold(true)
+	// styHeading is a section heading inside text a worker wrote: a third
+	// level, or a "■ (1) …" line. Bold alone left it the shade of the
+	// prose around it, and a long report read as one block.
+	styHeading = styYellowBold
 	// styThought is a worker's extended thinking: the same weight as its
 	// prose, set apart so private reasoning is not mistaken for what it
 	// told its peers.

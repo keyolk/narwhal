@@ -76,6 +76,8 @@ func main() {
 		experimentCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
+	case "flow":
+		flowCmd(os.Args[2:])
 	case "version":
 		fmt.Println("narwhal " + version)
 	case "-h", "--help", "help":
@@ -324,6 +326,10 @@ Usage:
 
   narwhal experiment [--cwd DIR]
                 Two-worker passive-awareness validation scenario.
+
+  narwhal flow [list | show FLOW | rm FLOW STEP]
+                Flows and their steps. rm takes a step out of its flow (by
+                number or run id); the run's record is kept.
 
   narwhal config [list [PREFIX] | get KEY | set KEY VALUE | unset KEY | path]
                 Settings in ~/.narwhal/config.json: which Jev judgements are

@@ -200,8 +200,13 @@ type tuiModel struct {
 	// The flow layer. See flowview.go. flows are read from disk, runFlow
 	// maps a run to the flow file listing it, and flowView with flowID,
 	// flowSel and flowScroll is the flow screen.
-	flows      map[string]store.Flow
-	runFlow    map[string]string
+	flows   map[string]store.Flow
+	runFlow map[string]string
+	// removedRuns are steps taken out of their flows; nothing lists them.
+	removedRuns map[string]bool
+	// removeStep is the step a d asked to remove, waiting for the second
+	// d that confirms it.
+	removeStep string
 	flowView   bool
 	flowID     string
 	flowSel    int
@@ -428,7 +433,14 @@ func (m *tuiModel) mergeRuns(runs []store.LiveRun) {
 	// A flow's runs stay together, in step order, placed by the flow's
 	// latest step: a flow whose last step is running is in progress
 	// however long ago it started.
-	sorted := append([]store.LiveRun(nil), runs...)
+	// A step taken out of its flow is not listed: its record is kept, but
+	// showing it again on its own would undo what the person asked for.
+	sorted := make([]store.LiveRun, 0, len(runs))
+	for _, r := range runs {
+		if !m.removedRuns[r.RunID] {
+			sorted = append(sorted, r)
+		}
+	}
 	type flowKey struct {
 		group  int
 		latest time.Time

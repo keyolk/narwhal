@@ -47,7 +47,7 @@ func (m tuiModel) flowOf(r store.LiveRun) string {
 func (m tuiModel) flowRuns(flowID string) []store.LiveRun {
 	byID := map[string]store.LiveRun{}
 	for _, r := range m.runs {
-		if m.flowOf(r) == flowID {
+		if m.flowOf(r) == flowID && !m.removedRuns[r.RunID] {
 			byID[r.RunID] = r
 		}
 	}
@@ -92,10 +92,14 @@ func (m tuiModel) flowTitle(flowID string) string {
 func (m *tuiModel) applyFlows(flows []store.Flow) {
 	m.flows = map[string]store.Flow{}
 	m.runFlow = map[string]string{}
+	m.removedRuns = map[string]bool{}
 	for _, f := range flows {
 		m.flows[f.ID] = f
 		for _, s := range f.Steps {
 			m.runFlow[s.RunID] = f.ID
+		}
+		for _, r := range f.Removed {
+			m.removedRuns[r] = true
 		}
 	}
 	m.mergeRuns(m.runs)
@@ -120,6 +124,10 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if next, cmd, ok := m.handleStepOutputKey(msg); ok {
 			return next, cmd
 		}
+	}
+	if msg.String() != "d" {
+		// Any other key keeps a step a d asked to remove.
+		m.removeStep = ""
 	}
 	switch msg.String() {
 	case "q", "ctrl+c":
@@ -204,6 +212,39 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			snap := m.runSnapshot(steps[m.flowSel].RunID)
 			return m, openArtifact(snap.Result().Artifacts, int(msg.String()[0]-'0'), snap.CWD)
 		}
+	case "d":
+		// Take the step out of the flow, on a second d: the run's record
+		// stays, but the flow and every later plan stop reading it.
+		if m.flowSel >= len(steps) {
+			return m, nil
+		}
+		st := steps[m.flowSel]
+		if m.removeStep != st.RunID {
+			m.removeStep = st.RunID
+			m.setNotice(fmt.Sprintf("remove step %d from the flow? d again to remove, any other key to keep it "+
+				"(the run's record stays on disk)", m.flowSel+1), nil)
+			return m, nil
+		}
+		m.removeStep = ""
+		// Only a step with workers still at it is refused: one left
+		// "active" with nobody working — a planner that exited, a daemon
+		// that restarted — is exactly what a person wants gone.
+		if st.Running > 0 {
+			m.setNotice("", fmt.Errorf("step %d has %d workers running — cancel it first", m.flowSel+1, st.Running))
+			return m, nil
+		}
+		f, removed, err := store.RemoveFlowStep(m.flowID, st.RunID)
+		if err != nil {
+			m.setNotice("", err)
+			return m, nil
+		}
+		m.setNotice(fmt.Sprintf("removed step %d: %s", m.flowSel+1, truncate(oneLine(removed.Request), 60)), nil)
+		if len(f.Steps) == 0 {
+			m.flowView, m.picker = false, true
+		}
+		m.flowSel = max(0, min(m.flowSel, len(steps)-2))
+		m.flowScroll, m.flowOutSel = 0, -1
+		return m, refreshFlows()
 	case "c":
 		f, ok := m.flows[m.flowID]
 		if ok {
@@ -324,7 +365,7 @@ func (m tuiModel) flowGeometry() flowGeom {
 		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
 	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
-	keys := "j/k step · i resume the step · n next step · l/tab read · z widen · enter open run · o outputs · r result · e notes · x export · c close · esc home"
+	keys := "j/k step · i resume the step · n next step · l/tab read · z widen · enter open run · o outputs · r result · e notes · x export · d remove step · c close · esc home"
 	if m.flowDetail {
 		keys = "j/k choose output · J/K space read · o open · e edit · y copy · enter its task · h back to steps · z widen · esc"
 	}

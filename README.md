@@ -524,6 +524,7 @@ only) > `--worker-model` (everything else) > ccproxy rotation.
 | `narwhal show` | List recent runs (from disk), with what each one cost |
 | `narwhal show <id>` | Full run snapshot, per-task token accounting first |
 | `narwhal backfill` | Measure past runs from their transcripts (`--dry-run` to preview) |
+| `narwhal flow` | Flows and their steps (`list`, `show FLOW`, `rm FLOW STEP`); `d` in the flow view does the same |
 | `narwhal config` | Settings in `~/.narwhal/config.json` (`list`, `get`, `set`, `unset`, `path`) |
 | `narwhal version` | Print version |
 

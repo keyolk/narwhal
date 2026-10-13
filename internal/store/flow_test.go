@@ -56,3 +56,48 @@ func TestAFlowKeepsItsInputAndStepsInOrder(t *testing.T) {
 		t.Error("a step was added to a flow that does not exist")
 	}
 }
+
+// A removed step is out of the flow — its steps, its brief and its output —
+// while the run's record stays; removing the last step removes the flow.
+func TestRemovingAStepTakesItOutOfTheFlow(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, id := range []string{"r1", "r2", "r3"} {
+		run := broker.New().CreateRun(id, "ask "+id, "/src/repo", "main")
+		tk := run.AddTask("synthesis", "synthesis", "x", nil)
+		tk.StartDispatch("d", "w")
+		tk.CompleteDispatch("concluded in "+id, run)
+		if err := SaveRun(run.Snapshot()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	StartFlow("r1", "/src/repo", "ask r1")
+	AddFlowStep("r1", "r2", "ask r2")
+	AddFlowStep("r1", "r3", "ask r3")
+
+	f, removed, err := RemoveFlowStep("r1", "2")
+	if err != nil || removed.RunID != "r2" {
+		t.Fatalf("remove by number: %+v %v", removed, err)
+	}
+	if len(f.Steps) != 2 || f.Steps[1].RunID != "r3" || !f.IsRemoved("r2") {
+		t.Fatalf("after remove: %+v", f)
+	}
+	out := f.Output()
+	brief := FlowBrief(f, out.Runs, "")
+	if strings.Contains(brief, "concluded in r2") || !strings.Contains(brief, "concluded in r3") {
+		t.Errorf("the brief still reads the removed step:\n%s", brief)
+	}
+	if _, err := LoadRun("r2"); err != nil {
+		t.Errorf("the removed run's record is gone: %v", err)
+	}
+	if _, _, err := RemoveFlowStep("r1", "r9"); err == nil {
+		t.Error("removed a step that is not there")
+	}
+
+	RemoveFlowStep("r1", "r3")
+	if _, _, err := RemoveFlowStep("r1", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFlow("r1"); err == nil {
+		t.Error("a flow with no steps left is still on disk")
+	}
+}

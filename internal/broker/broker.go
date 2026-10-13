@@ -329,8 +329,12 @@ type Run struct {
 
 	// judge weighs in on dispatch calls made on thin evidence; verdicts is
 	// what it said. Both guarded by mu. See judge.go.
-	judge    Judge
-	verdicts []Verdict
+	judge Judge
+	// The planner's launch, kept to resume it with the operator's answers
+	// (server/control.go), and whether its process is alive.
+	plannerModel, plannerInstructions, plannerToken string
+	plannerRunning                                  bool
+	verdicts                                        []Verdict
 	// sceneNotes are one-line summaries of closed scenes, by scene key.
 	// See scenes.go.
 	sceneNotes map[string]string

@@ -311,6 +311,17 @@ func (m tuiModel) viewQuestions() string {
 				body = append(body, "     "+styDim.Render(l))
 			}
 		}
+		// What the question rests on, found for the operator: the
+		// definitions of labels it uses, or the asking task's assignment.
+		for _, g := range q.Grounds {
+			for j, l := range wrapText(g, inner-6) {
+				lead := "     " + styDim.Render("↳ ")
+				if j > 0 {
+					lead = "       "
+				}
+				body = append(body, lead+styDim.Render(l))
+			}
+		}
 		for k, o := range q.Options {
 			opt := fmt.Sprintf("%d) %s", k+1, o)
 			if k+1 == q.Recommended {

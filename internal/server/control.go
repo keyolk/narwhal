@@ -14,6 +14,7 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -745,41 +746,11 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 			flowErr = err.Error()
 		}
 	}
-	planTimeout := time.Duration(req.PlanTimeoutSecs) * time.Second
-	if planTimeout == 0 {
-		planTimeout = 5 * time.Minute
-	}
-
-	planArgs := []string{"claude", "--print",
-		"--permission-mode", "bypassPermissions",
-		"--append-system-prompt", planInstructions,
-	}
-	if req.PlannerModel != "" {
-		planArgs = append(planArgs, "--model", req.PlannerModel)
-	}
-	planArgs = append(planArgs, "Decompose the user's request into a task DAG and create the tasks via the broker API. When done, post PLAN_DONE to the planning thread.")
-	planCmd := exec.Command("ccproxy", planArgs...)
-	planCmd.Dir = req.CWD
-	planLog, _ := os.Create(filepath.Join(l.SessionDir(), "planner-output.txt"))
-	planCmd.Stdout = planLog
-	planCmd.Stderr = planLog
-	planCmd.Env = append(os.Environ(),
-		"NARWHAL_RUN_ID="+runID,
-		"NARWHAL_BROKER_URL="+s.baseURL(),
-		"NARWHAL_AGENT_TOKEN="+mainAgent.Token,
-	)
-	if err := planCmd.Start(); err != nil {
+	run.SetPlanner(req.PlannerModel, planInstructions, mainAgent.Token)
+	if err := s.startPlanner(run, l, plannerPrompt, ""); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "start planner: " + err.Error()})
 		return
 	}
-
-	// Wait for the planner in a goroutine so the HTTP response can return
-	// the run id immediately. The caller polls status to learn when the
-	// DAG is ready and workers start dispatching.
-	go func() {
-		_ = planCmd.Wait()
-		planLog.Close()
-	}()
 
 	resp := map[string]any{
 		"run_id":          runID,
@@ -796,6 +767,98 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		resp["flow_error"] = flowErr
 	}
 	writeJSON(w, http.StatusCreated, resp)
+}
+
+const plannerPrompt = "Decompose the user's request into a task DAG and create the tasks via the broker API. " +
+	"When done, post PLAN_DONE to the planning thread."
+
+// startPlanner launches the run's planner, or with resume, continues its
+// Claude session with prompt as the next turn.
+//
+// The session id is chosen here and kept on disk so a planner that asked
+// the operator something and exited can be resumed with the answers: a
+// --print agent cannot wait out a person (its tool calls time out at ten
+// minutes), so it asks, ends its turn, and is woken when they answer.
+func (s *Server) startPlanner(run *broker.Run, l *launcher.Launcher, prompt, resume string) error {
+	model, instructions, token := run.Planner()
+	args := []string{"claude", "--print", "--permission-mode", "bypassPermissions",
+		"--append-system-prompt", instructions}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	idFile := filepath.Join(l.SessionDir(), "planner-session-id")
+	if resume != "" {
+		args = append(args, "--resume", resume)
+	} else if sid, err := launcher.NewSessionUUID(); err == nil {
+		args = append(args, "--session-id", sid)
+		if err := os.MkdirAll(l.SessionDir(), 0o700); err == nil {
+			if err := os.WriteFile(idFile, []byte(sid+"\n"), 0o600); err != nil {
+				log.Printf("[plan] record planner session for %s: %v", run.ID, err)
+			}
+		}
+	}
+	args = append(args, prompt)
+	cmd := exec.Command("ccproxy", args...)
+	cmd.Dir = run.Snapshot().CWD
+	if err := os.MkdirAll(l.SessionDir(), 0o700); err != nil {
+		return err
+	}
+	logf, err := os.OpenFile(filepath.Join(l.SessionDir(), "planner-output.txt"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	cmd.Stdout, cmd.Stderr = logf, logf
+	cmd.Env = append(os.Environ(),
+		"NARWHAL_RUN_ID="+run.ID,
+		"NARWHAL_BROKER_URL="+s.baseURL(),
+		"NARWHAL_AGENT_TOKEN="+token,
+	)
+	if err := cmd.Start(); err != nil {
+		logf.Close()
+		return err
+	}
+	run.SetPlannerRunning(true)
+	// Waited on in a goroutine so the caller returns at once; the caller
+	// polls status to learn when the DAG is ready.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[plan] planner for %s exited: %v", run.ID, err)
+		}
+		run.SetPlannerRunning(false)
+		logf.Close()
+	}()
+	return nil
+}
+
+// resumePlanner wakes a planner that asked the operator and exited, once
+// every question it asked is answered, with the answers as its next turn.
+func (s *Server) resumePlanner(run *broker.Run) error {
+	if s.control == nil || run.PlannerRunning() {
+		return nil
+	}
+	var answers []string
+	for _, q := range run.Questions() {
+		if q.TaskID != broker.PlanAsker {
+			continue
+		}
+		if q.Open() {
+			return nil
+		}
+		answers = append(answers, fmt.Sprintf("#%d %s\n   → %s", q.ID, q.Text, q.Answer))
+	}
+	if len(answers) == 0 {
+		return nil
+	}
+	l := s.control.LauncherFor(run.ID, run.Snapshot().CWD)
+	b, err := os.ReadFile(filepath.Join(l.SessionDir(), "planner-session-id"))
+	sid := strings.TrimSpace(string(b))
+	prompt := "The operator answered your questions:\n\n" + strings.Join(answers, "\n") +
+		"\n\nPlan with these answers now: create the tasks and post PLAN_DONE."
+	if err != nil || sid == "" {
+		// No session to continue: start over, told the answers.
+		return s.startPlanner(run, l, plannerPrompt+"\n\n"+prompt, "")
+	}
+	return s.startPlanner(run, l, prompt, sid)
 }
 
 // handleControlQuestions lists a run's questions, open ones first.
@@ -844,6 +907,9 @@ func (s *Server) handleControlAnswer(w http.ResponseWriter, r *http.Request) {
 		}
 		answered++
 		reopened = append(reopened, run.ApplyAnswer(q)...)
+	}
+	if err := s.resumePlanner(run); err != nil {
+		errs = append(errs, "resume planner: "+err.Error())
 	}
 	if len(reopened) > 0 {
 		switch run.CurrentState() {

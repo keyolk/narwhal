@@ -98,6 +98,26 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 			styDim.Render(" "+label+" ")+
 			style.Render(truncate(value, width-displayWidth(prefix))))
 	}
+	// addWrapped is add for a value worth reading past one line: wrapped
+	// under itself, at most rows lines, the last marked when there is more.
+	addWrapped := func(icon, label, value string, style lipgloss.Style, rows int) {
+		if value == "" {
+			return
+		}
+		prefix := fmt.Sprintf(" %s %s ", icon, label)
+		pw := displayWidth(prefix)
+		lines := wrapText(value, max(20, width-pw))
+		if len(lines) > rows {
+			lines = append(lines[:rows-1], truncate(strings.Join(lines[rows-1:], " "), width-pw))
+		}
+		for i, l := range lines {
+			if i == 0 {
+				out = append(out, style.Render(" "+icon)+styDim.Render(" "+label+" ")+style.Render(l))
+				continue
+			}
+			out = append(out, strings.Repeat(" ", pw)+style.Render(l))
+		}
+	}
 
 	model := t.Model
 	if model == "" {
@@ -149,6 +169,17 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 	// Placed above the outcome because a verdict is often *why* the
 	// outcome reads the way it does — a retry, an escalated model.
 	for _, v := range taskVerdicts(m.snap.Verdicts, t.ID) {
+		if v.Question == broker.QuestionCriterion && v.Ask != "" && v.Asker == "" {
+			// The criterion is the reason for the verdict; on the row it
+			// was cut after a few words. It reads on the lines below.
+			c := v
+			c.Ask = ""
+			out = append(out, verdictRow(c, width))
+			for _, l := range wrapText(v.Ask, max(20, width-14)) {
+				out = append(out, strings.Repeat(" ", 14)+styDim.Render(l))
+			}
+			continue
+		}
 		out = append(out, verdictRow(v, width))
 	}
 
@@ -161,7 +192,7 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 		if t.State == broker.TaskFailed {
 			style = styRedBold
 		}
-		add(icons.fieldOutcome, "outcome", firstLine(t.Outcome), style)
+		addWrapped(icons.fieldOutcome, "outcome", flattenMarkdown(t.Outcome), style, 3)
 	}
 
 	if files := m.filesHeldBy(t.ID); len(files) > 0 {

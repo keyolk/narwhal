@@ -40,3 +40,13 @@ func TestLabels(t *testing.T) {
 		t.Errorf("labels = %s", got)
 	}
 }
+
+func TestProseSentenceSkipsMarkdown(t *testing.T) {
+	got := proseSentence("# dayx 가이드 (2026-10-13 기준)\n\n## 1. 요약\n**dayx**는 `로컬` 서비스다. 그리고 더.")
+	if got != "dayx는 로컬 서비스다." {
+		t.Errorf("proseSentence = %q", got)
+	}
+	if got := proseSentence("plain one line"); got != "plain one line" {
+		t.Errorf("plain = %q", got)
+	}
+}

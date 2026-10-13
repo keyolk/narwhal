@@ -622,13 +622,36 @@ func TestGraphPaneDrawsFanIn(t *testing.T) {
 func TestTruncateIsANSIFree(t *testing.T) {
 	// truncate operates on plain text; feeding it styled input was the
 	// original performance bug. Confirm the plain-text contract.
-	if got := truncate("abcdef", 3); got != "abc" {
-		t.Fatalf("truncate ascii = %q, want abc", got)
+	// A cut line says so: it ends in "…" within the width.
+	if got := truncate("abcdef", 3); got != "ab…" {
+		t.Fatalf("truncate ascii = %q, want ab…", got)
+	}
+	if got := truncate("abc", 3); got != "abc" {
+		t.Fatalf("a line that fits was marked: %q", got)
+	}
+	if got := truncate("한글테스트", 5); got != "한글…" || displayWidth(got) > 5 {
+		t.Fatalf("truncate wide = %q", got)
 	}
 	if got := truncate("한글테스트", 4); displayWidth(got) > 4 {
 		t.Fatalf("truncate wide runes overflowed: %q width=%d", got, displayWidth(got))
 	}
 	if got := truncate("short", 99); got != "short" {
 		t.Fatalf("truncate should pass through short strings, got %q", got)
+	}
+}
+
+// A pane row longer than the pane is cut with "…", not wrapped onto a row
+// of its own: wrapped, it started flush left and pushed the rows below it
+// down and off the bottom.
+func TestPadRowsCutsRatherThanWraps(t *testing.T) {
+	rows := []string{"Notes", "  none — e to write what every step should know", "Steps"}
+	got := strings.Split(padRows(rows, 30, 3), "\n")
+	if len(got) != 3 || !strings.HasSuffix(strings.TrimRight(got[1], " "), "…") || !strings.HasPrefix(got[2], "Steps") {
+		t.Fatalf("padRows = %q", got)
+	}
+	for _, l := range got {
+		if displayWidth(l) != 30 {
+			t.Errorf("row %q is %d wide", l, displayWidth(l))
+		}
 	}
 }

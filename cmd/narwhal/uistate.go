@@ -68,5 +68,4 @@ func (m *tuiModel) enablePrefs() {
 		m.notifyFrom(srcPrefs, "", err)
 	}
 	m.saver = prefs.NewSaver[uiState](prefsApp, 0)
-	m.prefsOn = true
 }

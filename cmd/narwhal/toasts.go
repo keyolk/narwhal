@@ -13,7 +13,6 @@ package main
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/toast"
 )
@@ -34,13 +33,10 @@ var toastStyles = toast.Styles{
 	Error:   styRed,
 }
 
-// pushToast queues t. Its expiry tick is collected on the model and
-// returned by Update, so call sites that only mutate the model need not
-// thread a command back.
+// pushToast queues t. Update arms its expiry tick (toast.Ticks), so call
+// sites that only mutate the model need not thread a command back.
 func (m *tuiModel) pushToast(t toast.Toast) {
-	var cmd tea.Cmd
-	m.toasts, cmd = toast.Push(m.toasts, t)
-	m.toastCmd = tea.Batch(m.toastCmd, cmd)
+	m.toasts = toast.Add(m.toasts, t)
 }
 
 // setNotice says how an action went: text when it worked, err when not.

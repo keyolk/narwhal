@@ -165,13 +165,25 @@ func TestLayoutIsSavedAndRestored(t *testing.T) {
 	}
 }
 
-// Without prefs (tests, the panes w opens) nothing is written and quit is
-// immediate.
+// Without prefs (tests, the panes w opens) the Saver is the zero one:
+// nothing is written, and quit's flush is final at once.
 func TestNoPrefsQuitsAtOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", dir)
 	m := testModel(3, 3)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Error("q without prefs did not quit")
+	m = press(m, "b")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	saved, ok := cmd().(prefs.Saved)
+	if !ok || !saved.Final {
+		t.Fatalf("q without prefs: %#v", saved)
+	}
+	if _, cmd := next.Update(saved); cmd == nil {
+		t.Fatal("the final save did not quit")
+	} else if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Error("the final save did not quit")
+	}
+	if es, _ := os.ReadDir(dir); len(es) != 0 {
+		t.Errorf("wrote %v without prefs", es)
 	}
 }
 

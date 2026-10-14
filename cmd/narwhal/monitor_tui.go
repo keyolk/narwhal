@@ -209,16 +209,15 @@ type tuiModel struct {
 	paletteQuery []rune
 	paletteSel   int
 
-	// km is the binding table (keymap.go), toasts the action results
-	// (toasts.go) and toastCmd the expiry ticks of toasts pushed while
-	// handling the current message, which Update returns.
-	km       keys.Keymap
-	toasts   toast.Queue
-	toastCmd tea.Cmd
-	// saver writes the UI state worth keeping (uistate.go); prefsOn is set
-	// only by the real monitor, so tests and pinned panes write nothing.
-	saver   prefs.Saver[uiState]
-	prefsOn bool
+	// km is the binding table (keymap.go) and toasts the action results
+	// (toasts.go); Update returns the expiry ticks of toasts added while
+	// handling a message.
+	km     keys.Keymap
+	toasts toast.Queue
+	// saver writes the UI state worth keeping (uistate.go). Only the real
+	// monitor builds one; the zero Saver in tests and pinned panes writes
+	// nothing.
+	saver prefs.Saver[uiState]
 
 	// The home screen's request line. See home.go. homeCWD is where a new
 	// request runs, composing whether the line has the keys, starting the
@@ -596,33 +595,27 @@ func (m *tuiModel) selectRun(i int) tea.Cmd {
 }
 
 // Update is update plus what every message shares: the expiry ticks of
-// toasts pushed while handling it, and saving the UI state when it changed
+// toasts added while handling it, and saving the UI state when it changed
 // (uistate.go) — compared here rather than at each key, so no handler can
 // forget it.
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	before, wasQuit := m.uiState(), m.quit
+	before, wasQuit, toasts := m.uiState(), m.quit, m.toasts
 	next, cmd := m.update(msg)
 	nm, ok := next.(tuiModel)
 	if !ok {
 		return next, cmd
 	}
-	if nm.toastCmd != nil {
-		cmd = tea.Batch(cmd, nm.toastCmd)
-		nm.toastCmd = nil
-	}
-	if !nm.prefsOn {
-		return nm, cmd
+	cmd = tea.Batch(cmd, toast.Ticks(toasts, nm.toasts))
+	if nm.quit && !wasQuit {
+		// Quit once the state is on disk: the Final Saved quits.
+		var flush tea.Cmd
+		nm.saver, flush = nm.saver.FlushWith(nm.uiState())
+		return nm, flush
 	}
 	if after := nm.uiState(); after != before {
 		var save tea.Cmd
 		nm.saver, save = nm.saver.Save(after)
 		cmd = tea.Batch(cmd, save)
-	}
-	if nm.quit && !wasQuit {
-		// Quit once the state is on disk: the Final Saved quits.
-		var flush tea.Cmd
-		nm.saver, flush = nm.saver.Flush()
-		return nm, flush
 	}
 	return nm, cmd
 }

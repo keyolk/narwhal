@@ -334,10 +334,10 @@ func TestNodeHeadlineOffersTheSessionKeys(t *testing.T) {
 }
 
 func TestSparklineScalesToItsOwnPeak(t *testing.T) {
-	saved := sparkGlyphs
-	t.Cleanup(func() { sparkGlyphs = saved })
+	saved := chartGlyphs
+	t.Cleanup(func() { chartGlyphs = saved })
 
-	sparkGlyphs = chart.Unicode()
+	chartGlyphs = chart.Unicode()
 	// Each count takes an equal share of the ramp: 1 of 4 is the third
 	// step, 2 of 4 the fifth, the peak the top.
 	if got := sparkline([]int{0, 1, 2, 4}); got != " ▃▅█" {
@@ -354,7 +354,7 @@ func TestSparklineScalesToItsOwnPeak(t *testing.T) {
 
 	// Under a CJK locale the block ramp is two cells a glyph; the ASCII
 	// set keeps the line one cell a second.
-	sparkGlyphs = chart.ASCII()
+	chartGlyphs = chart.ASCII()
 	if got := sparkline([]int{0, 1, 2, 4}); got != " .=#" {
 		t.Errorf("ASCII sparkline = %q", got)
 	}

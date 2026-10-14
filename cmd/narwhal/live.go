@@ -210,10 +210,10 @@ func spinnerAt(frame int) string {
 	return spinnerFrames[frame%len(spinnerFrames)]
 }
 
-// sparkGlyphs is the sparkline's glyph set: the block-element ramp, or
-// ASCII under a CJK locale, where block elements draw two cells wide and
-// would push the inspector's headline past its width.
-var sparkGlyphs = chart.DetectGlyphs("NARWHAL")
+// chartGlyphs is the glyph set of the sparklines and bars: block elements,
+// or ASCII under a CJK locale, where block elements draw two cells wide
+// and would push a row past its width.
+var chartGlyphs = chart.DetectGlyphs("NARWHAL")
 
 // sparkline renders counts as one cell each, scaled to their own max so a
 // quiet worker's activity is still visible. A second with nothing in it is
@@ -228,7 +228,7 @@ func sparkline(counts []int) string {
 		}
 	}
 	return chart.Sparkline(vals, len(counts), chart.SparkOpts{
-		Look: chart.Look{Glyphs: sparkGlyphs},
+		Look: chart.Look{Glyphs: chartGlyphs},
 		Agg:  chart.Max,
 		Min:  chart.Fixed(0),
 	})

@@ -29,6 +29,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
@@ -206,7 +207,7 @@ type tuiModel struct {
 	help         bool
 	helpOff      int
 	palette      bool
-	paletteQuery []rune
+	paletteQuery input.Field
 	paletteSel   int
 
 	// km is the binding table (keymap.go) and toasts the action results
@@ -267,7 +268,7 @@ type tuiModel struct {
 	questionsView  bool
 	questionSel    int
 	answering      bool
-	answerBuf      []rune
+	answerBuf      input.Field
 	pendingAnswers map[int]pendingAnswer
 
 	// outputsView shows the watched run's outputs; outputSel and
@@ -304,7 +305,7 @@ type tuiModel struct {
 	// steering is the open command line and steerBuf what has been typed
 	// into it. See steer.go; what became of a send is a toast.
 	steering bool
-	steerBuf []rune
+	steerBuf input.Field
 	// steerStep is the flow step the open line sends to, when it was
 	// opened from the flow view; nil for the watched run.
 	steerStep *steerTarget

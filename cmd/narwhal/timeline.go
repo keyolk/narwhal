@@ -155,7 +155,7 @@ func (m *tuiModel) steerFromTimeline() bool {
 	switch {
 	case it.reason != nil:
 		m.startSteer(it.task)
-		m.steerBuf = append(m.steerBuf, []rune(fmt.Sprintf("[%s: %s] → ", it.reason.Kind, render.Truncate(it.reason.Text, 120)))...)
+		m.steerBuf = m.steerBuf.Insert(fmt.Sprintf("[%s: %s] → ", it.reason.Kind, render.Truncate(it.reason.Text, 120)))
 		return true
 	case it.scene != nil && it.scene.Kind == broker.SceneTask:
 		m.startSteer(it.scene.Who[0])

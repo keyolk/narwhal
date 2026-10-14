@@ -45,8 +45,8 @@ func TestIOpensTheCommandLineAndKeysAreTyped(t *testing.T) {
 	}
 	// q would quit and j would move the cursor; here they are text.
 	m = typeKeys(m, "qj")
-	if m.quit || string(m.steerBuf) != "qj" {
-		t.Errorf("keys were taken as shortcuts: quit=%v buf=%q", m.quit, string(m.steerBuf))
+	if m.quit || m.steerBuf.Value() != "qj" {
+		t.Errorf("keys were taken as shortcuts: quit=%v buf=%q", m.quit, m.steerBuf.Value())
 	}
 }
 
@@ -56,8 +56,8 @@ func TestKoreanIsTypedNotMappedToShortcuts(t *testing.T) {
 	m := steerModel(t, "http://x")
 	m = press(m, "i")
 	m = typeKeys(m, "ㅂㅓ")
-	if string(m.steerBuf) != "ㅂㅓ" || m.quit {
-		t.Errorf("buf = %q quit=%v", string(m.steerBuf), m.quit)
+	if m.steerBuf.Value() != "ㅂㅓ" || m.quit {
+		t.Errorf("buf = %q quit=%v", m.steerBuf.Value(), m.quit)
 	}
 }
 
@@ -67,8 +67,8 @@ func TestEscCancelsWithoutSending(t *testing.T) {
 	m = typeKeys(m, "abc")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(tuiModel)
-	if m.steering || len(m.steerBuf) != 0 || cmd != nil {
-		t.Errorf("esc: steering=%v buf=%q cmd=%v", m.steering, string(m.steerBuf), cmd != nil)
+	if m.steering || m.steerBuf.Len() != 0 || cmd != nil {
+		t.Errorf("esc: steering=%v buf=%q cmd=%v", m.steering, m.steerBuf.Value(), cmd != nil)
 	}
 }
 
@@ -179,12 +179,12 @@ func TestInstructingFromATaskAddressesIt(t *testing.T) {
 	m := fixtureRun(t)
 	m.openTask("client", time.Time{})
 	m = press(m, "i")
-	if !m.steering || string(m.steerBuf) != "@client " {
-		t.Fatalf("steering=%v buf=%q, want the line open with @client", m.steering, string(m.steerBuf))
+	if !m.steering || m.steerBuf.Value() != "@client " {
+		t.Fatalf("steering=%v buf=%q, want the line open with @client", m.steering, m.steerBuf.Value())
 	}
 	m = typeKeys(m, "더 짧게")
-	if string(m.steerBuf) != "@client 더 짧게" {
-		t.Errorf("typed into the task view rather than the line: %q", string(m.steerBuf))
+	if m.steerBuf.Value() != "@client 더 짧게" {
+		t.Errorf("typed into the task view rather than the line: %q", m.steerBuf.Value())
 	}
 	if view := ansi.Strip(m.View()); !strings.Contains(view, "» @client 더 짧게") {
 		t.Errorf("the task view does not show the line being typed:\n%s", view)
@@ -210,5 +210,24 @@ func TestParseSteerIgnoresBlankAndStrangers(t *testing.T) {
 	req, _ := parseSteer("@nobody and @worker-api", "r", tasks)
 	if len(req.Mentions) != 1 || req.Mentions[0] != "worker-api" {
 		t.Errorf("mentions = %v", req.Mentions)
+	}
+}
+
+// The line is the kit's text field: the cursor moves, a word goes with
+// ctrl+w, and what is typed lands at the cursor, not at the end.
+func TestTheCommandLineEditsAtTheCursor(t *testing.T) {
+	m := steerModel(t, "http://x")
+	m = press(m, "i")
+	m = typeKeys(m, "check lock")
+	for _, k := range []tea.KeyMsg{{Type: tea.KeyCtrlW}, {Type: tea.KeyLeft}} {
+		next, _ := m.Update(k)
+		m = next.(tuiModel)
+	}
+	m = typeKeys(m, "s")
+	if got := m.steerBuf.Value(); got != "checks " {
+		t.Errorf("buf = %q, want %q", got, "checks ")
+	}
+	if !m.steering {
+		t.Error("editing keys closed the line")
 	}
 }

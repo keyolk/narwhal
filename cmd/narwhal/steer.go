@@ -28,6 +28,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
@@ -169,15 +170,15 @@ func (m tuiModel) sendSteer(req steerRequest) tea.Cmd {
 // startSteer opens the command line to the watched run, addressed to task
 // when one is given.
 func (m *tuiModel) startSteer(task string) {
-	m.steering, m.steerBuf, m.steerStep = true, nil, nil
+	m.steering, m.steerBuf, m.steerStep = true, input.Field{}, nil
 	if task != "" {
-		m.steerBuf = []rune("@" + task + " ")
+		m.steerBuf = input.New("@" + task + " ")
 	}
 }
 
 // startStepSteer opens the command line to a flow step's run.
 func (m *tuiModel) startStepSteer(run store.LiveRun, step int) {
-	m.steering, m.steerBuf = true, nil
+	m.steering, m.steerBuf = true, input.Field{}
 	m.steerStep = &steerTarget{brokerURL: run.BrokerURL, snap: m.runSnapshot(run.RunID), step: step}
 	if m.steerStep.snap.RunID == "" {
 		m.steerStep.snap.RunID = run.RunID
@@ -190,15 +191,15 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxSteer}, msg, m.keyOpts())
 	switch b.Action {
 	case "steer.cancel":
-		m.steering, m.steerBuf, m.steerStep = false, nil, nil
+		m.steering, m.steerBuf, m.steerStep = false, input.Field{}, nil
 		return m, nil
 	case "quit":
 		m.quit = true
 		return m, tea.Quit
 	case "steer.send":
-		line := string(m.steerBuf)
+		line := m.steerBuf.Value()
 		target := m.currentSteerTarget()
-		m.steering, m.steerBuf = false, nil
+		m.steering, m.steerBuf = false, input.Field{}
 		tasks := make(map[string]bool, len(target.snap.Tasks))
 		for _, t := range target.snap.Tasks {
 			tasks[t.ID] = true
@@ -224,19 +225,7 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.steerStep = nil
 		return m, cmd
 	}
-	switch msg.Type {
-	case tea.KeyBackspace:
-		if n := len(m.steerBuf); n > 0 {
-			m.steerBuf = m.steerBuf[:n-1]
-		}
-		return m, nil
-	case tea.KeySpace:
-		m.steerBuf = append(m.steerBuf, ' ')
-		return m, nil
-	case tea.KeyRunes:
-		m.steerBuf = append(m.steerBuf, msg.Runes...)
-		return m, nil
-	}
+	m.steerBuf, _ = m.steerBuf.Update(msg)
 	return m, nil
 }
 
@@ -253,7 +242,7 @@ func (m tuiModel) steerPrompt() string {
 	if t.step > 0 {
 		to = append(to, fmt.Sprintf("step %d", t.step))
 	}
-	if !t.live() && !strings.HasPrefix(strings.TrimSpace(string(m.steerBuf)), "@") {
+	if !t.live() && !strings.HasPrefix(strings.TrimSpace(m.steerBuf.Value()), "@") {
 		if id := t.resumes(); id != "" {
 			to = append(to, "→ "+id)
 		}
@@ -284,7 +273,8 @@ func (m tuiModel) steerBar() string {
 			syntax = " · @task picks another task"
 		}
 		hint := m.keymap().Footer([]keys.Ctx{ctxSteer}, max(1, w), m.keyOpts(), footerStyle)
-		return fit(m.steerPrompt() + string(m.steerBuf) + styCyan.Render("▏") + styDim.Render("   "+hint+syntax))
+		prompt := m.steerPrompt()
+		return fit(prompt + fieldView(m.steerBuf, w-render.Width(prompt)) + styDim.Render("   "+hint+syntax))
 	}
 	if open, blocking := openQuestionCount(m.snap); open > 0 {
 		lead := styYellow.Render(fmt.Sprintf("? the workers asked %d question", open))
@@ -325,4 +315,12 @@ func (m tuiModel) steerBar() string {
 		return fit(left + "  " + right)
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+// fieldView draws a text line being typed at most maxW cells wide: its
+// text and the cursor, no wider, so what follows it on the row (the line's
+// keys) sits right after it. A line wider than maxW scrolls to keep the
+// cursor on screen.
+func fieldView(f input.Field, maxW int) string {
+	return f.View(max(1, min(maxW, render.Width(f.Value())+1)), true, input.Style{})
 }

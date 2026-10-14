@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/render"
 
@@ -103,29 +104,20 @@ func (m tuiModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxAnswer}, msg, m.keyOpts())
 	switch b.Action {
 	case "answer.cancel":
-		m.answering, m.answerBuf = false, nil
+		m.answering, m.answerBuf = false, input.Field{}
 		return m, nil
 	case "quit":
 		m.quit = true
 		return m, tea.Quit
 	case "answer.keep":
-		if text := strings.TrimSpace(string(m.answerBuf)); text != "" && m.questionSel < len(qs) {
+		if text := strings.TrimSpace(m.answerBuf.Value()); text != "" && m.questionSel < len(qs) {
 			m.pendingAnswers[qs[m.questionSel].ID] = pendingAnswer{text: text}
 			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}
-		m.answering, m.answerBuf = false, nil
+		m.answering, m.answerBuf = false, input.Field{}
 		return m, nil
 	}
-	switch msg.Type {
-	case tea.KeyBackspace:
-		if n := len(m.answerBuf); n > 0 {
-			m.answerBuf = m.answerBuf[:n-1]
-		}
-	case tea.KeySpace:
-		m.answerBuf = append(m.answerBuf, ' ')
-	case tea.KeyRunes:
-		m.answerBuf = append(m.answerBuf, msg.Runes...)
-	}
+	m.answerBuf, _ = m.answerBuf.Update(msg)
 	return m, nil
 }
 
@@ -156,7 +148,7 @@ func (m tuiModel) doQuestions(action string, n int) (tea.Model, tea.Cmd) {
 	case "questions.answer":
 		if sel != nil && sel.ForOperator() {
 			m.answering = true
-			m.answerBuf = []rune(m.pendingAnswers[sel.ID].text)
+			m.answerBuf = input.New(m.pendingAnswers[sel.ID].text)
 		}
 	case "questions.assume":
 		if sel != nil && sel.ForOperator() && sel.Assumed != "" {
@@ -364,8 +356,9 @@ func (m tuiModel) viewQuestions() string {
 
 	foot := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	if m.answering {
-		foot = render.Truncate(styCyanBold.Render("» answer: ")+string(m.answerBuf)+styCyan.Render("▏"), w) +
-			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — S sends every kept answer at once")
+		lead := styCyanBold.Render("» answer: ")
+		foot = render.Truncate(lead+fieldView(m.answerBuf, w-render.Width(lead)), w) +
+			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — "+m.keyName("questions.send")+" sends every kept answer at once")
 	}
 	avail := max(1, m.height-2-strings.Count(foot, "\n")-1)
 	start := 0

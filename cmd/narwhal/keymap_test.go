@@ -245,8 +245,8 @@ func TestPaletteRunsAnAction(t *testing.T) {
 // Typed into the palette, q is a letter, not quit.
 func TestPaletteTakesLetters(t *testing.T) {
 	m := press(testModel(3, 3), ":", "q")
-	if m.quit || string(m.paletteQuery) != "q" {
-		t.Errorf("quit=%v query=%q", m.quit, string(m.paletteQuery))
+	if m.quit || m.paletteQuery.Value() != "q" {
+		t.Errorf("quit=%v query=%q", m.quit, m.paletteQuery.Value())
 	}
 }
 

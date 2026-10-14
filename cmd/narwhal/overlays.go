@@ -16,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/render"
 )
@@ -122,14 +123,14 @@ func (m tuiModel) handleHelpKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // openPalette opens the action finder over the current screen.
 func (m *tuiModel) openPalette() {
-	m.palette, m.paletteQuery, m.paletteSel = true, nil, 0
+	m.palette, m.paletteQuery, m.paletteSel = true, input.Field{}, 0
 }
 
 // paletteEntries are the actions the screen under the palette can run,
 // matching what has been typed. Numbered actions need a digit, which a
 // palette has no way to give, so they are NoPalette and left to their keys.
 func (m tuiModel) paletteEntries() []keys.Entry {
-	return keys.Filter(m.keymap().Entries(m.screenStack(), m.keyOpts()), string(m.paletteQuery))
+	return keys.Filter(m.keymap().Entries(m.screenStack(), m.keyOpts()), m.paletteQuery.Value())
 }
 
 // paletteRows is how many matches the box lists at once.
@@ -138,7 +139,7 @@ func (m tuiModel) paletteRows() int { return max(1, min(12, m.height-8)) }
 func (m tuiModel) viewPaletteOverlay(base string) string {
 	g := m.overlayGeom(72, m.paletteRows()+5)
 	es := m.paletteEntries()
-	lines := []string{styCyanBold.Render(": ") + render.Truncate(string(m.paletteQuery), g.innerW-3) + styCyan.Render("▏")}
+	lines := []string{styCyanBold.Render(": ") + fieldView(m.paletteQuery, g.innerW-2)}
 	rows := g.innerH - 2
 	start, end, _ := render.Window(len(es), rows, m.paletteSel, 0)
 	keyW := 0
@@ -198,19 +199,12 @@ func (m tuiModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	switch msg.Type {
-	case tea.KeyBackspace:
-		if n := len(m.paletteQuery); n > 0 {
-			m.paletteQuery = m.paletteQuery[:n-1]
-		}
-	case tea.KeySpace:
-		m.paletteQuery = append(m.paletteQuery, ' ')
-	case tea.KeyRunes:
-		m.paletteQuery = append(m.paletteQuery, msg.Runes...)
-	default:
-		return m, nil
+	if f, _ := m.paletteQuery.Update(msg); f.Value() != m.paletteQuery.Value() {
+		m.paletteSel = 0
+		m.paletteQuery = f
+	} else {
+		m.paletteQuery = f // a cursor move
 	}
-	m.paletteSel = 0
 	return m, nil
 }
 

@@ -220,7 +220,8 @@ func (m tuiModel) viewHome() string {
 		}
 		line = styCyanBold.Render("» ") + text + styCyan.Render("▏") + more
 	default:
-		line = styDim.Render("» press n and describe the work, or e to write it in $EDITOR")
+		line = styDim.Render("» press " + m.keyName("home.new") + " and describe the work, or " +
+			m.keyName("home.editor") + " to write it in $EDITOR")
 	}
 	title := "New request"
 	if m.composing {
@@ -247,7 +248,7 @@ func (m tuiModel) viewHome() string {
 // title over its steps; a flow of one is that run.
 func (m tuiModel) homeList(width, rows int) string {
 	if len(m.runs) == 0 {
-		return styDim.Render("\n   Nothing yet. Press n to start the first request.")
+		return styDim.Render("\n   Nothing yet. Press " + m.keyName("home.new") + " to start the first request.")
 	}
 	var lines []string
 	selTop := 0

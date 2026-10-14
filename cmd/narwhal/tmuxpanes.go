@@ -76,9 +76,10 @@ func shellQuote(s string) string {
 
 // openTmuxPanes runs the plan for the watched run.
 func (m tuiModel) openTmuxPanes() tea.Cmd {
+	key := m.keyName("run.tmux")
 	if os.Getenv("TMUX") == "" {
 		return func() tea.Msg {
-			return noticeMsg{err: fmt.Errorf("not inside tmux — w opens panes in the current tmux session")}
+			return noticeMsg{err: fmt.Errorf("not inside tmux — %s opens panes in the current tmux session", key)}
 		}
 	}
 	self, err := os.Executable()
@@ -103,7 +104,7 @@ func (m tuiModel) openTmuxPanes() tea.Cmd {
 					if out, err := runTmux([]string{"tmux", "select-window", "-t", name}); err != nil {
 						return noticeMsg{err: fmt.Errorf("select-window: %v %s", err, strings.TrimSpace(out))}
 					}
-					return noticeMsg{text: "window " + name + " is already open — switched to it (close it and press w to rebuild)"}
+					return noticeMsg{text: "window " + name + " is already open — switched to it (close it and press " + key + " to rebuild)"}
 				}
 			}
 		}

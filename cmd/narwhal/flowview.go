@@ -241,8 +241,8 @@ func (m tuiModel) removeFlowStep(steps []store.LiveRun) (tea.Model, tea.Cmd) {
 	st := steps[m.flowSel]
 	if m.removeStep != st.RunID {
 		m.removeStep = st.RunID
-		m.askRemove(fmt.Sprintf("remove step %d from the flow? d again to remove, any other key to keep it "+
-			"(the run's record stays on disk)", m.flowSel+1))
+		m.askRemove(fmt.Sprintf("remove step %d from the flow? %s again to remove, any other key to keep it "+
+			"(the run's record stays on disk)", m.flowSel+1, m.keyName("flow.remove")))
 		return m, nil
 	}
 	m.removeStep = ""
@@ -282,8 +282,8 @@ func (m tuiModel) removeHomeRun() (tea.Model, tea.Cmd) {
 	if m.removeStep != r.RunID {
 		m.removeStep = r.RunID
 		m.homeErr = nil
-		m.askRemove(fmt.Sprintf("remove %q from %s? d again to remove, any other key to keep it "+
-			"(the run's record stays on disk)", render.Truncate(oneLine(r.Prompt), 40), where))
+		m.askRemove(fmt.Sprintf("remove %q from %s? %s again to remove, any other key to keep it "+
+			"(the run's record stays on disk)", render.Truncate(oneLine(r.Prompt), 40), where, m.keyName("home.remove")))
 		return m, nil
 	}
 	m.removeStep = ""
@@ -475,13 +475,13 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	rows = append(rows, "")
 	section("Notes")
 	if strings.TrimSpace(f.Notes) == "" {
-		for _, l := range wrapText("none — e to write what every step should know", w-2) {
+		for _, l := range wrapText("none — "+m.keyName("flow.notes")+" to write what every step should know", w-2) {
 			rows = append(rows, styDim.Render("  "+l))
 		}
 	} else {
 		n := renderMarkdown(f.Notes, w-2, styYellow)
 		if len(n) > 6 {
-			n = append(n[:6], styDim.Render("  … e to see all"))
+			n = append(n[:6], styDim.Render("  … "+m.keyName("flow.notes")+" to see all"))
 		}
 		for _, l := range n {
 			rows = append(rows, "  "+l)

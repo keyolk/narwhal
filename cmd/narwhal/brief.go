@@ -235,7 +235,7 @@ func (m tuiModel) viewBrief(width, height int) string {
 	section("Your instructions")
 	ins := briefInstructions(m.snap)
 	if len(ins) == 0 {
-		line(styDim.Render("   none yet — press i to send one"))
+		line(styDim.Render("   none yet — press " + m.keyName("run.steer") + " to send one"))
 	}
 	for _, in := range ins {
 		// Who answered goes before the text: the text is long, and the

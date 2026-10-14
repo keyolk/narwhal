@@ -15,6 +15,7 @@ import (
 	"github.com/keyolk/tuikit/toast"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // keyMsgOf builds the message Bubble Tea sends for a key string.
@@ -312,5 +313,31 @@ func TestNumberedKeysShowAsARange(t *testing.T) {
 		if e.Action == "result.artifact" || e.Action == "palette" {
 			t.Errorf("the palette offers %s", e.Action)
 		}
+	}
+}
+
+// Prose that says what to press names the key as it is bound now, so a
+// keys.yaml rebinding cannot leave "press i" pointing at nothing.
+func TestProseNamesTheReboundKey(t *testing.T) {
+	km, err := defaultKeymap.Override(map[string][]string{"run.steer": {"m"}, "home.remove": {"x"}}, keyStacks...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testModel(3, 3)
+	m.km = km
+	m.width, m.height = 120, 30
+	if got := ansi.Strip(m.steerBar()); !strings.Contains(got, "press m to tell the workers") {
+		t.Errorf("steer bar: %q", got)
+	}
+
+	h := homeModel(t, store.LiveRun{RunID: "r1", Prompt: "p", State: "done", Tasks: 1, Done: 1})
+	h.km = km
+	h.width, h.height = 300, 30
+	h = press(h, "x")
+	if f := footerOf(h); !strings.Contains(f, "remove — x again") {
+		t.Errorf("home footer after the first x: %q", f)
+	}
+	if n := ansi.Strip(h.noticeLine(200)); !strings.Contains(n, "x again to remove") {
+		t.Errorf("the question names the wrong key: %q", n)
 	}
 }

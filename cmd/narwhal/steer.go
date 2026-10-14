@@ -294,17 +294,18 @@ func (m tuiModel) steerBar() string {
 		if blocking > 0 {
 			lead += styRedBold.Render(fmt.Sprintf(", %d waiting for you", blocking))
 		}
-		return fit(lead + styDim.Render(" · ") + styCyanBold.Render("Q") + styDim.Render(" to answer them together · i steer"))
+		return fit(lead + styDim.Render(" · ") + styCyanBold.Render(m.keyName("run.questions")) +
+			styDim.Render(" to answer them together · "+m.keyName("run.steer")+" steer"))
 	}
 	if !m.runIsLive() {
 		why := "this request has finished"
 		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {
 			why = "its daemon is gone"
 		}
-		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render("i") +
-			styDim.Render(" resumes it with an instruction · r result · n next step"))
+		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render(m.keyName("run.steer")) +
+			styDim.Render(" resumes it with an instruction · "+m.keyName("run.result")+" result · "+m.keyName("run.next")+" next step"))
 	}
-	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
+	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render(m.keyName("run.steer")) +
 		styDim.Render(" to tell the workers something")
 	ins := briefInstructions(m.snap)
 	if len(ins) == 0 {

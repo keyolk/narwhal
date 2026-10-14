@@ -67,7 +67,38 @@ func (m tuiModel) screenStack() []keys.Ctx {
 // keyOpts is the model's view of its actions for every keys call: what can
 // run, what is worth footer room, and which label a key wears now.
 func (m tuiModel) keyOpts() keys.Opts {
-	return keys.Opts{Enabled: m.keyEnabled, Visible: m.keyVisible, State: m.keyState}
+	return keys.Opts{Enabled: m.keyEnabled, Visible: m.keyVisible, State: m.keyState, Label: m.keyLabel}
+}
+
+// keyName is the key that runs action on the screen now, named the way the
+// footer names it, for prose that says what to press ("press i to send
+// one"): a keys.yaml rebinding moves the prose with the key. Prose about
+// another screen's key (the steering line under a run's result) names the
+// action's first key in the table.
+func (m tuiModel) keyName(action string) string {
+	km := m.keymap()
+	k, ok := km.KeyFor(m.screenStack(), action, m.keyOpts())
+	if !ok {
+		for _, b := range km.Bindings() {
+			if b.Action == action {
+				k = b.Key()
+				break
+			}
+		}
+	}
+	return keys.Names{}.Name(k)
+}
+
+// keyLabel is a label that carries a live value, which a Labels map
+// cannot: the second press of a remove names the key as it is bound now.
+func (m tuiModel) keyLabel(action string) (string, bool) {
+	switch action {
+	case "home.remove", "flow.remove":
+		if m.removeStep != "" {
+			return "remove — " + m.keyName(action) + " again", true
+		}
+	}
+	return "", false
 }
 
 func (m tuiModel) keyEnabled(action string) bool {
@@ -139,10 +170,6 @@ func (m tuiModel) keyState(action string) string {
 			return "brief"
 		}
 		return "radio"
-	case "home.remove", "flow.remove":
-		if m.removeStep != "" {
-			return "confirm"
-		}
 	case "flow.zoom":
 		if m.flowZoom {
 			return "zoomed"

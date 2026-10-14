@@ -244,7 +244,8 @@ func (m tuiModel) answersSent(msg answersSentMsg) (tea.Model, tea.Cmd) {
 	} else {
 		m.setNotice(note, nil)
 	}
-	return m, m.poll()
+	cmd := m.poll()
+	return m, cmd
 }
 
 // viewQuestions draws the questions view.

@@ -181,7 +181,7 @@ func TestScrollingBackSurvivesAPoll(t *testing.T) {
 	}
 
 	// A poll delivering the same snapshot must not move the reader.
-	updated, _ := m.Update(snapshotMsg{snap: m.snap})
+	updated, _ := m.Update(snapshotMsg{snap: m.snap, runID: m.live.RunID})
 	m = updated.(tuiModel)
 
 	if m.nodeScroll != parked {

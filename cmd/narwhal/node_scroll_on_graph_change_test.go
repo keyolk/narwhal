@@ -43,7 +43,7 @@ func TestTheNodePaneRewindsWhenASnapshotMovesTheCursor(t *testing.T) {
 	// land on another node.
 	next := m.snap
 	next.Tasks = []broker.TaskSnapshot{{ID: "task-1", State: broker.TaskCompleted}}
-	out, _ := m.Update(snapshotMsg{snap: next})
+	out, _ := m.Update(snapshotMsg{snap: next, runID: m.live.RunID})
 	m = out.(tuiModel)
 
 	if currentID(m) == "task-2" {
@@ -79,7 +79,7 @@ func TestAPollThatLeavesTheCursorAloneKeepsYourPlace(t *testing.T) {
 	next := m.snap
 	next.Tasks = append(append([]broker.TaskSnapshot(nil), next.Tasks...),
 		broker.TaskSnapshot{ID: "task-3", State: broker.TaskPending})
-	out, _ := m.Update(snapshotMsg{snap: next})
+	out, _ := m.Update(snapshotMsg{snap: next, runID: m.live.RunID})
 	m = out.(tuiModel)
 
 	if currentID(m) != "task-2" {

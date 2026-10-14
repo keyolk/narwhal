@@ -131,7 +131,7 @@ func TestCursorSurvivesATaskAppearing(t *testing.T) {
 	next := m.snap
 	next.Tasks = append(append([]broker.TaskSnapshot(nil), m.snap.Tasks...),
 		broker.TaskSnapshot{ID: "alpha", State: broker.TaskReady})
-	updated, _ := m.Update(snapshotMsg{snap: next})
+	updated, _ := m.Update(snapshotMsg{snap: next, runID: m.live.RunID})
 	m = updated.(tuiModel)
 
 	after, _ := m.selectedTask()
@@ -155,7 +155,7 @@ func TestCursorSurvivesATaskDisappearing(t *testing.T) {
 
 	next := m.snap
 	next.Tasks = []broker.TaskSnapshot{{ID: "alpha", State: broker.TaskCompleted}}
-	updated, _ := m.Update(snapshotMsg{snap: next})
+	updated, _ := m.Update(snapshotMsg{snap: next, runID: m.live.RunID})
 	m = updated.(tuiModel)
 
 	if m.taskCur < 0 || m.taskCur >= len(m.snap.Tasks) {

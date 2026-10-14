@@ -200,13 +200,8 @@ func (m tuiModel) selectedMessageTask() string {
 
 // footerStyle draws hints the way the hand-written footers did: plain text
 // joined by " · ", dimmed as one line by the caller so a hint like "q quit"
-// stays one run of text. The digit bindings are ranges: "1" is the first
-// key of 1-9 wherever a footer shows it (the pane keys 1-4 never appear in
-// one).
-var footerStyle = keys.FooterStyle{
-	Separator: " · ",
-	Names:     keys.Names{}.With("1", "1-9"),
-}
+// stays one run of text.
+var footerStyle = keys.FooterStyle{Separator: " · "}
 
 // keyFooter is the hint line for stack at width w, dimmed.
 func (m tuiModel) keyFooter(stack []keys.Ctx, w int) string {

@@ -38,13 +38,12 @@ func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	// The key as resolved, so a digit typed under a Korean input source
-	// still names its number.
-	return m.do(b, keys.NormalizeCJK(msg).String())
+	return m.do(b, b.KeyIndex(msg)+1)
 }
 
-// do runs b, pressed as key. The palette calls it too, with b's first key.
-func (m tuiModel) do(b keys.Binding, key string) (tea.Model, tea.Cmd) {
+// do runs b, pressed as its n-th key (1-based; a numbered binding picks the
+// n-th thing with it). The palette calls it too, as the first key.
+func (m tuiModel) do(b keys.Binding, n int) (tea.Model, tea.Cmd) {
 	switch b.Action {
 	case "quit":
 		m.quit = true
@@ -62,17 +61,17 @@ func (m tuiModel) do(b keys.Binding, key string) (tea.Model, tea.Cmd) {
 	case ctxGraph, ctxNode, ctxTimeline, ctxRadio, ctxRun:
 		return m.doRun(b.Action)
 	case ctxResult:
-		return m.doResult(b.Action, key)
+		return m.doResult(b.Action, n)
 	case ctxTask, ctxTaskRead, ctxTaskAct:
-		return m.doTask(b.Action, key)
+		return m.doTask(b.Action, n)
 	case ctxMessage, ctxDetail:
 		return m.doDetail(b.Action)
 	case ctxFlow, ctxStepOut:
-		return m.doFlow(b.Action, key)
+		return m.doFlow(b.Action, n)
 	case ctxOutputs:
 		return m.doOutputs(b.Action)
 	case ctxQuestions:
-		return m.doQuestions(b.Action, key)
+		return m.doQuestions(b.Action, n)
 	}
 	return m, nil
 }

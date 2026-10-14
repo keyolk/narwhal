@@ -130,7 +130,7 @@ func (m *tuiModel) openFlow(flowID, runID string) {
 
 // doFlow runs the flow view's keys, and the step's outputs' once the
 // detail has them (flow.output).
-func (m tuiModel) doFlow(action, key string) (tea.Model, tea.Cmd) {
+func (m tuiModel) doFlow(action string, n int) (tea.Model, tea.Cmd) {
 	steps := m.flowRuns(m.flowID)
 	if next, cmd, ok := m.doStepOutput(action); ok {
 		return next, cmd
@@ -214,7 +214,7 @@ func (m tuiModel) doFlow(action, key string) (tea.Model, tea.Cmd) {
 	case "flow.artifact":
 		if m.flowSel < len(steps) {
 			snap := m.runSnapshot(steps[m.flowSel].RunID)
-			return m, openArtifact(snap.Result().Artifacts, digit(key), snap.CWD)
+			return m, openArtifact(snap.Result().Artifacts, n, snap.CWD)
 		}
 	case "flow.remove":
 		return m.removeFlowStep(steps)

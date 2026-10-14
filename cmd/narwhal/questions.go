@@ -130,7 +130,7 @@ func (m tuiModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // doQuestions runs the questions view's keys.
-func (m tuiModel) doQuestions(action, key string) (tea.Model, tea.Cmd) {
+func (m tuiModel) doQuestions(action string, n int) (tea.Model, tea.Cmd) {
 	qs := m.questionsList()
 	var sel *broker.Question
 	if m.questionSel < len(qs) {
@@ -149,7 +149,7 @@ func (m tuiModel) doQuestions(action, key string) (tea.Model, tea.Cmd) {
 		}
 	case "questions.pick":
 		// An option, for a question that offers them.
-		if n := digit(key); sel != nil && sel.ForOperator() && n >= 1 && n <= len(sel.Options) {
+		if sel != nil && sel.ForOperator() && n >= 1 && n <= len(sel.Options) {
 			m.pendingAnswers[sel.ID] = pendingAnswer{text: sel.Options[n-1]}
 			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}

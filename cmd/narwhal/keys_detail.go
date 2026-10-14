@@ -12,14 +12,6 @@ import (
 	"github.com/keyolk/narwhal/internal/store"
 )
 
-// digit is the number a 1-9 key names, or 0.
-func digit(key string) int {
-	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
-		return int(key[0] - '0')
-	}
-	return 0
-}
-
 func (m tuiModel) doDetail(action string) (tea.Model, tea.Cmd) {
 	switch action {
 	case "detail.back":
@@ -86,7 +78,7 @@ func (m tuiModel) doDetail(action string) (tea.Model, tea.Cmd) {
 
 // doResult runs the result view's own keys: write the report, copy the
 // answer, open an artifact, plan the next step.
-func (m tuiModel) doResult(action, key string) (tea.Model, tea.Cmd) {
+func (m tuiModel) doResult(action string, n int) (tea.Model, tea.Cmd) {
 	switch action {
 	case "result.report":
 		snap := m.snap
@@ -102,7 +94,7 @@ func (m tuiModel) doResult(action, key string) (tea.Model, tea.Cmd) {
 		}
 		return m, copyCmd(res.Answer, "the answer")
 	case "result.artifact":
-		return m, openArtifact(m.snap.Result().Artifacts, digit(key), m.snap.CWD)
+		return m, openArtifact(m.snap.Result().Artifacts, n, m.snap.CWD)
 	case "result.next":
 		m.startCompose(m.flowOf(m.live))
 	case "result.outputs":
@@ -114,7 +106,7 @@ func (m tuiModel) doResult(action, key string) (tea.Model, tea.Cmd) {
 
 // doTask runs the task view's keys. Summary and Messages are read, not
 // navigated (task.read); Activity moves entry by entry (task.activity).
-func (m tuiModel) doTask(action, key string) (tea.Model, tea.Cmd) {
+func (m tuiModel) doTask(action string, n int) (tea.Model, tea.Cmd) {
 	t, ok := m.selectedTask()
 	switch action {
 	case "task.steer":
@@ -161,7 +153,7 @@ func (m tuiModel) doTask(action, key string) (tea.Model, tea.Cmd) {
 		m.summaryAskOpen = !m.summaryAskOpen
 	case "read.artifact":
 		res := broker.Snapshot{Tasks: []broker.TaskSnapshot{t}}.Result()
-		return m, openArtifact(res.Artifacts, digit(key), m.snap.CWD)
+		return m, openArtifact(res.Artifacts, n, m.snap.CWD)
 	case "act.down":
 		m.moveEntry(1)
 	case "act.up":

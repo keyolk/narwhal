@@ -41,30 +41,14 @@ func keyMsgOf(t *testing.T, k string) tea.KeyMsg {
 	return msg
 }
 
-// One key, one action per context; nothing inner hides quit or help; and an
-// uppercase key a Korean input source cannot type always has a partner it
-// can (the run's G has end, Questions' S has s).
+// One key, one action per context; nothing inner hides quit or help; and
+// every action a Korean input source would need has a key it can type (the
+// run's G has end, Questions' S has s). The kit judges reachability per
+// action, so an uppercase key with a reachable partner is not reported.
 func TestKeymapHasNoConflicts(t *testing.T) {
 	for _, c := range defaultKeymap.Conflicts(keyStacks...) {
-		if c.Kind == keys.Unreachable && hasReachableAlternate(c) {
-			continue
-		}
 		t.Error(c)
 	}
-}
-
-func hasReachableAlternate(c keys.Conflict) bool {
-	for _, b := range defaultKeymap.Bindings() {
-		if b.Ctx != c.Ctx || b.Action != c.Actions[0] {
-			continue
-		}
-		for _, k := range b.Keys {
-			if k != c.Key && keys.ReachableUnderCJK(k) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // Every key the help lists for a screen runs that action on that screen:
@@ -283,5 +267,38 @@ func TestNeedsYouBandOnlyWhenActionable(t *testing.T) {
 	}
 	if got := ansi.Strip(m.viewTasks(40, 10)); !strings.Contains(got, "Graph ✗1") {
 		t.Errorf("graph title has no badge:\n%s", got)
+	}
+}
+
+// A numbered action is one binding on 1…9: the footer and the help show it
+// as "1-9", the handler counts from the key's position (so a rebinding to
+// other keys still picks the first thing with the first key), and the
+// palette, which cannot give it a number, leaves it out.
+func TestNumberedKeysShowAsARange(t *testing.T) {
+	m := testModel(3, 3)
+	m.width, m.height = 160, 30
+	m.detail = detailResult
+	if f := footerOf(m); !strings.Contains(f, "1-9 open a PR or file") {
+		t.Errorf("result footer: %q", f)
+	}
+	found := false
+	for _, sec := range defaultKeymap.Help(keys.Opts{}, m.screenStack()) {
+		for _, e := range sec.Entries {
+			if e.Action == "result.artifact" {
+				found = e.KeyLabel == "1-9"
+			}
+		}
+	}
+	if !found {
+		t.Error("the help does not list result.artifact as 1-9")
+	}
+	b, ok := defaultKeymap.Resolve(m.screenStack(), keyMsgOf(t, "3"), keys.Opts{})
+	if !ok || b.Action != "result.artifact" || b.KeyIndex(keyMsgOf(t, "3"))+1 != 3 {
+		t.Errorf("3 resolves to %q at index %d", b.Action, b.KeyIndex(keyMsgOf(t, "3")))
+	}
+	for _, e := range m.paletteEntries() {
+		if e.Action == "result.artifact" || e.Action == "palette" {
+			t.Errorf("the palette offers %s", e.Action)
+		}
 	}
 }

@@ -99,10 +99,14 @@ var keyStacks = [][]keys.Ctx{
 
 var digits = []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
-// keyArgActions take the pressed key as their argument (a digit picks the
-// n-th thing), so the palette, which has no key to give them, leaves them out.
-var keyArgActions = map[string]bool{
-	"result.artifact": true, "flow.artifact": true, "read.artifact": true, "questions.pick": true,
+// numberedKeys binds 1…9 to one action that picks the n-th thing; the handler
+// reads n from Binding.KeyIndex, so a rebinding to other keys still counts
+// from one. The keys show as "1-9", and the palette, which has no key to
+// give the action, leaves it out.
+func numberedKeys(bd keys.Binding) keys.Binding {
+	bd.Keys = digits
+	bd.KeyLabel, bd.NoPalette = "1-9", true
+	return bd
 }
 
 func b(ctx keys.Ctx, group, action, help string, ks ...string) keys.Binding {
@@ -121,6 +125,8 @@ func labels(bd keys.Binding, l map[string]string) keys.Binding { bd.Labels = l; 
 
 func short(bd keys.Binding, s string) keys.Binding { bd.Short = s; return bd }
 
+func noPalette(bd keys.Binding) keys.Binding { bd.NoPalette = true; return bd }
+
 // defaultKeymap is the table. Footer priorities reproduce the order the
 // hand-written footers had: what enter does first, then the pane's own keys,
 // then the run's, with back last.
@@ -134,7 +140,7 @@ func bindings() []keys.Binding {
 	help := foot(b(ctxGlobal, grpApp, "help", "this key reference", "?"), 1)
 	help.Pinned, help.Short = true, "help"
 	add(help,
-		b(ctxGlobal, grpApp, "palette", "find any action by name", ":"),
+		noPalette(b(ctxGlobal, grpApp, "palette", "find any action by name", ":")),
 		b(ctxGlobal, grpApp, "quit", "quit", "ctrl+c"),
 	)
 
@@ -240,7 +246,7 @@ func bindings() []keys.Binding {
 		short(foot(b(ctxResult, grpResult, "result.outputs", "outputs, each read its own way", "o", "O"), 1), "outputs"),
 		short(foot(b(ctxResult, grpResult, "result.report", "write the run's report", "e"), 2), "write report"),
 		short(foot(b(ctxResult, grpResult, "result.copy", "copy the answer", "y"), 3), "copy answer"),
-		short(foot(b(ctxResult, grpResult, "result.artifact", "open a PR or a file by its number", digits...), 4), "open a PR or file"),
+		short(foot(numberedKeys(b(ctxResult, grpResult, "result.artifact", "open a PR or a file by its number")), 4), "open a PR or file"),
 		short(foot(b(ctxResult, grpResult, "result.next", "the next step, planned with what came before", "n", "i"), 5), "next step"),
 
 		short(foot(b(ctxTask, grpTask, "task.steer", "an instruction for this task (reopens it when finished)", "i"), 1), "instruct"),
@@ -259,7 +265,7 @@ func bindings() []keys.Binding {
 		b(ctxTaskRead, grpTask, "read.bottom", "bottom", "G", "end"),
 		short(foot(b(ctxTaskRead, grpTask, "task.outputs", "this run's outputs, this task's first", "o"), 6), "outputs"),
 		short(foot(b(ctxTaskRead, grpTask, "read.request", "open or fold the request", "enter"), 7), "the request"),
-		short(foot(b(ctxTaskRead, grpTask, "read.artifact", "open a PR or a file by its number", digits...), 8), "open a PR or file"),
+		short(foot(numberedKeys(b(ctxTaskRead, grpTask, "read.artifact", "open a PR or a file by its number")), 8), "open a PR or file"),
 
 		grouped(b(ctxTaskAct, grpTask, "act.down", "next entry", "j", "down"), 2, "entry"),
 		grouped(b(ctxTaskAct, grpTask, "act.up", "previous entry", "k", "up"), 2, "entry"),
@@ -296,7 +302,7 @@ func bindings() []keys.Binding {
 		b(ctxFlow, grpFlow, "flow.pageup", "read back in the step's detail", "K", "ctrl+u", "pgup"),
 		b(ctxFlow, grpFlow, "flow.top", "first step", "g", "home"),
 		b(ctxFlow, grpFlow, "flow.bottom", "last step", "G", "end"),
-		b(ctxFlow, grpFlow, "flow.artifact", "open the step's PR or file by its number", digits...),
+		numberedKeys(b(ctxFlow, grpFlow, "flow.artifact", "open the step's PR or file by its number")),
 		labels(foot(b(ctxFlow, grpFlow, "flow.back", "back: the widened detail, the step list, then home", "esc"), 13),
 			map[string]string{"": "home", "detail": "steps", "zoomed": "narrow"}),
 		flowQuit,
@@ -335,7 +341,7 @@ func bindings() []keys.Binding {
 	add(
 		grouped(b(ctxQuestions, grpQuest, "questions.down", "next question", "j", "down"), 1, "question"),
 		grouped(b(ctxQuestions, grpQuest, "questions.up", "previous question", "k", "up"), 1, "question"),
-		foot(b(ctxQuestions, grpQuest, "questions.pick", "pick an option", digits...), 2),
+		foot(numberedKeys(b(ctxQuestions, grpQuest, "questions.pick", "pick an option")), 2),
 		foot(b(ctxQuestions, grpQuest, "questions.answer", "answer", "enter", "a"), 3),
 		foot(b(ctxQuestions, grpQuest, "questions.assume", "as assumed", "y"), 4),
 		foot(b(ctxQuestions, grpQuest, "questions.clear", "clear", "x", "backspace"), 5),

@@ -126,16 +126,10 @@ func (m *tuiModel) openPalette() {
 }
 
 // paletteEntries are the actions the screen under the palette can run,
-// matching what has been typed. Digit actions need the digit, which a
-// palette has no way to give, so they are left to their keys.
+// matching what has been typed. Numbered actions need a digit, which a
+// palette has no way to give, so they are NoPalette and left to their keys.
 func (m tuiModel) paletteEntries() []keys.Entry {
-	var all []keys.Entry
-	for _, e := range m.keymap().Entries(m.screenStack(), m.keyOpts()) {
-		if !keyArgActions[e.Action] && e.Action != "palette" {
-			all = append(all, e)
-		}
-	}
-	return keys.Filter(all, string(m.paletteQuery))
+	return keys.Filter(m.keymap().Entries(m.screenStack(), m.keyOpts()), string(m.paletteQuery))
 }
 
 // paletteRows is how many matches the box lists at once.
@@ -200,7 +194,7 @@ func (m tuiModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if bd, ok := m.bindingIn(m.screenStack(), es[m.paletteSel].Action); ok {
-			return m.do(bd, bd.Key())
+			return m.do(bd, 1)
 		}
 		return m, nil
 	}

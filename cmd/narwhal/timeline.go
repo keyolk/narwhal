@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/chart"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -265,6 +266,9 @@ func (m tuiModel) renderTimeline(width, height int) string {
 		if it.scene != nil && firstScene {
 			firstScene = false
 			lines = append(lines, "", " "+styTitle.Render("흐름"))
+			for _, l := range taskLanes(m.timelineScenes(), width-4) {
+				lines = append(lines, "   "+l)
+			}
 		}
 		starts[i] = len(lines)
 		var block []string
@@ -321,6 +325,104 @@ func (m tuiModel) renderTimeline(width, height int) string {
 		rows = append(rows, render.Truncate(l, width))
 	}
 	return padRows(rows, width, height)
+}
+
+// taskLaneCap bounds the lanes drawn above the scenes; a run with more
+// tasks shows its first ones, the scenes below still list every task.
+const taskLaneCap = 8
+
+// taskLanes draws each task's course on a shared clock, one lane per task
+// and a time ruler under them, so which tasks overlapped and which one ran
+// long reads at a glance before the scenes tell it in words. Nothing is
+// drawn for fewer than two tasks or too narrow a pane: one lane says
+// nothing the scene below does not.
+func taskLanes(scenes []broker.Scene, width int) []string {
+	var now time.Time
+	var spans []chart.Span
+	seen := map[string]bool{}
+	for _, sc := range scenes {
+		if sc.Kind == broker.SceneNow {
+			now = sc.Start
+		}
+		if sc.Kind != broker.SceneTask || len(sc.Who) == 0 || sc.Start.IsZero() {
+			continue
+		}
+		if !seen[sc.Who[0]] && len(seen) == taskLaneCap {
+			continue
+		}
+		seen[sc.Who[0]] = true
+		spans = append(spans, chart.Span{Start: sc.Start, End: sc.End, Kind: laneKind(sc.Mark), Label: sc.Who[0]})
+	}
+	if len(seen) < 2 || width < 30 {
+		return nil
+	}
+	from, to := spans[0].Start, now
+	for i, s := range spans {
+		// An open scene is still running: it reaches now.
+		if s.End.IsZero() || s.End.Before(s.Start) {
+			spans[i].End = now
+		}
+		from = minTime(from, s.Start)
+		to = maxTime(to, spans[i].End)
+	}
+	if !to.After(from) {
+		return nil
+	}
+	// A hair past the last end, so the newest work lands inside the window
+	// rather than on its exclusive edge.
+	to = to.Add(to.Sub(from) / 50)
+	o := chart.TimelineOpts{
+		Look: chart.Look{Glyphs: chartGlyphs, Styles: chart.Styles{
+			Line: styDim, Muted: styDim, Now: styCyan,
+			Info: styCyan, OK: styGreen, Warn: styYellow, Error: styRedBold,
+		}},
+		Now:      now,
+		LabelMax: 14,
+		Ruler:    rulerStep(to.Sub(from), width),
+	}
+	return chart.Lanes(spans, from, to, width, o)
+}
+
+// laneKind colours a lane as its scene's mark does.
+func laneKind(mark string) chart.Kind {
+	switch mark {
+	case "✓":
+		return chart.OK
+	case "✗":
+		return chart.Error
+	case "⚠", "»":
+		return chart.Warn
+	case "▸":
+		return chart.Info
+	}
+	return chart.Normal
+}
+
+// rulerStep is the smallest round tick step that leaves room for a label
+// every ten cells or so.
+func rulerStep(span time.Duration, width int) time.Duration {
+	steps := []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 10 * time.Minute,
+		15 * time.Minute, 30 * time.Minute, time.Hour, 2 * time.Hour, 6 * time.Hour, 12 * time.Hour, 24 * time.Hour}
+	for _, s := range steps {
+		if int(span/s) <= max(1, width/10) {
+			return s
+		}
+	}
+	return steps[len(steps)-1]
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 // timelineGlyph gives each kind the weight it carries on the graph: done

@@ -129,3 +129,42 @@ func TestATimelineLineIsCorrectedFromWhereItIs(t *testing.T) {
 		t.Errorf("i on the line: steering=%v buf=%q", m.steering, m.steerBuf.Value())
 	}
 }
+
+// The flow section draws each task's course on one clock: a lane per task,
+// in the order the scenes list them, and a ruler under them. One task, or a
+// pane too narrow for a lane, draws nothing.
+func TestTheTimelineDrawsTaskLanes(t *testing.T) {
+	at := time.Date(2026, 10, 8, 10, 0, 0, 0, time.Local)
+	scenes := []broker.Scene{
+		{Kind: broker.SceneTask, Who: []string{"schema"}, Mark: "✓", Start: at, End: at.Add(4 * time.Minute)},
+		{Kind: broker.SceneTask, Who: []string{"api"}, Mark: "▸", Start: at.Add(2 * time.Minute)},
+		{Kind: broker.SceneNow, Start: at.Add(10 * time.Minute), End: at.Add(10 * time.Minute)},
+	}
+	lanes := taskLanes(scenes, 60)
+	if len(lanes) != 3 {
+		t.Fatalf("want 2 lanes and a ruler, got %d:\n%s", len(lanes), strings.Join(lanes, "\n"))
+	}
+	for i, l := range lanes {
+		if w := ansi.StringWidth(l); w != 60 {
+			t.Errorf("row %d is %d cells, want 60: %q", i, w, ansi.Strip(l))
+		}
+	}
+	if !strings.HasPrefix(ansi.Strip(lanes[0]), "schema") || !strings.HasPrefix(ansi.Strip(lanes[1]), "api") {
+		t.Errorf("lanes out of scene order:\n%s", ansi.Strip(strings.Join(lanes, "\n")))
+	}
+	if !strings.Contains(ansi.Strip(lanes[2]), "10:04") {
+		t.Errorf("ruler has no tick:\n%s", ansi.Strip(lanes[2]))
+	}
+	// schema ended at 10:04: its lane is empty past the middle, while api,
+	// still open, runs up to now.
+	sch, api := []rune(ansi.Strip(lanes[0])), []rune(ansi.Strip(lanes[1]))
+	if sch[len(sch)-5] == api[len(api)-5] {
+		t.Errorf("a finished task's lane reaches now:\n%s\n%s", string(sch), string(api))
+	}
+	if got := taskLanes(scenes[:1], 60); got != nil {
+		t.Errorf("one task drew lanes: %q", got)
+	}
+	if got := taskLanes(scenes, 20); got != nil {
+		t.Errorf("a narrow pane drew lanes: %q", got)
+	}
+}

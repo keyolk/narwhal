@@ -40,7 +40,10 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/agents/$NARWHAL_AGENT_TOKEN/ask \
      -H "Content-Type: application/json" \
-     -d '{"question":"Should this cover the delight stack too, or sendbird only?","assumed":"sendbird only","blocking":true,"options":["sendbird only","both stacks"],"context":"The request names alerting rules; both stacks have them, in separate repos."}'
+     -d '{"question":"Should this cover the delight stack too, or sendbird only?","assumed":"sendbird only","blocking":true,"options":["sendbird only","both stacks"],"recommended":1,"context":"The request names alerting rules; both stacks have them, in separate repos."}'
+
+   recommended is the option you would pick (1-based): the person sees it
+   marked and can take it with one press. Say why in context.
 
    The call records the question and returns at once. Ask them all, then
    STOP: post PLAN_WAIT to the planning thread and end your turn without

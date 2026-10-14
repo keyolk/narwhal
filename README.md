@@ -159,6 +159,15 @@ reading a full message or watching a worker. Radio messages are long — that
 is the point of them — so the list truncates and the detail view is where
 you actually read one.
 
+Every key is a named action in one table: the footer, the `?` reference
+(drawn over the screen, scrolled with `j`/`k`) and the `:` palette (find an
+action by name and run it) are all read from it. Rebind actions in
+`~/.config/narwhal/keys.yaml` — `run.zoom: [x]`, or per screen with
+`flow.flow.down: [n]`; a file that would hide `?` or bind one key twice is
+ignored with a toast. The layout you set (focused pane, right column's tab,
+boxes or lanes, graph width, radio or brief) is kept in
+`$XDG_STATE_HOME/narwhal/ui.json`.
+
 `s` opens the selected task's session: a live activity feed of what the
 worker is doing — its reasoning, each tool call, and a clipped result —
 read from the session transcript and following new events until you scroll

@@ -10,12 +10,14 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/tmux"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -34,10 +36,17 @@ func (m *tuiModel) followTask(id string) {
 	m.taskTab = taskTabActivity
 }
 
-// tmuxPlan is the tmux commands that open the run's working tasks, one
-// pane each, in a new window named after the run. Without working tasks
-// the plan is empty.
-func tmuxPlan(self, runID, title, cwd string, tasks []broker.TaskSnapshot) [][]string {
+// tmuxLayout is what w opens: a window named after the run, and the shell
+// command of each pane in it, one per working task.
+type tmuxLayout struct {
+	name  string
+	cwd   string
+	panes []string
+}
+
+// planPanes lays out the run's working tasks, one pane each, in a window
+// named after the run. Without working tasks there are no panes.
+func planPanes(self, runID, title, cwd string, tasks []broker.TaskSnapshot) tmuxLayout {
 	var ids []string
 	for _, t := range tasks {
 		if t.State == broker.TaskDispatched {
@@ -47,41 +56,30 @@ func tmuxPlan(self, runID, title, cwd string, tasks []broker.TaskSnapshot) [][]s
 	if len(ids) > tmuxPlanCap {
 		ids = ids[:tmuxPlanCap]
 	}
-	if len(ids) == 0 {
-		return nil
-	}
-	follow := func(id string) string {
-		return shellQuote(self) + " monitor --run " + shellQuote(runID) + " --task " + shellQuote(id)
-	}
 	name := "nw:" + title
 	if r := []rune(name); len(r) > 24 {
 		name = string(r[:24])
 	}
-	cmds := [][]string{{"tmux", "new-window", "-n", name, "-c", cwd, follow(ids[0])}}
-	for _, id := range ids[1:] {
-		cmds = append(cmds, []string{"tmux", "split-window", "-t", name, "-c", cwd, follow(id)})
-		// Retile after each split, or a fourth split runs out of room.
-		cmds = append(cmds, []string{"tmux", "select-layout", "-t", name, "tiled"})
+	l := tmuxLayout{name: name, cwd: cwd}
+	for _, id := range ids {
+		l.panes = append(l.panes, tmux.ShellQuote(self)+" monitor --run "+tmux.ShellQuote(runID)+" --task "+tmux.ShellQuote(id))
 	}
-	return cmds
+	return l
 }
 
-// shellQuote quotes a word for sh, the way tmux runs a pane's command.
-func shellQuote(s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`;&|<>()*?[]#~") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+// tmuxPanesMsg is how opening the panes went. gen drops a result that a
+// later press of w has superseded.
+type tmuxPanesMsg struct {
+	gen  uint64
+	text string
+	err  error
 }
 
-// openTmuxPanes runs the plan for the watched run.
-func (m tuiModel) openTmuxPanes() tea.Cmd {
+// openTmuxPanes opens the watched run's working tasks as panes. The tmux
+// calls run off the UI loop, in one command, so a second press cannot land
+// between the window and its splits and leave a half-built window behind.
+func (m *tuiModel) openTmuxPanes() tea.Cmd {
 	key := m.keyName("run.tmux")
-	if os.Getenv("TMUX") == "" {
-		return func() tea.Msg {
-			return noticeMsg{err: fmt.Errorf("not inside tmux — %s opens panes in the current tmux session", key)}
-		}
-	}
 	self, err := os.Executable()
 	if err != nil {
 		self = "narwhal"
@@ -90,36 +88,61 @@ func (m tuiModel) openTmuxPanes() tea.Cmd {
 	if f := strings.Fields(title); len(f) > 0 {
 		title = f[0]
 	}
-	plan := tmuxPlan(self, m.runID(), title, m.snap.CWD, m.snap.Tasks)
-	if len(plan) == 0 {
+	l := planPanes(self, m.runID(), title, m.snap.CWD, m.snap.Tasks)
+	if len(l.panes) == 0 {
 		return func() tea.Msg { return noticeMsg{err: fmt.Errorf("no task is working — nothing to open")} }
 	}
-	name := plan[0][3]
+	var gen uint64
+	m.tmuxGen, gen = m.tmuxGen.Next()
+	tm := m.tm
 	return func() tea.Msg {
-		// The window may still be open from an earlier w. A second one of
-		// the same name would leave every -t ambiguous, so go to it.
-		if out, err := runTmux([]string{"tmux", "list-windows", "-F", "#{window_name}"}); err == nil {
-			for _, w := range strings.Split(out, "\n") {
-				if strings.TrimSpace(w) == name {
-					if out, err := runTmux([]string{"tmux", "select-window", "-t", name}); err != nil {
-						return noticeMsg{err: fmt.Errorf("select-window: %v %s", err, strings.TrimSpace(out))}
-					}
-					return noticeMsg{text: "window " + name + " is already open — switched to it (close it and press " + key + " to rebuild)"}
-				}
-			}
+		text, err := openPanes(context.Background(), tm, l, key)
+		if errors.Is(err, tmux.ErrNotInTmux) {
+			err = fmt.Errorf("not inside tmux — %s opens panes in the current tmux session", key)
 		}
-		for _, c := range plan {
-			if out, err := runTmux(c); err != nil {
-				return noticeMsg{err: fmt.Errorf("%s: %v %s", strings.Join(c[:2], " "), err, strings.TrimSpace(out))}
-			}
-		}
-		n := (len(plan) + 1) / 2
-		return noticeMsg{text: fmt.Sprintf("opened %d panes in window %s", n, plan[0][3])}
+		return tmuxPanesMsg{gen: gen, text: text, err: err}
 	}
 }
 
-// runTmux runs one tmux command. A variable so tests can record instead.
-var runTmux = func(c []string) (string, error) {
-	out, err := exec.Command(c[0], c[1:]...).CombinedOutput()
-	return string(out), err
+// openPanes opens l in the current tmux session and switches to it. Every
+// call after the first addresses the new window by its pane's ID: the
+// window's name may be shared with a window the user made.
+func openPanes(ctx context.Context, tm tmux.Client, l tmuxLayout, key string) (string, error) {
+	// The window may still be open from an earlier w. A second one of the
+	// same name would be two of the same thing, so go to it.
+	loc, err := tm.Current(ctx)
+	if err != nil {
+		return "", err
+	}
+	panes, err := tm.Panes(ctx, tmux.PaneFilter{Target: loc.SessionID})
+	if err != nil {
+		return "", err
+	}
+	for _, p := range panes {
+		if p.WindowName == l.name {
+			if err := tm.SelectWindow(ctx, p.WindowID); err != nil {
+				return "", err
+			}
+			return "window " + l.name + " is already open — switched to it (close it and press " + key + " to rebuild)", nil
+		}
+	}
+	first, err := tm.NewWindow(ctx, "", tmux.WindowOpts{Name: l.name, Cwd: l.cwd, Command: tmux.Command{Shell: l.panes[0]}})
+	if err != nil {
+		return "", err
+	}
+	for _, sh := range l.panes[1:] {
+		if _, err := tm.SplitWindow(ctx, first, tmux.SplitOpts{Cwd: l.cwd, Command: tmux.Command{Shell: sh}}); err != nil {
+			return "", err
+		}
+		// Retile after each split, or a fourth split runs out of room.
+		// select-layout has no typed call; the target is still an ID.
+		if _, err := tm.Run("select-layout", "-t", first, "tiled"); err != nil {
+			return "", err
+		}
+	}
+	// The window opened in the background (-d); bring it up as w always did.
+	if err := tm.SelectWindow(ctx, first); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("opened %d panes in window %s", len(l.panes), l.name), nil
 }

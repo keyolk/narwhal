@@ -29,11 +29,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/async"
 	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/tmux"
 	"github.com/keyolk/tuikit/toast"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -286,6 +288,10 @@ type tuiModel struct {
 	// pinnedTask is the one task a pane opened by w shows; leaving its
 	// view quits. See tmuxpanes.go.
 	pinnedTask string
+	// tm is the tmux server w opens panes in; tmuxGen numbers each press
+	// of w so only the latest one's outcome is shown.
+	tm      tmux.Client
+	tmuxGen async.Gen
 
 	// flowDetail puts j/k on the step's detail rather than the step list,
 	// and flowZoom gives the detail the full width.
@@ -321,6 +327,7 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 	m := tuiModel{
 		interval:    interval,
 		client:      &http.Client{Timeout: 5 * time.Second},
+		tm:          tmux.New(nil),
 		focus:       focusRadio,
 		timelineSel: timelineFollow,
 		taskSel:     -1,
@@ -670,6 +677,11 @@ func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case noticeMsg:
 		m.setNotice(msg.text, msg.err)
+		return m, nil
+	case tmuxPanesMsg:
+		if m.tmuxGen.Is(msg.gen) {
+			m.setNotice(msg.text, msg.err)
+		}
 		return m, nil
 	case answersSentMsg:
 		return m.answersSent(msg)

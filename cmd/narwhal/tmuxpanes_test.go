@@ -1,84 +1,136 @@
 package main
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/tmux"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
 )
 
 // One pane per working task, in a window named after the run, each
-// running the monitor pinned to its task; the layout is retiled after
-// every split.
-func TestTheTmuxPlanOpensAPanePerWorkingTask(t *testing.T) {
+// running the monitor pinned to its task.
+func TestTheTmuxLayoutHasAPanePerWorkingTask(t *testing.T) {
 	tasks := []broker.TaskSnapshot{
 		{ID: "api", State: broker.TaskDispatched},
 		{ID: "done", State: broker.TaskCompleted},
 		{ID: "it's", State: broker.TaskDispatched},
 	}
-	plan := tmuxPlan("/usr/local/bin/narwhal", "r1", "lock", "/src/my repo", tasks)
-	var lines []string
-	for _, c := range plan {
-		lines = append(lines, strings.Join(c, " | "))
-	}
+	l := planPanes("/usr/local/bin/narwhal", "r1", "lock", "/src/my repo", tasks)
 	want := []string{
-		"tmux | new-window | -n | nw:lock | -c | /src/my repo | /usr/local/bin/narwhal monitor --run r1 --task api",
-		"tmux | split-window | -t | nw:lock | -c | /src/my repo | /usr/local/bin/narwhal monitor --run r1 --task 'it'\\''s'",
-		"tmux | select-layout | -t | nw:lock | tiled",
+		"/usr/local/bin/narwhal monitor --run r1 --task api",
+		"/usr/local/bin/narwhal monitor --run r1 --task 'it'\\''s'",
 	}
-	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
-		t.Errorf("plan:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	if l.name != "nw:lock" || l.cwd != "/src/my repo" || strings.Join(l.panes, "\n") != strings.Join(want, "\n") {
+		t.Errorf("layout %+v\nwant panes:\n%s", l, strings.Join(want, "\n"))
 	}
-	if tmuxPlan("n", "r1", "x", "/", []broker.TaskSnapshot{{ID: "a", State: broker.TaskCompleted}}) != nil {
-		t.Error("a plan for a run with nothing working")
+	if l := planPanes("n", "r1", "x", "/", []broker.TaskSnapshot{{ID: "a", State: broker.TaskCompleted}}); len(l.panes) != 0 {
+		t.Error("panes for a run with nothing working")
 	}
 	many := make([]broker.TaskSnapshot, 10)
 	for i := range many {
 		many[i] = broker.TaskSnapshot{ID: string(rune('a' + i)), State: broker.TaskDispatched}
 	}
-	if p := tmuxPlan("n", "r", "x", "/", many); len(p) != 1+2*(tmuxPlanCap-1) {
-		t.Errorf("%d commands for 10 tasks, want the cap of %d panes", len(p), tmuxPlanCap)
+	if l := planPanes("n", "r", "x", "/", many); len(l.panes) != tmuxPlanCap {
+		t.Errorf("%d panes for 10 tasks, want the cap of %d", len(l.panes), tmuxPlanCap)
 	}
 }
 
-// w runs the plan inside tmux, and says why not outside it.
-func TestWOpensThePanes(t *testing.T) {
-	var ran [][]string
-	saved := runTmux
-	runTmux = func(c []string) (string, error) { ran = append(ran, c); return "", nil }
-	t.Cleanup(func() { runTmux = saved })
+// toastText is every toast's text, newest last.
+func toastText(m tuiModel) string {
+	var b []string
+	for _, t := range m.toasts.Items() {
+		b = append(b, t.Text)
+	}
+	return strings.Join(b, "\n")
+}
 
+// paneRow is one list-panes row as tmux.PaneFormat asks tmux to print it.
+func paneRow(id, window, session, name string) string {
+	fixed := []string{id, window, session, "1", "0", "100", "1", "1", "80", "24"}
+	var b strings.Builder
+	b.WriteString(strings.Join(fixed, "\t"))
+	for _, f := range []string{"main", name, "/", "zsh", ""} {
+		fmt.Fprintf(&b, "\t%d:%s", len(f), f)
+	}
+	return b.String() + "\n"
+}
+
+// w opens the window off the UI loop, addresses every later call by the
+// new pane's ID, retiles after each split, and says why not outside tmux.
+func TestWOpensThePanes(t *testing.T) {
 	m := fixtureRun(t)
 	m.live = store.LiveRun{RunID: m.snap.RunID, Prompt: "replay-safe lock API"}
-	t.Setenv("TMUX", "")
-	_, cmd := m.Update(keyMsg("w"))
-	if msg := cmd().(noticeMsg); msg.err == nil || !strings.Contains(msg.err.Error(), "not inside tmux") {
-		t.Errorf("outside tmux: %+v", msg)
+	m.snap.Tasks = append(m.snap.Tasks, broker.TaskSnapshot{ID: "second", State: broker.TaskDispatched})
+
+	m.tm = tmux.Client{Runner: tmux.NewFake().On("display-message", "", tmux.ErrNotInTmux)}
+	next, cmd := m.Update(keyMsg("w"))
+	m = next.(tuiModel)
+	next, _ = m.Update(cmd())
+	if n := toastText(next.(tuiModel)); !strings.Contains(n, "not inside tmux") {
+		t.Errorf("outside tmux: notice %q", n)
 	}
-	t.Setenv("TMUX", "/tmp/x,1,0")
-	_, cmd = m.Update(keyMsg("w"))
-	msg := cmd().(noticeMsg)
-	if msg.err != nil || len(ran) != 2 || ran[0][1] != "list-windows" || ran[1][1] != "new-window" ||
-		!strings.Contains(ran[1][6], "--task api") {
-		t.Errorf("inside tmux: %+v ran %v", msg, ran)
+
+	f := tmux.NewFake().
+		On("display-message", "$1\t@1\t%1", nil).
+		On("list-panes", paneRow("%1", "@1", "$1", "zsh"), nil).
+		On("new-window", "%7\n", nil).
+		On("split-window", "%8\n", nil).
+		On("select-layout", "", nil).
+		On("select-window", "", nil)
+	m.tm = tmux.Client{Runner: f}
+	next, cmd = m.Update(keyMsg("w"))
+	m = next.(tuiModel)
+	if len(f.Calls()) != 0 {
+		t.Fatalf("w ran tmux on the UI loop: %q", f.CallLines())
+	}
+	msg := cmd().(tmuxPanesMsg)
+	if msg.err != nil || !strings.Contains(msg.text, "opened 2 panes") {
+		t.Fatalf("inside tmux: %+v", msg)
+	}
+	calls := f.Calls()
+	var subs []string
+	for _, c := range calls {
+		subs = append(subs, c[0])
+	}
+	if got := strings.Join(subs, " "); got != "display-message list-panes new-window split-window select-layout select-window" {
+		t.Fatalf("calls: %s", got)
+	}
+	if nw := strings.Join(calls[2], " "); !strings.Contains(nw, "-n nw:replay-safe") || !strings.Contains(nw, "--task") {
+		t.Errorf("new-window: %s", nw)
+	}
+	for _, c := range calls[3:] {
+		if !slices.Contains(c, "%7") {
+			t.Errorf("%s does not address the new pane %%7: %q", c[0], c)
+		}
+	}
+
+	// A stale result — a later press superseded it — is dropped.
+	m2, _ := m.Update(keyMsg("w"))
+	stale, _ := m2.(tuiModel).Update(msg)
+	if n := toastText(stale.(tuiModel)); strings.Contains(n, "opened") {
+		t.Errorf("a superseded w's result was shown: %q", n)
+	}
+	fresh, _ := m.Update(msg)
+	if n := toastText(fresh.(tuiModel)); !strings.Contains(n, "opened 2 panes") {
+		t.Errorf("the current w's result was not shown: %q", n)
 	}
 
 	// Pressed again while the window is open: switch to it, open nothing.
-	ran = nil
-	runTmux = func(c []string) (string, error) {
-		ran = append(ran, c)
-		if c[1] == "list-windows" {
-			return "zsh\nnw:replay-safe\n", nil
-		}
-		return "", nil
-	}
+	f = tmux.NewFake().
+		On("display-message", "$1\t@1\t%1", nil).
+		On("list-panes", paneRow("%1", "@1", "$1", "zsh")+paneRow("%7", "@4", "$1", "nw:replay-safe"), nil).
+		On("select-window", "", nil)
+	m.tm = tmux.Client{Runner: f}
 	_, cmd = m.Update(keyMsg("w"))
-	msg = cmd().(noticeMsg)
-	if len(ran) != 2 || ran[1][1] != "select-window" || !strings.Contains(msg.text, "already open") {
-		t.Errorf("second w: %+v ran %v", msg, ran)
+	msg = cmd().(tmuxPanesMsg)
+	if got := f.CallLines(); len(got) != 3 || !strings.HasPrefix(got[2], "select-window -t @4") || !strings.Contains(msg.text, "already open") {
+		t.Errorf("second w: %+v ran %q", msg, got)
 	}
 }
 

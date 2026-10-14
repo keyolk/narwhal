@@ -213,25 +213,25 @@ func TestResultActions(t *testing.T) {
 	m := flowModel(t)
 	m.snap, _ = store.LoadRun("b2")
 	m.live = store.LiveRun{RunID: "b2", Flow: "p1"}
-	m.detail = detailResult
-	_, cmd, ok := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
-	if !ok || cmd == nil {
+	m.detail, m.picker = detailResult, false
+	cmd := keyCmd(m, "e")
+	if cmd == nil {
 		t.Fatal("e did nothing")
 	}
 	msg := cmd().(noticeMsg)
 	if msg.err != nil || !strings.HasSuffix(msg.text, "b2.md") {
 		t.Errorf("export: %+v", msg)
 	}
-	if _, cmd, ok := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")}); !ok || cmd == nil {
+	if cmd := keyCmd(m, "1"); cmd == nil {
 		t.Error("1 did not open the first PR")
 	}
 	// 2 is the file, which is not on disk here: it says so.
-	if _, cmd, _ := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")}); cmd == nil {
+	if cmd := keyCmd(m, "2"); cmd == nil {
 		t.Error("2 did nothing for the file")
 	} else if msg, ok := cmd().(noticeMsg); !ok || msg.err == nil || !strings.Contains(msg.err.Error(), "internal/api/mw.go") {
 		t.Errorf("a missing file: %+v", msg)
 	}
-	if _, cmd, _ := m.handleResultKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")}); cmd != nil {
+	if cmd := keyCmd(m, "3"); cmd != nil {
 		t.Error("3 opened an artifact that does not exist")
 	}
 }
@@ -458,7 +458,7 @@ func TestDRemovesAStepOnASecondPress(t *testing.T) {
 	m := flowModel(t)
 	m.openFlow("p1", "b2")
 	press := func(m tuiModel, k string) tuiModel {
-		next, cmd := m.handleFlowKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
 		nm := next.(tuiModel)
 		if cmd != nil {
 			if msg, ok := cmd().(flowsMsg); ok {
@@ -511,7 +511,7 @@ func TestFlowCommandRemovesAStep(t *testing.T) {
 func TestHomeRemovesARunOnASecondD(t *testing.T) {
 	m := flowModel(t)
 	press := func(m tuiModel, k string) tuiModel {
-		next, cmd := m.handlePickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
+		next, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)})
 		nm := next.(tuiModel)
 		if cmd != nil {
 			if msg, ok := cmd().(flowsMsg); ok {

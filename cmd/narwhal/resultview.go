@@ -23,7 +23,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
-	"github.com/keyolk/narwhal/internal/store"
 )
 
 // noticeMsg is a one-line result of an action, shown in the footer.
@@ -184,46 +183,10 @@ func (m tuiModel) viewResult() string {
 		body = append(body, ansi.Truncate(line, w, "…"))
 	}
 
-	keys := "o outputs · e write report · y copy answer · 1-9 open a PR or file · n next step · esc back"
-	if m.composing {
-		keys = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
-	} else if n := m.noticeLine(w); n != "" {
-		keys = n + "\n" + styDim.Render(keys)
-	} else {
-		keys = styDim.Render(keys)
-	}
+	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	avail := max(1, m.height-1-lipgloss.Height(keys))
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 	return pinFooter(head+pos+"\n"+strings.Join(body[scroll:end], "\n"), keys, m.height)
-}
-
-// handleResultKey drives the result view's own keys; scrolling and esc
-// fall through to the detail handler.
-func (m tuiModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	k := msg.String()
-	switch {
-	case k == "e":
-		snap := m.snap
-		return m, func() tea.Msg {
-			path, err := store.ExportRun(store.DefaultExportDir(), snap, true)
-			return noticeMsg{text: "report written to " + path, err: err}
-		}, true
-	case k == "y":
-		res := m.snap.Result()
-		if res.Answer == "" {
-			m.setNotice("", fmt.Errorf("nothing to copy yet"))
-			return m, nil, true
-		}
-		return m, copyCmd(res.Answer, "the answer"), true
-	case len(k) == 1 && k[0] >= '1' && k[0] <= '9':
-		return m, openArtifact(m.snap.Result().Artifacts, int(k[0]-'0'), m.snap.CWD), true
-	case k == "n" || k == "i":
-		m.startCompose(m.flowOf(m.live))
-		return m, nil, true
-	case k == "o" || k == "O":
-		return m, m.openOutputs(""), true
-	}
-	return m, nil, false
 }
 
 // copyCmd puts text on the clipboard; what names it in the notice.
@@ -256,23 +219,4 @@ func openURLCmd(u string) tea.Cmd {
 		}
 		return noticeMsg{text: "opened " + prShort(u)}
 	}
-}
-
-// setNotice shows a one-line result for a few seconds.
-func (m *tuiModel) setNotice(text string, err error) {
-	m.notice, m.noticeErr, m.noticeAt = text, err, time.Now()
-}
-
-// noticeLine is the fresh notice, or "".
-func (m tuiModel) noticeLine(w int) string {
-	if time.Since(m.noticeAt) > 5*time.Second {
-		return ""
-	}
-	if m.noticeErr != nil {
-		return ansi.Truncate(styRedBold.Render("✗ ")+styRed.Render(m.noticeErr.Error()), w, "…")
-	}
-	if m.notice != "" {
-		return ansi.Truncate(styGreenBold.Render("✓ ")+m.notice, w, "…")
-	}
-	return ""
 }

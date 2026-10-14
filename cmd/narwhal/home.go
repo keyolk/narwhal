@@ -31,6 +31,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/keys"
 
 	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
@@ -128,18 +129,19 @@ func (m tuiModel) composeLine(w int) string {
 // while it is open, and arrives as typed: a request written in Korean must
 // arrive in Korean.
 func (m tuiModel) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
+	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxCompose}, msg, m.keyOpts())
+	switch b.Action {
+	case "compose.cancel":
 		m.composing = false
 		return m, nil
-	case tea.KeyCtrlC:
+	case "quit":
 		m.quit = true
 		return m, tea.Quit
-	case tea.KeyCtrlE:
+	case "compose.editor":
 		// What has been typed so far goes into the editor with it.
 		m.composing = false
 		return m, m.openEditor()
-	case tea.KeyEnter:
+	case "compose.start":
 		prompt := strings.TrimSpace(string(m.composeBuf))
 		if prompt == "" {
 			return m, nil
@@ -147,6 +149,8 @@ func (m tuiModel) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composing, m.starting = false, prompt
 		m.homeErr = nil
 		return m, m.submitRequest(prompt)
+	}
+	switch msg.Type {
 	case tea.KeyBackspace:
 		if n := len(m.composeBuf); n > 0 {
 			m.composeBuf = m.composeBuf[:n-1]
@@ -225,16 +229,16 @@ func (m tuiModel) viewHome() string {
 	if m.homeErr != nil {
 		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-4))
 	} else if n := m.noticeLine(w - 2); n != "" {
-		box += "\n " + n
+		box += "\n " + strings.ReplaceAll(n, "\n", "\n ")
 	}
 
-	keys := "enter open · n new request · e write in $EDITOR · u flow · d remove · j/k move · ? help · q quit"
+	stack := m.screenStack()
 	if m.composing {
-		keys = "enter start · ctrl-e open in $EDITOR · esc cancel"
+		stack = []keys.Ctx{ctxCompose}
 	}
 	top := head + "\n" + box + "\n"
 	room := m.height - strings.Count(top, "\n") - 2
-	return pinFooter(top+m.homeList(w, room), styDim.Render(keys), m.height)
+	return pinFooter(top+m.homeList(w, room), m.keyFooter(stack, w), m.height)
 }
 
 // homeList is the work, grouped by how it stands, in at most rows lines,

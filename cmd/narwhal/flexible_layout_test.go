@@ -202,15 +202,15 @@ func TestFooterHintsFollowTheFocus(t *testing.T) {
 	m := flexModel(t)
 
 	m.focus = focusTasks
-	if got := m.footerKeys(); !strings.Contains(got, "width") {
+	if got := footerOf(m); !strings.Contains(got, "width") {
 		t.Errorf("the graph hints do not mention resizing: %q", got)
 	}
 	m.focus = focusNode
-	if got := m.footerKeys(); !strings.Contains(got, "scroll") {
+	if got := footerOf(m); !strings.Contains(got, "scroll") {
 		t.Errorf("the node hints do not mention scrolling: %q", got)
 	}
 	m.focus = focusRadio
-	if got := m.footerKeys(); !strings.Contains(got, "follow") {
+	if got := footerOf(m); !strings.Contains(got, "follow") {
 		t.Errorf("the radio hints do not mention following: %q", got)
 	}
 }
@@ -219,7 +219,7 @@ func TestTheFooterSaysHowToUnzoom(t *testing.T) {
 	// A zoomed pane hides the others; the way back has to be on screen.
 	m := flexModel(t)
 	m.zoom = focusRadio
-	if got := stripEscapes(m.footerKeys()); !strings.Contains(got, "unzoom") {
+	if got := stripEscapes(footerOf(m)); !strings.Contains(got, "unzoom") {
 		t.Errorf("a zoomed view does not say how to get out: %q", got)
 	}
 }

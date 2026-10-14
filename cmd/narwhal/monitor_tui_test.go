@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -49,6 +50,17 @@ func press(m tuiModel, keys ...string) tuiModel {
 		m = next.(tuiModel)
 	}
 	return m
+}
+
+// keyCmd is the command a key returns, as Bubble Tea would run it.
+func keyCmd(m tuiModel, key string) tea.Cmd {
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)})
+	return cmd
+}
+
+// footerOf is the screen's key hints, as plain text.
+func footerOf(m tuiModel) string {
+	return ansi.Strip(m.keyFooter(m.screenStack(), m.width))
 }
 
 func TestTabCyclesEveryPane(t *testing.T) {

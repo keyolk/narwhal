@@ -42,26 +42,6 @@ func outputKindStyle(k outputKind) lipgloss.Style {
 	return styDim
 }
 
-// outputKeys is the footer for the selected kind: what o, e, y and enter do
-// to it.
-func outputKeys(o *output) string {
-	nav := "j/k choose · J/K page"
-	if o == nil {
-		return nav + " · esc back"
-	}
-	switch o.kind {
-	case outFile:
-		return nav + " · o $PAGER · e $EDITOR · y copy contents · esc back"
-	case outPR:
-		return nav + " · o/enter browser · y copy URL · esc back"
-	case outCommit:
-		return nav + " · o/enter full diff · y copy hash · esc back"
-	case outBranch:
-		return nav + " · o/enter log with files · y copy name · esc back"
-	}
-	return nav + " · enter go to the task · o $PAGER · y copy · esc back"
-}
-
 // detailCmd asks gh or git about a PR, a branch or a commit.
 func detailCmd(o output) tea.Cmd {
 	return func() tea.Msg {
@@ -348,10 +328,7 @@ func (m tuiModel) viewOutputs() string {
 	}
 	head := styDim.Render("‹ ") + styCyanBold.Render("Outputs") + styDim.Render(fmt.Sprintf("   %d from %s", len(outs), from))
 	title := "  " + truncate(oneLine(prompt), w-3)
-	keys := styDim.Render(ansi.Truncate(outputKeys(sel), w, "…"))
-	if n := m.noticeLine(w); n != "" {
-		keys = n + "\n" + keys
-	}
+	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	bodyH := max(3, m.height-2-lipgloss.Height(keys))
 	rows := max(1, bodyH-3)
 	lw := min(max(w/3, 28), 48)

@@ -237,71 +237,63 @@ func (m *tuiModel) fetchOutputDetails() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// handleOutputsKey drives the Outputs view: j/k choose, J/K and pages
-// read; o, e, y and enter do what suits the selected kind; esc goes back.
-func (m tuiModel) handleOutputsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// doOutputs runs the Outputs view's keys: j/k choose, J/K and pages read;
+// o, e, y and enter do what suits the selected kind; esc goes back.
+func (m tuiModel) doOutputs(action string) (tea.Model, tea.Cmd) {
 	outs := m.outputs()
 	rows := m.outputRows()
-	var sel *output
-	if m.outputSel < len(outs) {
-		sel = &outs[m.outputSel]
-	}
-	switch msg.String() {
-	case "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "esc", "q", "O":
+	sel := m.selectedOutput()
+	switch action {
+	case "outputs.back":
 		m.outputsView, m.outputsRuns = false, nil
-	case "j", "down":
+	case "outputs.down":
 		if m.outputSel < len(outs)-1 {
 			m.outputSel++
 			m.outputScroll = 0
 		}
 		// A live run records more as it goes.
-		return m, m.fetchOutputDetails()
-	case "k", "up":
+		cmd := m.fetchOutputDetails()
+		return m, cmd
+	case "outputs.up":
 		if m.outputSel > 0 {
 			m.outputSel--
 			m.outputScroll = 0
 		}
-	case "J", " ", "ctrl+d", "pgdown":
+	case "outputs.pagedown":
 		m.outputScroll += rows / 2
-	case "K", "ctrl+u", "pgup":
+	case "outputs.pageup":
 		m.outputScroll = max(0, m.outputScroll-rows/2)
-	case "g", "home":
+	case "outputs.top":
 		m.outputScroll = 0
-	case "G", "end":
+	case "outputs.bottom":
 		m.outputScroll = 1 << 20
-	case "o":
+	case "outputs.open":
 		if sel != nil {
 			return m, openOutput(*sel)
 		}
-	case "e":
+	case "outputs.edit":
 		if sel != nil && sel.kind == outFile {
 			return m, editOutput(sel.path)
 		}
-	case "y":
+	case "outputs.copy":
 		if sel != nil {
 			text, what := copyable(*sel)
 			return m, copyCmd(text, what)
 		}
-	case "enter":
+	case "outputs.enter":
 		if sel == nil {
 			return m, nil
-		}
-		if sel.kind == outRequest {
-			return m, openOutput(*sel)
 		}
 		if sel.kind != outAnswer && sel.kind != outReport {
 			return m, openOutput(*sel)
 		}
 		// To the task that gave it, in its run.
 		m.outputsView, m.outputsRuns = false, nil
-		if sel.run != m.snap.RunID {
-			m.flowView = false
-			return m, m.openRun(sel.run)
-		}
 		m.flowView = false
+		if sel.run != m.snap.RunID {
+			cmd := m.openRun(sel.run)
+			return m, cmd
+		}
 		m.openTask(sel.task, time.Time{})
 	}
 	return m, nil

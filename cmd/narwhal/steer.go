@@ -25,10 +25,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/keyolk/tuikit/keys"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	nd "github.com/keyolk/narwhal/internal/daemon"
@@ -42,9 +43,6 @@ type steerSentMsg struct {
 	reopened []string
 	err      error
 }
-
-// steerNoticeFor is how long the footer shows a send result.
-const steerNoticeFor = 4 * time.Second
 
 // steerRequest is one instruction ready to post.
 type steerRequest struct {
@@ -188,14 +186,15 @@ func (m *tuiModel) startStepSteer(run store.LiveRun, step int) {
 // handleSteerKey drives the open command line. Every key belongs to it
 // while it is open, so typing "q" writes a q rather than quitting.
 func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
+	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxSteer}, msg, m.keyOpts())
+	switch b.Action {
+	case "steer.cancel":
 		m.steering, m.steerBuf, m.steerStep = false, nil, nil
 		return m, nil
-	case tea.KeyCtrlC:
+	case "quit":
 		m.quit = true
 		return m, tea.Quit
-	case tea.KeyEnter:
+	case "steer.send":
 		line := string(m.steerBuf)
 		target := m.currentSteerTarget()
 		m.steering, m.steerBuf = false, nil
@@ -223,6 +222,8 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.sendSteer(req)
 		m.steerStep = nil
 		return m, cmd
+	}
+	switch msg.Type {
 	case tea.KeyBackspace:
 		if n := len(m.steerBuf); n > 0 {
 			m.steerBuf = m.steerBuf[:n-1]
@@ -236,11 +237,6 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
-}
-
-// steerNote shows a short result line in the footer.
-func (m *tuiModel) steerNote(text string, failed bool) {
-	m.steerMsg, m.steerFailed, m.steerAt = text, failed, time.Now()
 }
 
 // runIsLive reports whether the watched run has work going that an
@@ -279,21 +275,15 @@ func (m tuiModel) steerBar() string {
 	if m.composing {
 		return m.composeLine(w)
 	}
-	if n := m.noticeLine(w); n != "" {
-		return n
-	}
 	if m.steering {
-		hint := "   enter send · esc cancel · @task addresses one · ! urgent"
+		// The keys come from the table; what follows them is the line's
+		// syntax, which no key does.
+		syntax := " · @task addresses one · ! urgent"
 		if !m.currentSteerTarget().live() {
-			hint = "   enter resumes its worker with this · @task picks another task · esc cancel"
+			syntax = " · @task picks another task"
 		}
-		return fit(m.steerPrompt() + string(m.steerBuf) + styCyan.Render("▏") + styDim.Render(hint))
-	}
-	if m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor {
-		if m.steerFailed {
-			return fit(styRedBold.Render("✗ ") + styRed.Render(m.steerMsg))
-		}
-		return fit(styGreenBold.Render("✓ ") + m.steerMsg)
+		hint := m.keymap().Footer([]keys.Ctx{ctxSteer}, max(1, w), m.keyOpts(), footerStyle)
+		return fit(m.steerPrompt() + string(m.steerBuf) + styCyan.Render("▏") + styDim.Render("   "+hint+syntax))
 	}
 	if open, blocking := openQuestionCount(m.snap); open > 0 {
 		lead := styYellow.Render(fmt.Sprintf("? the workers asked %d question", open))

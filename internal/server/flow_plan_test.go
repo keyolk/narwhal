@@ -50,6 +50,15 @@ type seqController struct {
 
 func (c *seqController) NewRunID() string { c.n++; return fmt.Sprintf("r-%d", c.n) }
 
+// KnownRuns is every run this controller named.
+func (c *seqController) KnownRuns() []string {
+	var out []string
+	for i := 1; i <= c.n; i++ {
+		out = append(out, fmt.Sprintf("r-%d", i))
+	}
+	return out
+}
+
 func postPlan(t *testing.T, addr string, body map[string]any) (int, map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)

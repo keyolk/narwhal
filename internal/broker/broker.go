@@ -322,6 +322,9 @@ type Run struct {
 	// parentRun and flow place the run in a piece of work larger than
 	// itself. See Snapshot.Flow. Guarded by mu.
 	parentRun, flow string
+	// origin is the Claude Code session that started the run, when one
+	// did through the MCP tools: where to say the run needs the person.
+	origin Origin
 
 	// usageProbe measures a task's cost when it stops running. Nil in
 	// tests that do not care about accounting. Guarded by mu.
@@ -1237,11 +1240,13 @@ type Snapshot struct {
 	// plan, then build, then verify — was several unrelated runs, each
 	// starting from its prompt alone. Empty on a run that is not part of
 	// one, which is every run before flows existed.
-	Flow      string           `json:"flow,omitempty"`
-	ParentRun string           `json:"parent_run,omitempty"`
-	Tasks     []TaskSnapshot   `json:"tasks"`
-	Threads   []ThreadSnapshot `json:"threads"`
-	Messages  []*Message       `json:"messages"`
+	Flow      string `json:"flow,omitempty"`
+	ParentRun string `json:"parent_run,omitempty"`
+	// Origin is the Claude Code session that started the run, if any.
+	Origin   *Origin          `json:"origin,omitempty"`
+	Tasks    []TaskSnapshot   `json:"tasks"`
+	Threads  []ThreadSnapshot `json:"threads"`
+	Messages []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1348,6 +1353,7 @@ func (r *Run) Snapshot() Snapshot {
 		TaskReasons:    r.copyTaskReasons(),
 		Flow:           r.flow,
 		ParentRun:      r.parentRun,
+		Origin:         r.originPtr(),
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

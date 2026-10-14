@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -78,6 +79,8 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, parts []s
 		s.handleControlCancel(w, r)
 	case "questions":
 		s.handleControlQuestions(w, r)
+	case "attention":
+		s.handleControlAttention(w, r)
 	case "answer":
 		s.handleControlAnswer(w, r)
 	default:
@@ -125,6 +128,7 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		CWD     string            `json:"cwd"`
 		Prompt  string            `json:"prompt"`
 		Workers []spawnWorkerSpec `json:"workers"`
+		Origin  *broker.Origin    `json:"origin"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -158,6 +162,9 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		// Register the operator's own session so it can send and drain.
 		s.registry.Register("main", req.RunID, true)
 		run.CreateStandardThreads()
+		if req.Origin != nil {
+			run.SetOrigin(*req.Origin)
+		}
 	}
 
 	l := s.control.LauncherFor(req.RunID, req.CWD)
@@ -648,6 +655,8 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 		// planned with its goal, notes and what the earlier steps
 		// concluded. Empty starts a new flow. See store/flow.go.
 		Flow string `json:"flow"`
+		// Origin is the Claude Code session asking, sent by the MCP server.
+		Origin *broker.Origin `json:"origin"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -697,6 +706,9 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request) {
 
 	runID := s.control.NewRunID()
 	run := s.broker.CreateRun(runID, req.Prompt, req.CWD, "main")
+	if req.Origin != nil {
+		run.SetOrigin(*req.Origin)
+	}
 	mainAgent := s.registry.Register("main", runID, true)
 	run.CreateStandardThreads()
 
@@ -859,6 +871,60 @@ func (s *Server) resumePlanner(run *broker.Run) error {
 		return s.startPlanner(run, l, plannerPrompt+"\n\n"+prompt, "")
 	}
 	return s.startPlanner(run, l, prompt, sid)
+}
+
+// handleControlAttention is what runs need from their person, for a
+// session's cockpit (broker/attention.go). session=<id> keeps the runs
+// that session started; without it, every run. The daemon's runs come
+// first; runs on disk finished in the last day fill in what a restart
+// dropped from memory.
+func (s *Server) handleControlAttention(w http.ResponseWriter, r *http.Request) {
+	session := strings.TrimSpace(r.URL.Query().Get("session"))
+	now := time.Now()
+	seen := map[string]bool{}
+	var snaps []broker.Snapshot
+	for _, id := range s.control.KnownRuns() {
+		if run := s.broker.GetRun(id); run != nil {
+			seen[id] = true
+			snaps = append(snaps, run.Snapshot())
+		}
+	}
+	for _, id := range store.RunsModifiedSince(now.Add(-24 * time.Hour)) {
+		if seen[id] {
+			continue
+		}
+		if snap, err := store.LoadRun(id); err == nil {
+			snaps = append(snaps, snap)
+		}
+	}
+	items := []broker.AttentionItem{}
+	for _, snap := range snaps {
+		if session != "" && (snap.Origin == nil || snap.Origin.SessionID != session) {
+			continue
+		}
+		items = append(items, broker.Attention(snap, now)...)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		ri, rj := attentionRank(items[i].Kind), attentionRank(items[j].Kind)
+		if ri != rj {
+			return ri < rj
+		}
+		return items[i].At.After(items[j].At)
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// attentionRank orders items by what waits on the person first.
+func attentionRank(k broker.AttentionKind) int {
+	switch k {
+	case broker.AttentionQuestion:
+		return 0
+	case broker.AttentionStuck:
+		return 1
+	case broker.AttentionFailed:
+		return 2
+	}
+	return 3
 }
 
 // handleControlQuestions lists a run's questions, open ones first.

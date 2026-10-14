@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -106,4 +107,23 @@ func ListRuns() ([]string, error) {
 		out[i] = it.id
 	}
 	return out, nil
+}
+
+// RunsModifiedSince returns the ids of run snapshots written since t,
+// without reading them.
+func RunsModifiedSince(t time.Time) []string {
+	entries, err := os.ReadDir(RunsDir())
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		if info, err := e.Info(); err == nil && info.ModTime().After(t) {
+			out = append(out, e.Name()[:len(e.Name())-len(".json")])
+		}
+	}
+	return out
 }

@@ -221,7 +221,7 @@ func (s *Server) callTool(name string, args json.RawMessage) (string, error) {
 
 	switch name {
 	case "narwhal_plan":
-		return s.post(base+"/api/v1/control/plan", args)
+		return s.post(base+"/api/v1/control/plan", withOrigin(args))
 	case "narwhal_spawn":
 		return s.spawn(base, args)
 	case "narwhal_drain":
@@ -263,7 +263,7 @@ func (s *Server) spawn(base string, args json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out, err := s.post(base+"/api/v1/control/spawn", body)
+	out, err := s.post(base+"/api/v1/control/spawn", withOrigin(body))
 	if err != nil {
 		return out, err
 	}
@@ -306,6 +306,32 @@ func annotateGraphGap(out string) string {
 		return out
 	}
 	return out + "\n\nGRAPH GAP: " + resp.GraphGap
+}
+
+// withOrigin adds the Claude Code session this server runs under to a
+// request that starts a run, so the run can say where its person is (see
+// broker/origin.go). Claude Code sets CLAUDE_CODE_SESSION_ID in an MCP
+// server's environment, and the pane id comes from the same environment.
+// A body that cannot be read as an object, or a server outside Claude
+// Code, is sent as it is.
+func withOrigin(body []byte) []byte {
+	sid := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID"))
+	if sid == "" {
+		return body
+	}
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return body
+	}
+	if _, set := m["origin"]; set {
+		return body
+	}
+	m["origin"] = map[string]string{"session_id": sid, "tmux_pane": os.Getenv("TMUX_PANE")}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (s *Server) post(url string, body []byte) (string, error) {

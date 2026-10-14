@@ -93,3 +93,17 @@ func countWith(files []string, want string) int {
 	}
 	return n
 }
+
+// plannerTokenFor is the planner's token, read from the instructions its
+// stand-in recorded.
+func plannerTokenFor(t *testing.T, argsFile string) string {
+	t.Helper()
+	for _, l := range strings.Split(waitArgs(t, argsFile, "NARWHAL_AGENT_TOKEN="), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(l), "NARWHAL_AGENT_TOKEN="); ok {
+			tok, _, _ := strings.Cut(rest, " ")
+			return tok
+		}
+	}
+	t.Fatal("no planner token")
+	return ""
+}

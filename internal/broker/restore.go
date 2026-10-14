@@ -89,6 +89,9 @@ func RestoreRun(s Snapshot) *Run {
 		r.SetSceneNote(k, v)
 	}
 	r.flow, r.parentRun = s.Flow, s.ParentRun
+	if s.Origin != nil {
+		r.origin = *s.Origin
+	}
 	if r.intakeCursor == 0 && len(s.Messages) > 0 {
 		for _, m := range s.Messages {
 			if m != nil && m.Seq > r.intakeCursor {

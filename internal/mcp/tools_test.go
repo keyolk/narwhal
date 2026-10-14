@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -28,5 +29,24 @@ func TestNoNoteWithoutADuplicate(t *testing.T) {
 	out := annotateDuplicate(`{"run_id":"s2"}`)
 	if strings.Contains(out, "NOTE") {
 		t.Errorf("an ordinary spawn was annotated: %q", out)
+	}
+}
+
+// A run started from a Claude Code session carries that session, so its
+// cockpit can say when the run needs the person.
+func TestStartingARunSendsTheSession(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "s-1")
+	t.Setenv("TMUX_PANE", "%9")
+	var got map[string]any
+	if err := json.Unmarshal(withOrigin([]byte(`{"prompt":"x"}`)), &got); err != nil {
+		t.Fatal(err)
+	}
+	o, _ := got["origin"].(map[string]any)
+	if o["session_id"] != "s-1" || o["tmux_pane"] != "%9" || got["prompt"] != "x" {
+		t.Errorf("body = %v", got)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	if b := string(withOrigin([]byte(`{"prompt":"x"}`))); b != `{"prompt":"x"}` {
+		t.Errorf("outside Claude Code the body changed: %s", b)
 	}
 }

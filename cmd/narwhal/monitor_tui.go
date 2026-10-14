@@ -108,6 +108,8 @@ type snapshotMsg struct {
 	// snapshot to say which run it belongs to, and a poll still in flight
 	// when the user switches runs must not land on the new one.
 	runID string
+	// seq orders polls. See tuiModel.pollSeq.
+	seq uint64
 }
 
 // runsMsg carries a refreshed list of live runs.
@@ -179,6 +181,16 @@ type tuiModel struct {
 	frame        int
 	now          time.Time
 	animated     bool // an animation tick is scheduled
+
+	// pollSeq numbers every poll issued, polling says the newest one has
+	// not answered yet, and seqFloor is the oldest poll whose result may
+	// still be applied. The tick fires every second and a poll can take up
+	// to the client's five-second timeout, so without these polls piled up
+	// and answered out of order: an older snapshot landing after a newer
+	// one moved the cursor and the radio back in time.
+	pollSeq  uint64
+	polling  bool
+	seqFloor uint64
 
 	// briefTab says pane 4 shows the operator's brief instead of the radio.
 	// The two are tabs of one pane: both are the whole run's channel, one
@@ -312,6 +324,11 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 		picker:      picker,
 		width:       100,
 		height:      30,
+		// Init's poll is issued from a copy of the model, so reserve its
+		// number here; otherwise the first tick would see no poll in
+		// flight and issue a second one under the same number.
+		pollSeq: 1,
+		polling: true,
 	}
 	if cur >= 0 && cur < len(runs) {
 		m.live = runs[cur]
@@ -323,7 +340,7 @@ func newTUIModel(runs []store.LiveRun, cur int, interval time.Duration, picker b
 }
 
 func (m tuiModel) Init() tea.Cmd {
-	return tea.Batch(m.poll(), m.refreshRuns(), refreshFlows(), tick(m.interval))
+	return tea.Batch(m.pollCmd(m.pollSeq), m.refreshRuns(), refreshFlows(), tick(m.interval))
 }
 
 // refreshRuns re-discovers live runs so a run started after the monitor
@@ -338,13 +355,23 @@ func tick(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func (m tuiModel) poll() tea.Cmd {
+// poll issues a fetch of the watched run under a new sequence number and
+// marks it in flight. Callers inside a value-receiver method must take the
+// command before returning m, so the copy returned carries the new number.
+func (m *tuiModel) poll() tea.Cmd {
+	m.pollSeq++
+	m.polling = true
+	return m.pollCmd(m.pollSeq)
+}
+
+// pollCmd builds the fetch for poll number seq.
+func (m tuiModel) pollCmd(seq uint64) tea.Cmd {
 	// A finished run has no broker to ask. Discover marks those with an
 	// empty BrokerURL and the snapshot on disk is the whole record, so
 	// read it instead of failing every second against a dead port.
 	if m.live.BrokerURL == "" {
 		runID := m.live.RunID
-		return m.withActivity(func() tea.Msg {
+		return m.withActivity(seq, func() tea.Msg {
 			snap, err := store.LoadRun(runID)
 			if err != nil {
 				return snapshotMsg{err: fmt.Errorf("read saved run: %w", err)}
@@ -353,12 +380,12 @@ func (m tuiModel) poll() tea.Cmd {
 		})
 	}
 
-	return m.withActivity(m.fetchSnapshot())
+	return m.withActivity(seq, m.fetchSnapshot())
 }
 
 // withActivity wraps a snapshot fetch so each result also carries what the
 // workers are doing. Both run in the same background command.
-func (m tuiModel) withActivity(fetch tea.Cmd) tea.Cmd {
+func (m tuiModel) withActivity(seq uint64, fetch tea.Cmd) tea.Cmd {
 	runID := m.live.RunID
 	return func() tea.Msg {
 		msg, ok := fetch().(snapshotMsg)
@@ -366,6 +393,7 @@ func (m tuiModel) withActivity(fetch tea.Cmd) tea.Cmd {
 			return msg
 		}
 		msg.runID = runID
+		msg.seq = seq
 		if msg.snap.RunID == "" {
 			return msg
 		}
@@ -545,7 +573,12 @@ func (m *tuiModel) selectRun(i int) tea.Cmd {
 	m.detail = detailClosed
 	m.detailScroll = 0
 	m.resetLive()
-	return m.poll()
+	cmd := m.poll()
+	// Nothing issued before the switch may land after it, even for this
+	// same run: switching away and straight back would otherwise let the
+	// earlier visit's late poll be absorbed as the first snapshot.
+	m.seqFloor = m.pollSeq
+	return cmd
 }
 
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -560,7 +593,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.picker || m.flowView {
 			return m, tea.Batch(m.refreshRuns(), refreshFlows(), tick(m.interval))
 		}
-		return m, tea.Batch(m.poll(), m.refreshRuns(), refreshFlows(), tick(m.interval))
+		// One poll at a time from the tick. A slow broker answers in up to
+		// five seconds; issuing another every second stacked them up.
+		if m.polling {
+			return m, tea.Batch(m.refreshRuns(), refreshFlows(), tick(m.interval))
+		}
+		poll := m.poll()
+		return m, tea.Batch(poll, m.refreshRuns(), refreshFlows(), tick(m.interval))
 
 	case runsMsg:
 		m.mergeRuns(msg)
@@ -592,9 +631,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// seenChannel and lastSeq from the wrong channel: the new run's
 		// history then replays as pulses, or its newer messages lose their
 		// flash because the old run's seq is higher.
+		if msg.seq >= m.pollSeq {
+			m.polling = false
+		}
 		if msg.runID != m.live.RunID {
 			return m, nil
 		}
+		// An explicit poll (after a steer, an attach) can overlap one from
+		// the tick. Whichever was issued later wins; an older result
+		// arriving second would roll the view back.
+		if msg.seq < m.seqFloor {
+			return m, nil
+		}
+		m.seqFloor = msg.seq
 		// An error with no snapshot leaves what is on screen alone: a
 		// blank view is worse than a stale one, and the header says the
 		// broker is unreachable either way. An error *with* a snapshot is
@@ -656,7 +705,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.steerNote(note, false)
 		// Show the instruction on the radio now rather than on the next
 		// tick, so it is clear it went in.
-		return m, m.poll()
+		cmd := m.poll()
+		return m, cmd
 
 	case editorDoneMsg:
 		return m.editorDone(msg)
@@ -667,7 +717,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.err = fmt.Errorf("attach: %w", msg.err)
 		}
-		return m, m.poll()
+		cmd := m.poll()
+		return m, cmd
 
 	case tea.KeyMsg:
 		next, cmd := m.handleKey(msg)

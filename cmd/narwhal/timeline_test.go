@@ -125,7 +125,7 @@ func TestATimelineLineIsCorrectedFromWhereItIs(t *testing.T) {
 		}
 	}
 	m = press(m, "i")
-	if !m.steering || !strings.HasPrefix(string(m.steerBuf), "@schema [미검증: old fixtures were not re-decoded] → ") {
-		t.Errorf("i on the line: steering=%v buf=%q", m.steering, string(m.steerBuf))
+	if !m.steering || !strings.HasPrefix(m.steerBuf.Value(), "@schema [미검증: old fixtures were not re-decoded] → ") {
+		t.Errorf("i on the line: steering=%v buf=%q", m.steering, m.steerBuf.Value())
 	}
 }

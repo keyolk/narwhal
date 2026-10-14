@@ -16,6 +16,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/keys"
 
 	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
@@ -128,6 +129,18 @@ func monitorCmd(args []string) {
 			os.Exit(1)
 		}
 		m.followTask(*task)
+	}
+	// A bad keys.yaml must not stop the monitor: the defaults stay and a
+	// toast says why.
+	km, err := defaultKeymap.LoadOverrides(keys.ConfigPath(prefsApp), keyStacks...)
+	m.km = km
+	if err != nil {
+		m.notifyFrom(srcKeys, "", fmt.Errorf("keys.yaml ignored: %w", err))
+	}
+	// A pane opened by w is one of several monitors at once; only the one
+	// a person opened keeps the layout.
+	if m.pinnedTask == "" {
+		m.enablePrefs()
 	}
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

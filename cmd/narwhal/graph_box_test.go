@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/keyolk/narwhal/internal/broker"
+
+	"github.com/keyolk/tuikit/render"
 )
 
 // renderArt returns the drawn diagram as lines, for asserting on shape.
@@ -33,7 +35,7 @@ func TestBoxesAreSizedToContent(t *testing.T) {
 	if top == "" {
 		t.Fatalf("no box drawn:\n%s", strings.Join(lines, "\n"))
 	}
-	if w := displayWidth(top); w > 20 {
+	if w := render.Width(top); w > 20 {
 		t.Fatalf("box is %d wide for a 3-character label: %q", w, top)
 	}
 }
@@ -199,7 +201,7 @@ func TestNarrowPaneDoesNotOverflow(t *testing.T) {
 		{ID: "a-very-long-task-identifier-that-will-not-fit", State: broker.TaskReady},
 	})
 	for _, l := range lines {
-		if w := displayWidth(l); w > width {
+		if w := render.Width(l); w > width {
 			t.Fatalf("line exceeds pane width %d: %d columns %q", width, w, l)
 		}
 	}

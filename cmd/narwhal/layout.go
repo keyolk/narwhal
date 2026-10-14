@@ -22,6 +22,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -48,11 +49,27 @@ const (
 )
 
 // effectiveZoom is the pane drawn across the body, or -1.
+//
+// Below narrowWidth the two columns cannot both be read — the graph's boxes
+// need thirty cells and the reader column is cut to a few words — so the
+// focused pane is zoomed without being asked, and the header says so. One
+// function decides it, so drawing, scrolling and navigation agree.
 func (m tuiModel) effectiveZoom() focusPane {
 	if m.zoom >= 0 {
 		return m.zoom
 	}
+	if m.autoZoomed() {
+		return m.focus
+	}
 	return -1
+}
+
+// narrowWidth is the narrowest terminal the two columns are drawn on.
+const narrowWidth = 70
+
+// autoZoomed reports that the width, not the user, zoomed the focused pane.
+func (m tuiModel) autoZoomed() bool {
+	return m.zoom < 0 && m.width < narrowWidth
 }
 
 // readerPane is the pane the right column shows: the focused one, or with
@@ -207,7 +224,7 @@ func (m tuiModel) readerTabs(w int) string {
 		radio = "Brief"
 	}
 	sep := styDim.Render(" · ")
-	title := tab("2", "Task", focusNode) + sep + tab("3", "Timeline", focusTimeline) + sep + tab("4", radio, focusRadio)
+	title := tab("2", "Task", focusNode) + sep + tab("3", "Timeline", focusTimeline) + sep + tab("4", radio, focusRadio) + m.radioBadge()
 	if cur == focusRadio {
 		other := "Brief"
 		if m.briefTab {
@@ -217,7 +234,7 @@ func (m tuiModel) readerTabs(w int) string {
 	}
 	rule := w - ansi.StringWidth(title) - 1
 	if rule < 1 {
-		return ansi.Truncate(title, w, "…")
+		return render.Truncate(title, w)
 	}
 	return title + " " + styDim.Render(strings.Repeat("─", rule))
 }
@@ -281,7 +298,7 @@ func borderTitle(title string, w int) string {
 	room := max(0, w-3)
 	tail := ""
 	if core > room {
-		tail = "…"
+		tail = render.Ellipsis()
 	}
 	text := ansi.Truncate(title, min(core, room), tail) + " "
 	return styDim.Render("─ ") + text + styDim.Render(strings.Repeat("─", max(0, w-2-ansi.StringWidth(text))))

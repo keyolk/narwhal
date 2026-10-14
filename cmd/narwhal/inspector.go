@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -96,7 +97,7 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 		prefix := fmt.Sprintf(" %s %s ", icon, label)
 		out = append(out, style.Render(" "+icon)+
 			styDim.Render(" "+label+" ")+
-			style.Render(truncate(value, width-displayWidth(prefix))))
+			style.Render(render.Truncate(value, width-render.Width(prefix))))
 	}
 	// addWrapped is add for a value worth reading past one line: wrapped
 	// under itself, at most rows lines, the last marked when there is more.
@@ -105,10 +106,10 @@ func (m tuiModel) inspectorFields(t broker.TaskSnapshot, width int) []string {
 			return
 		}
 		prefix := fmt.Sprintf(" %s %s ", icon, label)
-		pw := displayWidth(prefix)
+		pw := render.Width(prefix)
 		lines := wrapText(value, max(20, width-pw))
 		if len(lines) > rows {
-			lines = append(lines[:rows-1], truncate(strings.Join(lines[rows-1:], " "), width-pw))
+			lines = append(lines[:rows-1], render.Truncate(strings.Join(lines[rows-1:], " "), width-pw))
 		}
 		for i, l := range lines {
 			if i == 0 {

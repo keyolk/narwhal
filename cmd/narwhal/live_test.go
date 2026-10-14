@@ -10,6 +10,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
+
+	"github.com/keyolk/tuikit/render"
 )
 
 // liveModel is three siblings feeding a synthesis, two of them running.
@@ -97,7 +99,7 @@ func TestFitDetailKeepsTheToolWhenTheArgumentWillNotFit(t *testing.T) {
 	}
 	for _, c := range cases {
 		got := fitDetail(c.in, c.w)
-		if displayWidth(got) > c.w {
+		if render.Width(got) > c.w {
 			t.Errorf("fitDetail(%q, %d) = %q, wider than %d", c.in, c.w, got, c.w)
 		}
 		if c.want != "" && !strings.HasPrefix(got, strings.TrimSuffix(c.want, "…")[:4]) {
@@ -449,7 +451,7 @@ func TestAKoreanDetailKeepsTheBoxSquare(t *testing.T) {
 		t.Errorf("the cell marker reached the screen: %q", detail)
 	}
 	// The border after the text sits where the top border's corner does.
-	if dw, tw := displayWidth(detail), displayWidth(top); dw != tw {
+	if dw, tw := render.Width(detail), render.Width(top); dw != tw {
 		t.Errorf("detail row is %d cells, the box top %d:\n%s\n%s", dw, tw, top, detail)
 	}
 }

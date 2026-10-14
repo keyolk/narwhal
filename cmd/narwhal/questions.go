@@ -19,7 +19,9 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/input"
+	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -95,74 +97,69 @@ func (m *tuiModel) openQuestions() {
 	}
 }
 
-// handleQuestionsKey drives the questions view; while an answer is being
-// written, every key belongs to its line.
-func (m tuiModel) handleQuestionsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// handleAnswerKey drives the answer being written: every key belongs to
+// its line, and arrives as typed.
+func (m tuiModel) handleAnswerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	qs := m.questionsList()
-	if m.answering {
-		switch msg.Type {
-		case tea.KeyEsc:
-			m.answering, m.answerBuf = false, nil
-		case tea.KeyCtrlC:
-			m.quit = true
-			return m, tea.Quit
-		case tea.KeyEnter:
-			if text := strings.TrimSpace(string(m.answerBuf)); text != "" && m.questionSel < len(qs) {
-				m.pendingAnswers[qs[m.questionSel].ID] = pendingAnswer{text: text}
-				m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
-			}
-			m.answering, m.answerBuf = false, nil
-		case tea.KeyBackspace:
-			if n := len(m.answerBuf); n > 0 {
-				m.answerBuf = m.answerBuf[:n-1]
-			}
-		case tea.KeySpace:
-			m.answerBuf = append(m.answerBuf, ' ')
-		case tea.KeyRunes:
-			m.answerBuf = append(m.answerBuf, msg.Runes...)
+	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxAnswer}, msg, m.keyOpts())
+	switch b.Action {
+	case "answer.cancel":
+		m.answering, m.answerBuf = false, input.Field{}
+		return m, nil
+	case "quit":
+		m.quit = true
+		return m, tea.Quit
+	case "answer.keep":
+		if text := strings.TrimSpace(m.answerBuf.Value()); text != "" && m.questionSel < len(qs) {
+			m.pendingAnswers[qs[m.questionSel].ID] = pendingAnswer{text: text}
+			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}
+		m.answering, m.answerBuf = false, input.Field{}
 		return m, nil
 	}
-	msg = normalizeCJKKey(msg)
+	m.answerBuf, _ = m.answerBuf.Update(msg)
+	return m, nil
+}
+
+// doQuestions runs the questions view's keys.
+func (m tuiModel) doQuestions(action string, n int) (tea.Model, tea.Cmd) {
+	qs := m.questionsList()
 	var sel *broker.Question
 	if m.questionSel < len(qs) {
 		sel = &qs[m.questionSel]
 	}
-	switch msg.String() {
-	case "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "esc", "q", "Q":
+	switch action {
+	case "questions.back":
 		m.questionsView = false
-	case "j", "down":
+	case "questions.down":
 		if m.questionSel < len(qs)-1 {
 			m.questionSel++
 		}
-	case "k", "up":
+	case "questions.up":
 		if m.questionSel > 0 {
 			m.questionSel--
 		}
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+	case "questions.pick":
 		// An option, for a question that offers them.
-		if n := int(msg.String()[0] - '0'); sel != nil && sel.ForOperator() && n <= len(sel.Options) {
+		if sel != nil && sel.ForOperator() && n >= 1 && n <= len(sel.Options) {
 			m.pendingAnswers[sel.ID] = pendingAnswer{text: sel.Options[n-1]}
 			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}
-	case "enter", "a":
+	case "questions.answer":
 		if sel != nil && sel.ForOperator() {
 			m.answering = true
-			m.answerBuf = []rune(m.pendingAnswers[sel.ID].text)
+			m.answerBuf = input.New(m.pendingAnswers[sel.ID].text)
 		}
-	case "y":
+	case "questions.assume":
 		if sel != nil && sel.ForOperator() && sel.Assumed != "" {
 			m.pendingAnswers[sel.ID] = pendingAnswer{asAssumed: true}
 			m.questionSel = nextOpen(qs, m.questionSel, m.pendingAnswers)
 		}
-	case "x", "backspace":
+	case "questions.clear":
 		if sel != nil {
 			delete(m.pendingAnswers, sel.ID)
 		}
-	case "S":
+	case "questions.send":
 		if len(m.pendingAnswers) == 0 {
 			m.setNotice("", fmt.Errorf("no answers written yet — enter writes one, y takes the assumption"))
 			return m, nil
@@ -264,7 +261,7 @@ func (m tuiModel) viewQuestions() string {
 	if n := len(m.pendingAnswers); n > 0 {
 		head += "  " + styYellow.Render(fmt.Sprintf("%d answers to send", n))
 	}
-	title := "  " + truncate(oneLine(m.snap.Prompt), w-3)
+	title := "  " + render.Truncate(oneLine(m.snap.Prompt), w-3)
 
 	var body []string
 	if len(qs) == 0 {
@@ -329,13 +326,13 @@ func (m tuiModel) viewQuestions() string {
 				opt += "  ← recommended"
 			}
 			if q.ForOperator() {
-				body = append(body, "     "+styCyan.Render(truncate(opt, inner-4)))
+				body = append(body, "     "+styCyan.Render(render.Truncate(opt, inner-4)))
 			} else {
-				body = append(body, "     "+styDim.Render(truncate(opt, inner-4)))
+				body = append(body, "     "+styDim.Render(render.Truncate(opt, inner-4)))
 			}
 		}
 		if q.Assumed != "" {
-			body = append(body, "     "+styDim.Render("assumes: ")+truncate(q.Assumed, inner-9))
+			body = append(body, "     "+styDim.Render("assumes: ")+render.Truncate(q.Assumed, inner-9))
 		}
 		if q.Candidate {
 			body = append(body, "     "+styDim.Render("waiting for the run's review — it may be settled from the findings first"))
@@ -347,23 +344,21 @@ func (m tuiModel) viewQuestions() string {
 		case !q.Open() && q.AcceptedAssumption:
 			body = append(body, "     "+styGreen.Render("answered: as assumed"))
 		case !q.Open() && q.ResolvedBy != "":
-			body = append(body, "     "+styGreen.Render("settled by "+q.ResolvedBy+": ")+truncate(q.Answer, inner-14))
+			body = append(body, "     "+styGreen.Render("settled by "+q.ResolvedBy+": ")+render.Truncate(q.Answer, inner-14))
 		case !q.Open():
-			body = append(body, "     "+styGreen.Render("answered: ")+truncate(q.Answer, inner-10))
+			body = append(body, "     "+styGreen.Render("answered: ")+render.Truncate(q.Answer, inner-10))
 		case pending && p.asAssumed:
 			body = append(body, "     "+styCyan.Render("to send: as assumed"))
 		case pending:
-			body = append(body, "     "+styCyan.Render("to send: ")+truncate(p.text, inner-9))
+			body = append(body, "     "+styCyan.Render("to send: ")+render.Truncate(p.text, inner-9))
 		}
 	}
 
-	keys := "j/k question · 1-9 pick an option · enter answer · y as assumed · x clear · S send all · esc back"
-	foot := styDim.Render(ansi.Truncate(keys, w, "…"))
+	foot := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	if m.answering {
-		foot = ansi.Truncate(styCyanBold.Render("» answer: ")+string(m.answerBuf)+styCyan.Render("▏"), w, "…") +
-			"\n" + styDim.Render("enter keep · esc cancel — S sends every kept answer at once")
-	} else if n := m.noticeLine(w); n != "" {
-		foot = n + "\n" + foot
+		lead := styCyanBold.Render("» answer: ")
+		foot = render.Truncate(lead+fieldView(m.answerBuf, w-render.Width(lead)), w) +
+			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — "+m.keyName("questions.send")+" sends every kept answer at once")
 	}
 	avail := max(1, m.height-2-strings.Count(foot, "\n")-1)
 	start := 0

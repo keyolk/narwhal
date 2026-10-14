@@ -22,6 +22,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -174,7 +175,7 @@ func (m tuiModel) radioCard(bl radioBlock, prevSender string, width int, selecte
 	if msg.Sender == prevSender && len(msgs) == 1 {
 		shownSender = ""
 	}
-	senderCol := padRight(runewidth.Truncate(shownSender, radioSenderW, "…"), radioSenderW)
+	senderCol := render.PadRight(render.Truncate(shownSender, radioSenderW), radioSenderW)
 	head := " " + stamp + " " + senderCol + " "
 	bodyW := max(8, width-runewidth.StringWidth(head)-1)
 
@@ -231,7 +232,7 @@ func (m tuiModel) radioCard(bl radioBlock, prevSender string, width int, selecte
 	if len(wrapped) > lines {
 		wrapped = wrapped[:lines]
 		last := wrapped[lines-1]
-		wrapped[lines-1] = runewidth.Truncate(last, bodyW-1, "") + "…"
+		wrapped[lines-1] = render.TruncateMarker(last, bodyW-1, "") + render.Ellipsis()
 	}
 
 	if selected {
@@ -244,7 +245,7 @@ func (m tuiModel) radioCard(bl radioBlock, prevSender string, width int, selecte
 					prefix = bar + " " + stamp + " " + senderCol + " "
 				}
 			}
-			out = append(out, stySel.Render(padRight(runewidth.Truncate(prefix+l, width, ""), width)))
+			out = append(out, stySel.Render(render.PadRight(render.TruncateMarker(prefix+l, width, ""), width)))
 		}
 		return out
 	}

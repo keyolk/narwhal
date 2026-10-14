@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -155,7 +155,7 @@ func (m *tuiModel) steerFromTimeline() bool {
 	switch {
 	case it.reason != nil:
 		m.startSteer(it.task)
-		m.steerBuf = append(m.steerBuf, []rune(fmt.Sprintf("[%s: %s] → ", it.reason.Kind, truncate(it.reason.Text, 120)))...)
+		m.steerBuf = m.steerBuf.Insert(fmt.Sprintf("[%s: %s] → ", it.reason.Kind, render.Truncate(it.reason.Text, 120)))
 		return true
 	case it.scene != nil && it.scene.Kind == broker.SceneTask:
 		m.startSteer(it.scene.Who[0])
@@ -196,7 +196,7 @@ func (m tuiModel) sceneLines(sc broker.Scene, width int) []string {
 		if sc.Note != "" && sc.Kind == broker.SceneTask && i == 0 && sc.Outcome != "" {
 			continue
 		}
-		out = append(out, pad+styDim.Render(truncate(l, inner)))
+		out = append(out, pad+styDim.Render(render.Truncate(l, inner)))
 	}
 	if m.sceneOpen[sc.Key] {
 		for _, e := range sc.Events {
@@ -206,7 +206,7 @@ func (m tuiModel) sceneLines(sc broker.Scene, width int) []string {
 				text = strings.TrimSpace(string(e.Kind) + " " + text)
 			}
 			out = append(out, pad+styDim.Render(clock(e.At)+" ")+st.Render(g)+" "+
-				styCyan.Render(truncate(e.Who, 12))+" "+styDim.Render(truncate(oneLine(text), max(4, inner-26))))
+				styCyan.Render(render.Truncate(e.Who, 12))+" "+styDim.Render(render.Truncate(oneLine(text), max(4, inner-26))))
 		}
 	}
 	return out
@@ -252,7 +252,7 @@ func (m tuiModel) renderTimeline(width, height int) string {
 	lines = append(lines, " "+styTitle.Render("결과"))
 	switch {
 	case res.Answer != "" && (res.AnswerFrom != "" || !m.runIsLive()):
-		lines = append(lines, "   "+truncate(flattenMarkdown(firstLine(res.Answer)), width-4))
+		lines = append(lines, "   "+render.Truncate(flattenMarkdown(firstLine(res.Answer)), width-4))
 	default:
 		lines = append(lines, "   "+styDim.Render("아직 답 없음 — 아래 task들의 근거로 만들어지는 중"))
 	}
@@ -275,10 +275,10 @@ func (m tuiModel) renderTimeline(width, height int) string {
 				starts[i] = len(lines)
 				block = append(block, " "+styCyan.Render(it.head))
 			}
-			kind := styDim.Render(padRight(string(it.reason.Kind), 6))
+			kind := styDim.Render(render.PadRight(string(it.reason.Kind), 6))
 			text := it.reason.Text
 			if it.reason.Flag {
-				kind = styYellow.Render(padRight(string(it.reason.Kind), 6))
+				kind = styYellow.Render(render.PadRight(string(it.reason.Kind), 6))
 				text = styYellow.Render("⚠ ") + text
 			}
 			for j, l := range wrapText(text, max(10, width-14)) {
@@ -318,7 +318,7 @@ func (m tuiModel) renderTimeline(width, height int) string {
 	}
 	rows := []string{numberedPaneTitle(3, label, focused, width)}
 	for _, l := range lines[start:end] {
-		rows = append(rows, ansi.Truncate(l, width, "…"))
+		rows = append(rows, render.Truncate(l, width))
 	}
 	return padRows(rows, width, height)
 }

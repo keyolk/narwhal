@@ -29,7 +29,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
+	"github.com/keyolk/tuikit/input"
+	"github.com/keyolk/tuikit/render"
+
+	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/toast"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -196,8 +201,24 @@ type tuiModel struct {
 	// The two are tabs of one pane: both are the whole run's channel, one
 	// as it was said and one as it stands. 4 on a focused pane 4 switches.
 	briefTab bool
-	// help shows the key reference over everything. See help.go.
-	help bool
+	// help shows the key reference over the dimmed screen, scrolled to
+	// helpOff; palette is the action finder, with what has been typed and
+	// the selected match. See overlays.go.
+	help         bool
+	helpOff      int
+	palette      bool
+	paletteQuery input.Field
+	paletteSel   int
+
+	// km is the binding table (keymap.go) and toasts the action results
+	// (toasts.go); Update returns the expiry ticks of toasts added while
+	// handling a message.
+	km     keys.Keymap
+	toasts toast.Queue
+	// saver writes the UI state worth keeping (uistate.go). Only the real
+	// monitor builds one; the zero Saver in tests and pinned panes writes
+	// nothing.
+	saver prefs.Saver[uiState]
 
 	// The home screen's request line. See home.go. homeCWD is where a new
 	// request runs, composing whether the line has the keys, starting the
@@ -247,7 +268,7 @@ type tuiModel struct {
 	questionsView  bool
 	questionSel    int
 	answering      bool
-	answerBuf      []rune
+	answerBuf      input.Field
 	pendingAnswers map[int]pendingAnswer
 
 	// outputsView shows the watched run's outputs; outputSel and
@@ -272,12 +293,8 @@ type tuiModel struct {
 	flowZoom   bool
 	snapCache  map[string]cachedSnap
 
-	// prState is each PR's state as gh reported it; notice is the last
-	// action's one-line result. See resultview.go.
-	prState   map[string]string
-	notice    string
-	noticeErr error
-	noticeAt  time.Time
+	// prState is each PR's state as gh reported it. See resultview.go.
+	prState map[string]string
 
 	// timelineSel is the selected timeline event, or timelineFollow to
 	// keep the newest selected as the run goes on.
@@ -285,13 +302,10 @@ type tuiModel struct {
 	// sceneOpen is the timeline's scenes opened into their events, by key.
 	sceneOpen map[string]bool
 
-	// steering is the open command line, steerBuf what has been typed into
-	// it, and steerMsg the result of the last send. See steer.go.
-	steering    bool
-	steerBuf    []rune
-	steerMsg    string
-	steerFailed bool
-	steerAt     time.Time
+	// steering is the open command line and steerBuf what has been typed
+	// into it. See steer.go; what became of a send is a toast.
+	steering bool
+	steerBuf input.Field
 	// steerStep is the flow step the open line sends to, when it was
 	// opened from the flow view; nil for the watched run.
 	steerStep *steerTarget
@@ -581,8 +595,50 @@ func (m *tuiModel) selectRun(i int) tea.Cmd {
 	return cmd
 }
 
+// Update is update plus what every message shares: the expiry ticks of
+// toasts added while handling it, and saving the UI state when it changed
+// (uistate.go) — compared here rather than at each key, so no handler can
+// forget it.
 func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	before, wasQuit, toasts := m.uiState(), m.quit, m.toasts
+	next, cmd := m.update(msg)
+	nm, ok := next.(tuiModel)
+	if !ok {
+		return next, cmd
+	}
+	cmd = tea.Batch(cmd, toast.Ticks(toasts, nm.toasts))
+	if nm.quit && !wasQuit {
+		// Quit once the state is on disk: the Final Saved quits.
+		var flush tea.Cmd
+		nm.saver, flush = nm.saver.FlushWith(nm.uiState())
+		return nm, flush
+	}
+	if after := nm.uiState(); after != before {
+		var save tea.Cmd
+		nm.saver, save = nm.saver.Save(after)
+		cmd = tea.Batch(cmd, save)
+	}
+	return nm, cmd
+}
+
+func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case toast.Expired:
+		m.toasts = toast.Update(m.toasts, msg)
+		return m, nil
+	case prefs.SaveTick:
+		var cmd tea.Cmd
+		m.saver, cmd = m.saver.Update(msg)
+		return m, cmd
+	case prefs.Saved:
+		if msg.Err != nil {
+			m.notifyFrom(srcPrefs, "", fmt.Errorf("saving the layout: %w", msg.Err))
+		}
+		if msg.Final {
+			return m, tea.Quit
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
@@ -721,6 +777,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		// An error on screen long enough to be read goes with the next key.
+		m.toasts = toast.OnKey(m.toasts)
 		next, cmd := m.handleKey(msg)
 		if nm, ok := next.(tuiModel); ok && nm.focus != focusTasks {
 			// The right column keeps showing the pane last read when
@@ -729,421 +787,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return nm, cmd
 		}
 		return next, cmd
-	}
-	return m, nil
-}
-
-// handlePickerKey drives the run list. It is a separate mode rather than a
-// third pane because switching runs replaces everything on screen.
-func (m tuiModel) handlePickerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if msg.String() != "d" {
-		// Any other key keeps a run a d asked to remove.
-		m.removeStep = ""
-	}
-	switch msg.String() {
-	case "d":
-		return m.removeHomeRun()
-	case "q", "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "j", "down":
-		if m.runCur < len(m.runs)-1 {
-			m.runCur++
-		}
-	case "k", "up":
-		if m.runCur > 0 {
-			m.runCur--
-		}
-	case "g", "home":
-		m.runCur = 0
-	case "G", "end":
-		m.runCur = len(m.runs) - 1
-	case "enter", "l", "right":
-		if len(m.runs) == 0 {
-			return m, nil
-		}
-		// A flow of several runs opens on the flow; a finished run on its
-		// result, which is what it is opened for; a running one on its
-		// graph.
-		r := m.runs[m.runCur]
-		if id := m.flowOf(r); len(m.flowRuns(id)) > 1 {
-			m.openFlow(id, r.RunID)
-			return m, nil
-		}
-		cmd := m.selectRun(m.runCur)
-		m.picker = false
-		if !runIsWorking(r) && r.Tasks > 0 {
-			m.detail = detailResult
-			return m, tea.Batch(cmd, m.prStatusCmd())
-		}
-		return m, cmd
-	case "u":
-		// The selected run's flow, whatever its size: where notes are kept.
-		if len(m.runs) > 0 {
-			r := m.runs[m.runCur]
-			m.openFlow(m.flowOf(r), r.RunID)
-		}
-	case "n", "i", "/":
-		// Start a request. i and / as well, since they are what opens a
-		// line to type in everywhere else in the monitor.
-		m.startCompose("")
-	case "e", "ctrl+e":
-		// Write it in $EDITOR. See editor.go.
-		m.homeErr = nil
-		return m, m.openEditor()
-	case "esc":
-		// esc backs out. From the top level there is nowhere further to go,
-		// so it quits rather than sitting inert.
-		m.quit = true
-		return m, tea.Quit
-	}
-	return m, nil
-}
-
-func (m tuiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// The command line owns every key while it is open, and sees them as
-	// typed: an instruction written in Korean must arrive in Korean.
-	if m.steering {
-		return m.handleSteerKey(msg)
-	}
-	if m.composing {
-		return m.handleComposeKey(msg)
-	}
-	if m.questionsView {
-		return m.handleQuestionsKey(msg)
-	}
-	if m.outputsView {
-		return m.handleOutputsKey(normalizeCJKKey(msg))
-	}
-	if m.flowView && !m.picker {
-		msg = normalizeCJKKey(msg)
-		return m.handleFlowKey(msg)
-	}
-
-	// Under a Korean input source the shortcut keys arrive as jamo (`q` -> `ㅂ`).
-	// Rewrite them to the Latin key at the same physical position so shortcuts
-	// fire without switching the input source back. Outside the command line
-	// above, no key is ever meant as a literal character.
-	msg = normalizeCJKKey(msg)
-
-	if m.help {
-		// Any key closes the reference: it is read, not used.
-		m.help = false
-		if msg.String() == "ctrl+c" {
-			m.quit = true
-			return m, tea.Quit
-		}
-		return m, nil
-	}
-	if msg.String() == "?" {
-		m.help = true
-		return m, nil
-	}
-	if m.picker {
-		return m.handlePickerKey(msg)
-	}
-	if m.detail != detailClosed {
-		return m.handleDetailKey(msg)
-	}
-	switch msg.String() {
-	case "q", "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "i":
-		// From a line of the timeline, the steer is to its task, quoting
-		// the line; anywhere else, to the run. See timeline.go.
-		if m.focus != focusTimeline || !m.steerFromTimeline() {
-			m.startSteer("")
-		}
-		return m, nil
-	case "tab":
-		m.focus = m.focus.next()
-		m.followZoom()
-	case "shift+tab":
-		m.focus = m.focus.prev()
-		m.followZoom()
-	case "1":
-		// Jump straight to a pane. Tab cycles, which is fine for a step
-		// sideways and tiresome once you know where you are going — and
-		// the numbers are visible in the pane titles, so there is nothing
-		// to remember.
-		m.focus = focusTasks
-		m.followZoom()
-	case "2":
-		m.focus = focusNode
-		m.followZoom()
-	case "3":
-		m.focus = focusTimeline
-		m.followZoom()
-	case "4":
-		// A number only ever names a place. Pane 4 has two tabs, so the
-		// key that names it also turns it once you are there; it never
-		// sends the focus anywhere but pane 4.
-		if m.focus == focusRadio {
-			m.briefTab = !m.briefTab
-		}
-		m.focus = focusRadio
-		m.followZoom()
-	case "z":
-		// Zoom the focused pane to the whole body, tmux-style. A second
-		// press restores the split.
-		if m.zoom == m.focus {
-			m.zoom = -1
-		} else {
-			m.zoom = m.focus
-		}
-	case ">":
-		m.widthDelta += 4
-	case "<":
-		m.widthDelta -= 4
-	case "j", "down":
-		switch m.focus {
-		case focusTasks:
-			m.moveVertical(1)
-		case focusNode:
-			m.scrollNode(1)
-		default:
-			m.moveCursor(1)
-		}
-	case "k", "up":
-		switch m.focus {
-		case focusTasks:
-			m.moveVertical(-1)
-		case focusNode:
-			m.scrollNode(-1)
-		default:
-			m.moveCursor(-1)
-		}
-	case "g", "home":
-		if m.focus == focusNode {
-			m.nodeScroll = 0
-			break
-		}
-		m.jumpTo(0)
-	case "G", "end":
-		if m.focus == focusNode {
-			m.nodeScroll = nodeScrollTail
-			break
-		}
-		m.jumpToEnd()
-	case "ctrl+d", "pgdown":
-		if m.focus == focusNode {
-			m.scrollNode(10)
-			break
-		}
-		m.moveCursor(10)
-	case "ctrl+u", "pgup":
-		if m.focus == focusNode {
-			m.scrollNode(-10)
-			break
-		}
-		m.moveCursor(-10)
-	case " ":
-		// In the timeline, a scene opens into the events it was made of.
-		if m.focus == focusTimeline {
-			m.toggleScene()
-		}
-	case "enter":
-		// Enter opens what the cursor is on, wherever it is. See
-		// navigation.go for where each pane leads.
-		return m, m.openFromFocus()
-	case "s":
-		// The selected task's view, from any pane: when another pane has
-		// focus the graph cursor still points at a task, and watching a
-		// worker is the common reason to reach for the keyboard at all.
-		if t, ok := m.selectedTask(); ok {
-			m.openTask(t.ID, time.Time{})
-		}
-	case "a":
-		// Attach to the worker's live Claude session. s shows what the
-		// worker has written; a puts you inside the session itself, which
-		// for a running worker is the only place anything is visible.
-		if t, ok := m.selectedTask(); ok {
-			cmd, err := m.attachToSession(t.ID)
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-			return m, cmd
-		}
-	case "f":
-		// Re-arm tail following after manual navigation.
-		m.followTail = true
-		m.jumpToEnd()
-	case "b":
-		// Boxes read as a diagram; lanes fit more tasks on screen. Which
-		// one is better depends on the graph, so it is a toggle.
-		m.boxMode = !m.boxMode
-	case "h", "left":
-		// Inside the graph, h/l navigate the diagram: the box left or right
-		// of the selected one. The graph is two-dimensional, so a direction
-		// key has a direction to mean here — making h back out to the run
-		// list would leave the diagram the one place where an arrow key
-		// exits instead of moving. From the radio, which is a flat list with
-		// no horizontal axis, h/l step between panes.
-		if m.focus == focusTasks {
-			m.moveHorizontal(-1)
-		} else {
-			m.focus = focusTasks
-		}
-	case "l", "right":
-		if m.focus == focusTasks {
-			m.moveHorizontal(1)
-		} else {
-			// The next of the right column's tabs.
-			m.focus = map[focusPane]focusPane{focusNode: focusTimeline, focusTimeline: focusRadio, focusRadio: focusNode}[m.focus]
-		}
-	case "esc":
-		// Back out one level: to the flow a run is a step of, or home.
-		// esc pairs with enter: enter digs in, esc backs out.
-		if len(m.flowRuns(m.flowOf(m.live))) > 1 {
-			m.openFlow(m.flowOf(m.live), m.live.RunID)
-		} else {
-			m.picker = true
-		}
-	case "o", "O":
-		// Everything the run produced, readable in place. See outputs.go.
-		return m, m.openOutputs("")
-	case "Q":
-		// What the workers asked, answered together. See questions.go.
-		m.openQuestions()
-	case "w":
-		// The working tasks as tmux panes. See tmuxpanes.go.
-		return m, m.openTmuxPanes()
-	case "u":
-		// Up to the run's flow, however many steps it has: where its
-		// notes are written and its steps' results read side by side.
-		m.openFlow(m.flowOf(m.live), m.live.RunID)
-	case "r":
-		m.detail, m.detailScroll = detailResult, 0
-		return m, m.prStatusCmd()
-	case "n":
-		// The next step of this run's flow.
-		m.startCompose(m.flowOf(m.live))
-	case "]", "shift+right":
-		// Within a flow, the next step; otherwise the next run.
-		if cmd, ok := m.stepRun(1); ok {
-			return m, cmd
-		}
-		if m.runCur+1 < len(m.runs) {
-			// selectRun mutates m, so run it before m is copied into the
-			// return value — otherwise the switch is silently discarded.
-			cmd := m.selectRun(m.runCur + 1)
-			return m, cmd
-		}
-	case "[", "shift+left":
-		if cmd, ok := m.stepRun(-1); ok {
-			return m, cmd
-		}
-		if m.runCur > 0 {
-			cmd := m.selectRun(m.runCur - 1)
-			return m, cmd
-		}
-	}
-	return m, nil
-}
-
-func (m tuiModel) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.detail == detailSession {
-		if next, cmd, ok := m.handleTaskKey(msg); ok {
-			return next, cmd
-		}
-	}
-	if m.detail == detailResult {
-		if next, cmd, ok := m.handleResultKey(msg); ok {
-			return next, cmd
-		}
-	}
-	switch msg.String() {
-	case "q", "esc":
-		if m.pinnedTask != "" {
-			m.quit = true
-			return m, tea.Quit
-		}
-		m.detail = detailClosed
-	case "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "j", "down":
-		m.detailScroll++
-		m.sessionTail = false
-	case "k", "up":
-		if m.detailScroll > 0 {
-			m.detailScroll--
-		}
-		m.sessionTail = false
-	case "ctrl+d", "pgdown":
-		m.detailScroll += 10
-		m.sessionTail = false
-	case "ctrl+u", "pgup":
-		m.detailScroll -= 10
-		if m.detailScroll < 0 {
-			m.detailScroll = 0
-		}
-		m.sessionTail = false
-	case "g", "home":
-		m.detailScroll = 0
-		m.sessionTail = false
-	case "G", "end":
-		// To the newest, and stay there as it grows.
-		m.sessionTail = true
-		m.detailScroll = 1 << 30
-	case "f":
-		// Re-arm session following, matching what f does on the radio list.
-		if m.detail == detailSession {
-			m.sessionTail = true
-		}
-	case "s", "enter":
-		// From a message, to the task it came from or went to, at the
-		// moment it was posted.
-		if m.detail == detailMessage {
-			m.openMessageTask()
-		}
-	case "a":
-		// Attach from the detail view too: this is where you find out the
-		// captured log is empty, and where wanting the live session next
-		// is most likely.
-		if t, ok := m.selectedTask(); ok {
-			cmd, err := m.attachToSession(t.ID)
-			if err != nil {
-				m.err = err
-				return m, nil
-			}
-			return m, cmd
-		}
-	case "n":
-		// Walk to the next item without leaving the detail view.
-		switch m.detail {
-		case detailMessage:
-			if m.radioCur < len(m.snap.Messages)-1 {
-				m.radioCur++
-				m.detailScroll = 0
-				m.followTail = false
-			}
-		case detailSession:
-			if m.taskCur < len(m.snap.Tasks)-1 {
-				m.taskCur++
-				m.detailScroll = 0
-				m.sessionTail = true
-				m.resetTaskView()
-			}
-		}
-	case "p":
-		switch m.detail {
-		case detailMessage:
-			if m.radioCur > 0 {
-				m.radioCur--
-				m.detailScroll = 0
-				m.followTail = false
-			}
-		case detailSession:
-			if m.taskCur > 0 {
-				m.taskCur--
-				m.detailScroll = 0
-				m.sessionTail = true
-				m.resetTaskView()
-			}
-		}
 	}
 	return m, nil
 }
@@ -1363,9 +1006,18 @@ func (m tuiModel) View() string {
 	if m.quit {
 		return ""
 	}
-	if m.help {
-		return m.viewHelp()
+	base := m.viewScreen()
+	switch {
+	case m.palette:
+		return m.viewPaletteOverlay(base)
+	case m.help:
+		return m.viewHelpOverlay(base)
 	}
+	return base
+}
+
+// viewScreen is the screen under any overlay.
+func (m tuiModel) viewScreen() string {
 	if m.picker {
 		return m.viewHome()
 	}
@@ -1778,17 +1430,6 @@ func (m tuiModel) viewHeader() string {
 	if m.err != nil {
 		left += "   " + styRed.Render("daemon unreachable — showing the saved copy")
 	}
-	// Questions first: they are the operator's to act on.
-	if open, blocking := openQuestionCount(m.snap); open > 0 {
-		q := styYellow.Render(fmt.Sprintf("? %d question", open))
-		if open > 1 {
-			q += styYellow.Render("s")
-		}
-		if blocking > 0 {
-			q += styRedBold.Render(fmt.Sprintf(" · %d waiting", blocking))
-		}
-		left += "   " + q + styDim.Render(" (Q)")
-	}
 	if sum := verdictSummary(m.snap.Verdicts); sum != "" {
 		left += "   " + sum
 	}
@@ -1804,7 +1445,15 @@ func (m tuiModel) viewHeader() string {
 	if gap := w - ansi.StringWidth(left) - ansi.StringWidth(ref); gap >= 3 {
 		line += strings.Repeat(" ", gap) + styDim.Render(ref)
 	}
-	line = ansi.Truncate(line, w, "…")
+	line = render.Truncate(line, w)
+	// What waits on the operator, on its own row and only when there is
+	// something. See attention.go.
+	if band := m.needsYouBand(w); band != "" {
+		line += "\n" + band
+	}
+	if m.autoZoomed() {
+		line += "\n" + styDim.Render(render.Truncate(fmt.Sprintf("narrow terminal (%d cols): one pane at a time · tab or 1-4 switch", m.width), w))
+	}
 
 	prompt := oneLine(m.snap.Prompt)
 	if prompt == "" {
@@ -1820,7 +1469,7 @@ func (m tuiModel) viewHeader() string {
 	lines := wrapSpans([]span{{prompt, lipgloss.NewStyle()}}, max(10, w-3), "")
 	if len(lines) > 2 {
 		lines = lines[:2]
-		lines[1] = runewidth.Truncate(lines[1], max(10, w-3)-1, "") + "…"
+		lines[1] = render.TruncateMarker(lines[1], max(10, w-3)-1, "") + render.Ellipsis()
 	}
 	for i := range lines {
 		lines[i] = "  " + lines[i]
@@ -1909,53 +1558,21 @@ func pinFooter(body, hints string, height int) string {
 func (m tuiModel) viewFooter() string {
 	// The steering line, then the keys. The line is always there: a run
 	// that can be steered says so and what became of the last instruction,
-	// and one that cannot says why — the command line used to appear only
-	// once i was pressed, and nothing on screen said the run could be
-	// steered at all. One row however long the last instruction was: a
-	// wrapped footer takes its extra line from the panes.
-	return m.steerBar() + "\n" + styDim.Render(m.footerKeys())
-}
-
-// footerKeys lists the keys that do something where the cursor is.
-//
-// One fixed line could not grow to cover three panes, zoom and resize
-// without becoming a wall nobody reads. What each pane offers differs —
-// the graph navigates, the node scrolls — so the hints follow the focus
-// and stay one line.
-//
-// It names what enter does here first, because that is the key that leads
-// somewhere and it does something different in every pane. The rest of the
-// keys are behind ?, which lists them all; a footer that tried to was a
-// line nobody read to the end.
-func (m tuiModel) footerKeys() string {
-	var parts []string
-	switch m.focus {
-	case focusTasks:
-		parts = append(parts, "enter open task", "hjkl move", "b lanes", "< > width")
-	case focusNode:
-		parts = append(parts, "enter open task", "jk scroll", "l next tab")
-	case focusRadio:
-		tab := "4 → brief"
-		if m.briefTab {
-			tab = "4 → radio"
-		}
-		if !m.briefTab {
-			parts = append(parts, "enter open message")
-		}
-		parts = append(parts, "jk move", "f follow", tab)
-	case focusTimeline:
-		parts = append(parts, "enter go to it", "i correct this", "space open scene", "jk line", "l next tab")
+	// and one that cannot says why. One row however long the last
+	// instruction was: a wrapped footer takes its extra line from the panes.
+	// Results of actions sit above it as toasts.
+	if m.composing {
+		return m.footerBlock(m.width, "")
 	}
-	zoomKey := "z zoom"
-	if m.zoom >= 0 {
-		zoomKey = styCyan.Render("z") + styDim.Render(" unzoom")
+	bar := m.steerBar() + "\n" + m.keyFooter(m.screenStack(), m.width)
+	if n := m.noticeLine(m.width); n != "" {
+		return n + "\n" + bar
 	}
-	parts = append(parts, zoomKey, "i steer", "o outputs", "r result", "n next step", "esc back", "? help")
-	return strings.Join(parts, " · ")
+	return bar
 }
 
 func (m tuiModel) viewTasks(width, height int) string {
-	title := numberedPaneTitle(1, "Graph", m.focus == focusTasks, width)
+	title := badgedPaneTitle(1, "Graph", m.graphBadge(), m.focus == focusTasks, width)
 
 	if m.boxMode {
 		return m.viewTasksBoxed(title, width, height)
@@ -2013,7 +1630,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		if m.focus == focusTasks {
 			selected = m.taskCur
 		}
-		out = append(out, printable(m.styleBoxLine(r, truncate(r.text, width), selected, marks[i], headline[i])))
+		out = append(out, printable(m.styleBoxLine(r, render.Truncate(r.text, width), selected, marks[i], headline[i])))
 	}
 	return padRows(out, width, height)
 }
@@ -2155,11 +1772,11 @@ func (m tuiModel) taskRow(r graphRow, width int, selected bool) string {
 
 	plain := r.gutter + " " + icon + " " + label
 	if selected {
-		return stySel.Render(padRight(truncate(plain, width), width))
+		return stySel.Render(render.PadRight(render.Truncate(plain, width), width))
 	}
-	if displayWidth(plain) > width {
+	if render.Width(plain) > width {
 		head := r.gutter + " " + icon + " "
-		label = truncate(label, width-displayWidth(head))
+		label = render.Truncate(label, width-render.Width(head))
 	}
 	return styDim.Render(r.gutter) + " " + style.Render(icon) + " " + label
 }
@@ -2212,7 +1829,7 @@ func tabbedPaneTitle(n int, tabs []string, active int, focused bool, width int) 
 		} else {
 			b.WriteString(styDim.Render(t))
 		}
-		plain += displayWidth(t)
+		plain += render.Width(t)
 	}
 	if rule := width - plain - 1; rule > 0 {
 		b.WriteString(" " + styDim.Render(strings.Repeat("─", rule)))
@@ -2232,7 +1849,7 @@ func paneTitle(label string, focused bool, width int) string {
 		// against dim neighbours.
 		styled = styCyanBold.Render(label)
 	}
-	rule := width - displayWidth(label) - 2
+	rule := width - render.Width(label) - 2
 	if rule < 1 {
 		return styled
 	}
@@ -2266,7 +1883,7 @@ func padRows(rows []string, width, height int) string {
 	for i, r := range rows {
 		out[i] = fitCells(r, width)
 		if ansi.StringWidth(r) > width {
-			out[i] = ansi.Truncate(r, width-1, "") + "…"
+			out[i] = render.TruncateMarker(r, width-1, "") + render.Ellipsis()
 		}
 	}
 	return strings.Join(out, "\n")
@@ -2515,71 +2132,6 @@ func shortName(s string) string {
 		return "you"
 	}
 	return strings.TrimPrefix(s, "worker-")
-}
-
-// truncate cuts s to w display columns, ending a cut line with "…".
-//
-// Without the mark a cut line ran into the border and read as complete —
-// "전반적인 동작 방식과 사용법 등을 정리해서" with the rest of the request
-// simply gone. A line that fits is returned as it is.
-//
-// This is on the hot path: every visible row is truncated on every frame,
-// and a frame happens on every keystroke. The obvious implementation —
-// drop one rune at a time and re-measure — costs ~0.9ms on a long styled
-// line because each measurement re-parses ANSI escapes, which put whole-View
-// latency at 34ms and made navigation feel sluggish.
-//
-// Instead: fast-path pure-ASCII strings (the common case) with a byte slice,
-// and otherwise accumulate rune widths in a single pass.
-func truncate(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if isASCII(s) {
-		if len(s) <= w {
-			return s
-		}
-		return s[:w-1] + "…"
-	}
-	if runewidth.StringWidth(s) <= w {
-		return s
-	}
-	total := 0
-	for i, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if total+rw > w-1 {
-			return s[:i] + "…"
-		}
-		total += rw
-	}
-	return s
-}
-
-// isASCII reports whether s is plain ASCII with no escape sequences, in
-// which case byte length equals display width.
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 || s[i] == 0x1b {
-			return false
-		}
-	}
-	return true
-}
-
-// displayWidth is the column count of s, using the same fast path.
-func displayWidth(s string) int {
-	if isASCII(s) {
-		return len(s)
-	}
-	return runewidth.StringWidth(s)
-}
-
-func padRight(s string, w int) string {
-	gap := w - displayWidth(s)
-	if gap <= 0 {
-		return s
-	}
-	return s + strings.Repeat(" ", gap)
 }
 
 // wrapText breaks content into display lines, preserving existing newlines.

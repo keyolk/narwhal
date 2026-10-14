@@ -25,10 +25,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/input"
+	"github.com/keyolk/tuikit/render"
+
+	"github.com/keyolk/tuikit/keys"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	nd "github.com/keyolk/narwhal/internal/daemon"
@@ -42,9 +45,6 @@ type steerSentMsg struct {
 	reopened []string
 	err      error
 }
-
-// steerNoticeFor is how long the footer shows a send result.
-const steerNoticeFor = 4 * time.Second
 
 // steerRequest is one instruction ready to post.
 type steerRequest struct {
@@ -170,15 +170,15 @@ func (m tuiModel) sendSteer(req steerRequest) tea.Cmd {
 // startSteer opens the command line to the watched run, addressed to task
 // when one is given.
 func (m *tuiModel) startSteer(task string) {
-	m.steering, m.steerBuf, m.steerStep = true, nil, nil
+	m.steering, m.steerBuf, m.steerStep = true, input.Field{}, nil
 	if task != "" {
-		m.steerBuf = []rune("@" + task + " ")
+		m.steerBuf = input.New("@" + task + " ")
 	}
 }
 
 // startStepSteer opens the command line to a flow step's run.
 func (m *tuiModel) startStepSteer(run store.LiveRun, step int) {
-	m.steering, m.steerBuf = true, nil
+	m.steering, m.steerBuf = true, input.Field{}
 	m.steerStep = &steerTarget{brokerURL: run.BrokerURL, snap: m.runSnapshot(run.RunID), step: step}
 	if m.steerStep.snap.RunID == "" {
 		m.steerStep.snap.RunID = run.RunID
@@ -188,17 +188,18 @@ func (m *tuiModel) startStepSteer(run store.LiveRun, step int) {
 // handleSteerKey drives the open command line. Every key belongs to it
 // while it is open, so typing "q" writes a q rather than quitting.
 func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
-		m.steering, m.steerBuf, m.steerStep = false, nil, nil
+	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxSteer}, msg, m.keyOpts())
+	switch b.Action {
+	case "steer.cancel":
+		m.steering, m.steerBuf, m.steerStep = false, input.Field{}, nil
 		return m, nil
-	case tea.KeyCtrlC:
+	case "quit":
 		m.quit = true
 		return m, tea.Quit
-	case tea.KeyEnter:
-		line := string(m.steerBuf)
+	case "steer.send":
+		line := m.steerBuf.Value()
 		target := m.currentSteerTarget()
-		m.steering, m.steerBuf = false, nil
+		m.steering, m.steerBuf = false, input.Field{}
 		tasks := make(map[string]bool, len(target.snap.Tasks))
 		for _, t := range target.snap.Tasks {
 			tasks[t.ID] = true
@@ -223,24 +224,9 @@ func (m tuiModel) handleSteerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		cmd := m.sendSteer(req)
 		m.steerStep = nil
 		return m, cmd
-	case tea.KeyBackspace:
-		if n := len(m.steerBuf); n > 0 {
-			m.steerBuf = m.steerBuf[:n-1]
-		}
-		return m, nil
-	case tea.KeySpace:
-		m.steerBuf = append(m.steerBuf, ' ')
-		return m, nil
-	case tea.KeyRunes:
-		m.steerBuf = append(m.steerBuf, msg.Runes...)
-		return m, nil
 	}
+	m.steerBuf, _ = m.steerBuf.Update(msg)
 	return m, nil
-}
-
-// steerNote shows a short result line in the footer.
-func (m *tuiModel) steerNote(text string, failed bool) {
-	m.steerMsg, m.steerFailed, m.steerAt = text, failed, time.Now()
 }
 
 // runIsLive reports whether the watched run has work going that an
@@ -256,7 +242,7 @@ func (m tuiModel) steerPrompt() string {
 	if t.step > 0 {
 		to = append(to, fmt.Sprintf("step %d", t.step))
 	}
-	if !t.live() && !strings.HasPrefix(strings.TrimSpace(string(m.steerBuf)), "@") {
+	if !t.live() && !strings.HasPrefix(strings.TrimSpace(m.steerBuf.Value()), "@") {
 		if id := t.resumes(); id != "" {
 			to = append(to, "→ "+id)
 		}
@@ -275,25 +261,20 @@ func (m tuiModel) steerPrompt() string {
 // be steered says why instead of taking keystrokes into nowhere.
 func (m tuiModel) steerBar() string {
 	w := max(1, m.width)
-	fit := func(s string) string { return ansi.Truncate(s, w, "…") }
+	fit := func(s string) string { return render.Truncate(s, w) }
 	if m.composing {
 		return m.composeLine(w)
 	}
-	if n := m.noticeLine(w); n != "" {
-		return n
-	}
 	if m.steering {
-		hint := "   enter send · esc cancel · @task addresses one · ! urgent"
+		// The keys come from the table; what follows them is the line's
+		// syntax, which no key does.
+		syntax := " · @task addresses one · ! urgent"
 		if !m.currentSteerTarget().live() {
-			hint = "   enter resumes its worker with this · @task picks another task · esc cancel"
+			syntax = " · @task picks another task"
 		}
-		return fit(m.steerPrompt() + string(m.steerBuf) + styCyan.Render("▏") + styDim.Render(hint))
-	}
-	if m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor {
-		if m.steerFailed {
-			return fit(styRedBold.Render("✗ ") + styRed.Render(m.steerMsg))
-		}
-		return fit(styGreenBold.Render("✓ ") + m.steerMsg)
+		hint := m.keymap().Footer([]keys.Ctx{ctxSteer}, max(1, w), m.keyOpts(), footerStyle)
+		prompt := m.steerPrompt()
+		return fit(prompt + fieldView(m.steerBuf, w-render.Width(prompt)) + styDim.Render("   "+hint+syntax))
 	}
 	if open, blocking := openQuestionCount(m.snap); open > 0 {
 		lead := styYellow.Render(fmt.Sprintf("? the workers asked %d question", open))
@@ -303,17 +284,18 @@ func (m tuiModel) steerBar() string {
 		if blocking > 0 {
 			lead += styRedBold.Render(fmt.Sprintf(", %d waiting for you", blocking))
 		}
-		return fit(lead + styDim.Render(" · ") + styCyanBold.Render("Q") + styDim.Render(" to answer them together · i steer"))
+		return fit(lead + styDim.Render(" · ") + styCyanBold.Render(m.keyName("run.questions")) +
+			styDim.Render(" to answer them together · "+m.keyName("run.steer")+" steer"))
 	}
 	if !m.runIsLive() {
 		why := "this request has finished"
 		if m.live.BrokerURL == "" && m.snap.State == broker.RunActive {
 			why = "its daemon is gone"
 		}
-		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render("i") +
-			styDim.Render(" resumes it with an instruction · r result · n next step"))
+		return fit(styDim.Render("» "+why+" · ") + styCyanBold.Render(m.keyName("run.steer")) +
+			styDim.Render(" resumes it with an instruction · "+m.keyName("run.result")+" result · "+m.keyName("run.next")+" next step"))
 	}
-	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render("i") +
+	left := styCyanBold.Render("» ") + styDim.Render("press ") + styCyanBold.Render(m.keyName("run.steer")) +
 		styDim.Render(" to tell the workers something")
 	ins := briefInstructions(m.snap)
 	if len(ins) == 0 {
@@ -327,10 +309,18 @@ func (m tuiModel) steerBar() string {
 	if last.routed {
 		state = styMagenta.Render("→"+strings.Join(last.addressed, ",")) + " " + state
 	}
-	right := styDim.Render("last: ") + truncate(last.text, 40) + "  " + state
+	right := styDim.Render("last: ") + render.Truncate(last.text, 40) + "  " + state
 	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if gap < 2 {
 		return fit(left + "  " + right)
 	}
 	return left + strings.Repeat(" ", gap) + right
+}
+
+// fieldView draws a text line being typed at most maxW cells wide: its
+// text and the cursor, no wider, so what follows it on the row (the line's
+// keys) sits right after it. A line wider than maxW scrolls to keep the
+// cursor on screen.
+func fieldView(f input.Field, maxW int) string {
+	return f.View(max(1, min(maxW, render.Width(f.Value())+1)), true, input.Style{})
 }

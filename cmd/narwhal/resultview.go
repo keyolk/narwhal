@@ -21,9 +21,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
-	"github.com/keyolk/narwhal/internal/store"
 )
 
 // noticeMsg is a one-line result of an action, shown in the footer.
@@ -67,7 +67,7 @@ func openables(a broker.Artifacts) []string {
 // files carry the digit that opens them.
 func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) []string {
 	var out []string
-	label := func(s string) string { return styDim.Render(padRight(s, 8)) }
+	label := func(s string) string { return styDim.Render(render.PadRight(s, 8)) }
 	n := 0
 	key := func() string {
 		n++
@@ -89,18 +89,18 @@ func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) 
 		case "?":
 			st = styDim.Render("?")
 		}
-		out = append(out, ansi.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width, "…"))
+		out = append(out, render.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width))
 	}
 	// Files one to a line: each is something to open.
 	for _, f := range res.Artifacts.Files {
-		out = append(out, ansi.Truncate(key()+label("file")+abbreviatePath(f)+styDim.Render("  "+f), width, "…"))
+		out = append(out, render.Truncate(key()+label("file")+abbreviatePath(f)+styDim.Render("  "+f), width))
 	}
 	list := func(name string, vals []string) {
 		if len(vals) == 0 {
 			return
 		}
-		out = append(out, ansi.Truncate("  "+label(name)+strings.Join(vals, "  ")+
-			styDim.Render(fmt.Sprintf("  (%d)", len(vals))), width, "…"))
+		out = append(out, render.Truncate("  "+label(name)+strings.Join(vals, "  ")+
+			styDim.Render(fmt.Sprintf("  (%d)", len(vals))), width))
 	}
 	list("branch", res.Artifacts.Branches)
 	list("commit", res.Artifacts.Commits)
@@ -156,7 +156,7 @@ func (m tuiModel) viewResult() string {
 	}
 	var body []string
 	section := func(name string) { body = append(body, "", styTitle.Render(name)) }
-	body = append(body, styDim.Render("asked  ")+truncate(oneLine(m.snap.Prompt), w-8))
+	body = append(body, styDim.Render("asked  ")+render.Truncate(oneLine(m.snap.Prompt), w-8))
 	if stages := m.flowStages(w); stages != "" {
 		body = append(body, stages)
 	}
@@ -180,50 +180,14 @@ func (m tuiModel) viewResult() string {
 	section("Tasks")
 	for _, t := range m.sortedTasks() {
 		ic, st := taskIconStyle(t.State)
-		line := "  " + st.Render(ic) + " " + styCyan.Render(padRight(t.ID, 14)) + " " + flattenMarkdown(firstLine(t.Outcome))
-		body = append(body, ansi.Truncate(line, w, "…"))
+		line := "  " + st.Render(ic) + " " + styCyan.Render(render.PadRight(t.ID, 14)) + " " + flattenMarkdown(firstLine(t.Outcome))
+		body = append(body, render.Truncate(line, w))
 	}
 
-	keys := "o outputs · e write report · y copy answer · 1-9 open a PR or file · n next step · esc back"
-	if m.composing {
-		keys = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
-	} else if n := m.noticeLine(w); n != "" {
-		keys = n + "\n" + styDim.Render(keys)
-	} else {
-		keys = styDim.Render(keys)
-	}
+	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	avail := max(1, m.height-1-lipgloss.Height(keys))
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
 	return pinFooter(head+pos+"\n"+strings.Join(body[scroll:end], "\n"), keys, m.height)
-}
-
-// handleResultKey drives the result view's own keys; scrolling and esc
-// fall through to the detail handler.
-func (m tuiModel) handleResultKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	k := msg.String()
-	switch {
-	case k == "e":
-		snap := m.snap
-		return m, func() tea.Msg {
-			path, err := store.ExportRun(store.DefaultExportDir(), snap, true)
-			return noticeMsg{text: "report written to " + path, err: err}
-		}, true
-	case k == "y":
-		res := m.snap.Result()
-		if res.Answer == "" {
-			m.setNotice("", fmt.Errorf("nothing to copy yet"))
-			return m, nil, true
-		}
-		return m, copyCmd(res.Answer, "the answer"), true
-	case len(k) == 1 && k[0] >= '1' && k[0] <= '9':
-		return m, openArtifact(m.snap.Result().Artifacts, int(k[0]-'0'), m.snap.CWD), true
-	case k == "n" || k == "i":
-		m.startCompose(m.flowOf(m.live))
-		return m, nil, true
-	case k == "o" || k == "O":
-		return m, m.openOutputs(""), true
-	}
-	return m, nil, false
 }
 
 // copyCmd puts text on the clipboard; what names it in the notice.
@@ -256,23 +220,4 @@ func openURLCmd(u string) tea.Cmd {
 		}
 		return noticeMsg{text: "opened " + prShort(u)}
 	}
-}
-
-// setNotice shows a one-line result for a few seconds.
-func (m *tuiModel) setNotice(text string, err error) {
-	m.notice, m.noticeErr, m.noticeAt = text, err, time.Now()
-}
-
-// noticeLine is the fresh notice, or "".
-func (m tuiModel) noticeLine(w int) string {
-	if time.Since(m.noticeAt) > 5*time.Second {
-		return ""
-	}
-	if m.noticeErr != nil {
-		return ansi.Truncate(styRedBold.Render("✗ ")+styRed.Render(m.noticeErr.Error()), w, "…")
-	}
-	if m.notice != "" {
-		return ansi.Truncate(styGreenBold.Render("✓ ")+m.notice, w, "…")
-	}
-	return ""
 }

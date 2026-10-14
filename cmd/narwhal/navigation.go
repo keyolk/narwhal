@@ -25,7 +25,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -218,11 +217,7 @@ func (m tuiModel) viewMessageDetail() string {
 		}
 	}
 
-	keys := "j/k scroll · n/p message · esc back"
-	if id := m.messageTask(msg); id != "" {
-		keys = "enter " + id + " at this moment · " + keys
-	}
-	footer := styDim.Render(keys)
+	footer := m.footerBlock(m.width, m.keyFooter(m.screenStack(), m.width))
 
 	avail := max(3, m.height-4)
 	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
@@ -316,19 +311,7 @@ func (m tuiModel) viewTaskView() string {
 	if tab == taskTabActivity && m.sessionTail {
 		follow = styCyan.Render("  [following]")
 	}
-	keys := "esc back · o outputs · tab next tab · j/k scroll · enter open the request · 1-9 open a PR or file · n/p task · a attach"
-	switch tab {
-	case taskTabActivity:
-		keys = "esc back · j/k entry · enter open/fold · o $PAGER · O outputs · E open all · tab · n/p task · a attach"
-	case taskTabMessages:
-		keys = "esc back · tab next tab · j/k scroll · g/G · n/p task"
-	}
-	footer := styDim.Render(ansi.Truncate("i instruct · "+keys, max(1, m.width), "…"))
-	if m.steering || (m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor) {
-		footer = m.steerBar() + "\n" + footer
-	} else if n := m.noticeLine(m.width); n != "" {
-		footer = n + "\n" + footer
-	}
+	footer := m.footerBlock(m.width, m.keyFooter(m.screenStack(), m.width))
 	return pinFooter(head+follow+"\n"+styDim.Render(strings.Join(meta, " · "))+"\n"+tabs+pos+"\n"+
 		strings.Join(shown, "\n"), footer, m.height)
 }

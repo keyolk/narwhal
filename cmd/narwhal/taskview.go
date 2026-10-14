@@ -23,6 +23,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -145,7 +146,7 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 	}
 	switch e.kind {
 	case "tool":
-		head := styDim.Render(stamp) + styCyan.Render("→ ") + styCyan.Render(truncate(e.text, width-len(stamp)-2))
+		head := styDim.Render(stamp) + styCyan.Render("→ ") + styCyan.Render(render.Truncate(e.text, width-len(stamp)-2))
 		if !open || strings.TrimSpace(e.detail) == "" {
 			return []string{head}
 		}
@@ -166,7 +167,7 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 				if shown == 2 {
 					break
 				}
-				out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
+				out = append(out, pad+styDim.Render(render.Truncate(oneLine(l), width-len(pad))))
 				shown++
 			}
 			if rest := len(lines) - shown; rest > 0 && shown == 2 {
@@ -187,9 +188,9 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 			res = renderMarkdown(e.detail, inner-2, lipgloss.NewStyle())
 		}
 		if !open {
-			out := []string{head + "  " + truncate(flattenMarkdown(e.text), width-12)}
+			out := []string{head + "  " + render.Truncate(flattenMarkdown(e.text), width-12)}
 			if e.detail != "" {
-				out = append(out, pad+styDim.Render("↳ ")+truncate(flattenMarkdown(e.detail), inner-2))
+				out = append(out, pad+styDim.Render("↳ ")+render.Truncate(flattenMarkdown(e.detail), inner-2))
 			}
 			if len(body) > 1 || len(res) > 1 {
 				out = append(out, more(len(body)+len(res)-2))
@@ -401,90 +402,6 @@ func pagerCmd(path string, temp bool) tea.Cmd {
 	})
 }
 
-// handleTaskKey drives the task view's entry keys; the rest fall through
-// to the detail handler.
-func (m tuiModel) handleTaskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
-	switch msg.String() {
-	case "i":
-		// An instruction for this task: read on the radio while it runs,
-		// or reopening it when it has finished. See steer.go.
-		if t, ok := m.selectedTask(); ok {
-			m.startSteer(t.ID)
-		}
-		return m, nil, true
-	case "O":
-		// This run's outputs, this task's first. See outputs.go.
-		if t, ok := m.selectedTask(); ok {
-			return m, m.openOutputs(t.ID), true
-		}
-		return m, nil, true
-	case "tab", "l", "right":
-		m.switchTaskTab(1)
-		return m, nil, true
-	case "shift+tab", "h", "left":
-		m.switchTaskTab(-1)
-		return m, nil, true
-	}
-	t, ok := m.selectedTask()
-	if !ok {
-		return m, nil, false
-	}
-	if m.currentTaskTab(t) != taskTabActivity {
-		// Summary and Messages are read, not navigated: lines scroll, and
-		// enter on Summary opens or folds the request.
-		switch msg.String() {
-		case "j", "down":
-			m.detailScroll++
-		case "k", "up":
-			m.detailScroll = max(0, m.detailScroll-1)
-		case "ctrl+d", "pgdown", " ":
-			m.detailScroll += m.height / 2
-		case "ctrl+u", "pgup":
-			m.detailScroll = max(0, m.detailScroll-m.height/2)
-		case "g", "home":
-			m.detailScroll = 0
-		case "G", "end":
-			m.detailScroll = 1 << 20
-		case "o":
-			return m, m.openOutputs(t.ID), true
-		case "enter":
-			m.summaryAskOpen = !m.summaryAskOpen
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-			res := broker.Snapshot{Tasks: []broker.TaskSnapshot{t}}.Result()
-			return m, openArtifact(res.Artifacts, int(msg.String()[0]-'0'), m.snap.CWD), true
-		default:
-			return m, nil, false
-		}
-		return m, nil, true
-	}
-	switch msg.String() {
-	case "j", "down":
-		m.moveEntry(1)
-	case "k", "up":
-		m.moveEntry(-1)
-	case "enter", " ":
-		m.toggleEntry()
-	case "E":
-		// Open or fold everything, and start over from what is shown.
-		m.taskOpenAll, m.taskToggled = !m.taskOpenAll, nil
-		m.moveEntry(0)
-	case "o":
-		return m, m.pageEntry(), true
-	case "ctrl+d", "pgdown":
-		m.scrollTask(m.height / 2)
-	case "ctrl+u", "pgup":
-		m.scrollTask(-m.height / 2)
-	case "g", "home":
-		m.taskSel, m.detailScroll, m.sessionTail = 0, 0, false
-	case "G", "end", "f":
-		// To the newest, and stay there as it grows.
-		m.taskSel, m.sessionTail = -1, true
-	default:
-		return m, nil, false
-	}
-	return m, nil, true
-}
-
 // resetTaskView forgets the cursor and what was opened, for another task.
 func (m *tuiModel) resetTaskView() {
 	m.taskSel, m.taskToggled, m.taskOpenAll = -1, nil, false
@@ -567,7 +484,7 @@ func (m tuiModel) taskSummaryLines(t broker.TaskSnapshot, width int) []string {
 				out = append(out, "  "+a.said)
 			}
 			if a.tool != "" {
-				out = append(out, styCyan.Render("  → "+truncate(a.tool, inner-4)))
+				out = append(out, styCyan.Render("  → "+render.Truncate(a.tool, inner-4)))
 			}
 			if !a.last.IsZero() {
 				out = append(out, styDim.Render("  last activity "+ago(a.last)+" ago — tab for the full activity"))

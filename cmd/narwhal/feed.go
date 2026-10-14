@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -75,11 +76,11 @@ func renderEntry(e transcriptEntry, width int, st *feedState) []string {
 	switch {
 	case e.kind == "tool":
 		return []string{styDim.Render(stamp) + styCyan.Render("→ ") +
-			styCyan.Render(truncate(e.text, width-len(stamp)-2))}
+			styCyan.Render(render.Truncate(e.text, width-len(stamp)-2))}
 	case e.kind == "result":
 		var out []string
 		for _, l := range clipLines(e.text, 2) {
-			out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
+			out = append(out, pad+styDim.Render(render.Truncate(oneLine(l), width-len(pad))))
 		}
 		return out
 	case e.kind == "thinking":
@@ -98,7 +99,7 @@ func renderEntry(e transcriptEntry, width int, st *feedState) []string {
 		if m := notifySummary.FindStringSubmatch(e.text); m != nil {
 			text = oneLine(m[1])
 		}
-		return []string{styDim.Render(stamp) + styDim.Render("⚑ "+truncate(text, width-len(stamp)-2))}
+		return []string{styDim.Render(stamp) + styDim.Render("⚑ "+render.Truncate(text, width-len(stamp)-2))}
 	default:
 		return block(styGreen.Render("· "), "", lipgloss.NewStyle())
 	}

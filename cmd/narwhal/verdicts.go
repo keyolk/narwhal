@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -62,7 +62,7 @@ func verdictRow(v broker.Verdict, width int) string {
 	style := verdictStyle(v)
 	label := fmt.Sprintf(" %s %-10s ", icons.fieldJudge, v.Question)
 	if !v.Decided {
-		return truncate(styDim.Render(label+strings.Repeat("·", verdictBarWidth)+" undecided → kept"), width)
+		return render.Truncate(styDim.Render(label+strings.Repeat("·", verdictBarWidth)+" undecided → kept"), width)
 	}
 	action := v.Action
 	if action == broker.ActionFallback {
@@ -85,7 +85,7 @@ func verdictRow(v broker.Verdict, width int) string {
 func workerVerdictRow(v broker.Verdict, width int) string {
 	head := styDim.Render(fmt.Sprintf(" %s asked ", icons.fieldJudge))
 	if !v.Decided {
-		return truncate(head+styDim.Render(strings.Repeat("·", verdictBarWidth)+" no answer  ")+v.Ask, width)
+		return render.Truncate(head+styDim.Render(strings.Repeat("·", verdictBarWidth)+" no answer  ")+v.Ask, width)
 	}
 	style := verdictStyle(v)
 	return ansiTruncate(head+style.Render(verdictBar(v.P))+style.Render(fmt.Sprintf(" %.2f  ", v.P))+v.Ask, width)
@@ -141,5 +141,5 @@ func verdictSummary(vs []broker.Verdict) string {
 // ansiTruncate fits a styled line to width without counting escape codes as
 // cells or cutting one in half.
 func ansiTruncate(s string, width int) string {
-	return ansi.Truncate(s, width, "…")
+	return render.Truncate(s, width)
 }

@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -128,23 +129,15 @@ func (m *tuiModel) openFlow(flowID, runID string) {
 	m.picker = false
 }
 
-// handleFlowKey drives the flow view.
-func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+// doFlow runs the flow view's keys, and the step's outputs' once the
+// detail has them (flow.output).
+func (m tuiModel) doFlow(action string, n int) (tea.Model, tea.Cmd) {
 	steps := m.flowRuns(m.flowID)
-	if m.flowDetail {
-		if next, cmd, ok := m.handleStepOutputKey(msg); ok {
-			return next, cmd
-		}
+	if next, cmd, ok := m.doStepOutput(action); ok {
+		return next, cmd
 	}
-	if msg.String() != "d" {
-		// Any other key keeps a step a d asked to remove.
-		m.removeStep = ""
-	}
-	switch msg.String() {
-	case "q", "ctrl+c":
-		m.quit = true
-		return m, tea.Quit
-	case "esc":
+	switch action {
+	case "flow.back":
 		// Back out one level: the widened detail, then the step list,
 		// then home.
 		switch {
@@ -155,40 +148,40 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		default:
 			m.flowView, m.picker = false, true
 		}
-	case "tab", "l", "right":
+	case "flow.read":
 		// Into the step's outputs, where j/k choose one to read.
 		m.flowDetail = true
 		return m, m.fetchStepDetails()
-	case "shift+tab", "h", "left":
+	case "flow.steps":
 		m.flowDetail = false
-	case "z":
+	case "flow.zoom":
 		// The detail across the whole width, for a long result.
 		m.flowZoom = !m.flowZoom
 		m.flowDetail = m.flowZoom || m.flowDetail
-	case "j", "down":
+	case "flow.down":
 		if m.flowSel < len(steps)-1 {
 			m.flowSel++
 			m.flowScroll, m.flowOutSel = 0, -1
 		}
-	case "k", "up":
+	case "flow.up":
 		if m.flowSel > 0 {
 			m.flowSel--
 			m.flowScroll, m.flowOutSel = 0, -1
 		}
-	case "ctrl+d", "pgdown", "J", " ":
+	case "flow.pagedown":
 		m.scrollFlow(m.flowDetailRows() / 2)
-	case "ctrl+u", "pgup", "K":
+	case "flow.pageup":
 		m.scrollFlow(-m.flowDetailRows() / 2)
-	case "g", "home":
+	case "flow.top":
 		m.flowSel, m.flowScroll, m.flowOutSel = 0, 0, -1
-	case "G", "end":
+	case "flow.bottom":
 		m.flowSel, m.flowScroll, m.flowOutSel = max(0, len(steps)-1), 0, -1
-	case "enter":
+	case "flow.open":
 		if m.flowSel < len(steps) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
 			return m, cmd
 		}
-	case "o", "O":
+	case "flow.outputs":
 		if m.flowSel < len(steps) {
 			// Every step's outputs, from this step's: the work's product so
 			// far, not one run's.
@@ -196,67 +189,37 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			for i, s := range steps {
 				runs[i] = s.RunID
 			}
-			return m, m.openFlowOutputs(runs, steps[m.flowSel].RunID)
+			cmd := m.openFlowOutputs(runs, steps[m.flowSel].RunID)
+			return m, cmd
 		}
-	case "r":
+	case "flow.result":
 		if m.flowSel < len(steps) {
 			cmd := m.openRun(steps[m.flowSel].RunID)
 			m.detail = detailResult
 			m.detailScroll = 0
 			return m, tea.Batch(cmd, m.prStatusCmd())
 		}
-	case "i":
+	case "flow.steer":
 		// An instruction for the selected step: its workers resume with
 		// it, where n plans a new step on top. See steer.go.
 		if m.flowSel < len(steps) {
 			m.startStepSteer(steps[m.flowSel], m.flowSel+1)
 		}
-	case "n":
+	case "flow.compose":
 		m.startCompose(m.flowID)
-	case "e":
+	case "flow.notes":
 		cmd := m.openNotesEditor(m.flowID)
 		return m, cmd
-	case "x":
+	case "flow.export":
 		return m, m.exportFlow(m.flowID)
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+	case "flow.artifact":
 		if m.flowSel < len(steps) {
 			snap := m.runSnapshot(steps[m.flowSel].RunID)
-			return m, openArtifact(snap.Result().Artifacts, int(msg.String()[0]-'0'), snap.CWD)
+			return m, openArtifact(snap.Result().Artifacts, n, snap.CWD)
 		}
-	case "d":
-		// Take the step out of the flow, on a second d: the run's record
-		// stays, but the flow and every later plan stop reading it.
-		if m.flowSel >= len(steps) {
-			return m, nil
-		}
-		st := steps[m.flowSel]
-		if m.removeStep != st.RunID {
-			m.removeStep = st.RunID
-			m.setNotice(fmt.Sprintf("remove step %d from the flow? d again to remove, any other key to keep it "+
-				"(the run's record stays on disk)", m.flowSel+1), nil)
-			return m, nil
-		}
-		m.removeStep = ""
-		// Only a step with workers still at it is refused: one left
-		// "active" with nobody working — a planner that exited, a daemon
-		// that restarted — is exactly what a person wants gone.
-		if st.Running > 0 {
-			m.setNotice("", fmt.Errorf("step %d has %d workers running — cancel it first", m.flowSel+1, st.Running))
-			return m, nil
-		}
-		f, removed, err := store.RemoveFlowStep(m.flowID, st.RunID)
-		if err != nil {
-			m.setNotice("", err)
-			return m, nil
-		}
-		m.setNotice(fmt.Sprintf("removed step %d: %s", m.flowSel+1, truncate(oneLine(removed.Request), 60)), nil)
-		if len(f.Steps) == 0 {
-			m.flowView, m.picker = false, true
-		}
-		m.flowSel = max(0, min(m.flowSel, len(steps)-2))
-		m.flowScroll, m.flowOutSel = 0, -1
-		return m, refreshFlows()
-	case "c":
+	case "flow.remove":
+		return m.removeFlowStep(steps)
+	case "flow.close":
 		f, ok := m.flows[m.flowID]
 		if ok {
 			if nf, err := store.SetFlowClosed(f.ID, !f.Closed); err != nil {
@@ -267,6 +230,41 @@ func (m tuiModel) handleFlowKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// removeFlowStep takes the selected step out of the flow, on a second d:
+// the run's record stays, but the flow and every later plan stop reading it.
+func (m tuiModel) removeFlowStep(steps []store.LiveRun) (tea.Model, tea.Cmd) {
+	if m.flowSel >= len(steps) {
+		return m, nil
+	}
+	st := steps[m.flowSel]
+	if m.removeStep != st.RunID {
+		m.removeStep = st.RunID
+		m.askRemove(fmt.Sprintf("remove step %d from the flow? %s again to remove, any other key to keep it "+
+			"(the run's record stays on disk)", m.flowSel+1, m.keyName("flow.remove")))
+		return m, nil
+	}
+	m.removeStep = ""
+	// Only a step with workers still at it is refused: one left "active"
+	// with nobody working — a planner that exited, a daemon that restarted
+	// — is exactly what a person wants gone.
+	if st.Running > 0 {
+		m.setRemoveResult("", fmt.Errorf("step %d has %d workers running — cancel it first", m.flowSel+1, st.Running))
+		return m, nil
+	}
+	f, removed, err := store.RemoveFlowStep(m.flowID, st.RunID)
+	if err != nil {
+		m.setRemoveResult("", err)
+		return m, nil
+	}
+	m.setRemoveResult(fmt.Sprintf("removed step %d: %s", m.flowSel+1, render.Truncate(oneLine(removed.Request), 60)), nil)
+	if len(f.Steps) == 0 {
+		m.flowView, m.picker = false, true
+	}
+	m.flowSel = max(0, min(m.flowSel, len(steps)-2))
+	m.flowScroll, m.flowOutSel = 0, -1
+	return m, refreshFlows()
 }
 
 // removeHomeRun takes the selected run off the home screen on a second d:
@@ -284,45 +282,46 @@ func (m tuiModel) removeHomeRun() (tea.Model, tea.Cmd) {
 	if m.removeStep != r.RunID {
 		m.removeStep = r.RunID
 		m.homeErr = nil
-		m.setNotice(fmt.Sprintf("remove %q from %s? d again to remove, any other key to keep it "+
-			"(the run's record stays on disk)", truncate(oneLine(r.Prompt), 40), where), nil)
+		m.askRemove(fmt.Sprintf("remove %q from %s? %s again to remove, any other key to keep it "+
+			"(the run's record stays on disk)", render.Truncate(oneLine(r.Prompt), 40), where, m.keyName("home.remove")))
 		return m, nil
 	}
 	m.removeStep = ""
 	if r.Running > 0 {
-		m.setNotice("", fmt.Errorf("%d workers are still running — cancel the run first", r.Running))
+		m.setRemoveResult("", fmt.Errorf("%d workers are still running — cancel the run first", r.Running))
 		return m, nil
 	}
 	if _, err := store.RemoveRun(r.RunID, flowID); err != nil {
-		m.setNotice("", err)
+		m.setRemoveResult("", err)
 		return m, nil
 	}
-	m.setNotice(fmt.Sprintf("removed %q from %s", truncate(oneLine(r.Prompt), 50), where), nil)
+	m.setRemoveResult(fmt.Sprintf("removed %q from %s", render.Truncate(oneLine(r.Prompt), 50), where), nil)
 	m.runCur = max(0, min(m.runCur, len(m.runs)-2))
 	return m, refreshFlows()
 }
 
-// handleStepOutputKey drives the step's outputs once the detail has the
-// keys: j/k choose an output, J/K and pages read it, and o, e, y and enter
-// do what suits its kind — the Outputs view's keys, on one step.
-func (m tuiModel) handleStepOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+// doStepOutput runs the step's outputs' keys once the detail has them:
+// j/k choose an output, and o, e, y and enter do what suits its kind — the
+// Outputs view's keys, on one step. Those four are disabled when there is
+// no output, so their keys fall through to the flow's.
+func (m tuiModel) doStepOutput(action string) (tea.Model, tea.Cmd, bool) {
 	outs := m.stepOutputs()
 	sel := m.stepOutputSel(outs)
-	switch msg.String() {
-	case "j", "down":
+	switch action {
+	case "stepout.down":
 		if sel < len(outs)-1 {
 			m.flowOutSel, m.flowScroll = sel+1, 0
 		}
 		return m, m.fetchStepDetails(), true
-	case "k", "up":
+	case "stepout.up":
 		if sel > 0 {
 			m.flowOutSel, m.flowScroll = sel-1, 0
 		}
 		return m, nil, true
-	case "g", "home":
+	case "stepout.top":
 		m.flowScroll = 0
 		return m, nil, true
-	case "G", "end":
+	case "stepout.bottom":
 		m.scrollFlow(1 << 20)
 		return m, nil, true
 	}
@@ -330,17 +329,15 @@ func (m tuiModel) handleStepOutputKey(msg tea.KeyMsg) (tea.Model, tea.Cmd, bool)
 		return m, nil, false
 	}
 	o := outs[sel]
-	switch msg.String() {
-	case "o":
+	switch action {
+	case "stepout.open":
 		return m, openOutput(o), true
-	case "e":
-		if o.kind == outFile {
-			return m, editOutput(o.path), true
-		}
-	case "y":
+	case "stepout.edit":
+		return m, editOutput(o.path), true
+	case "stepout.copy":
 		text, what := copyable(o)
 		return m, copyCmd(text, what), true
-	case "enter":
+	case "stepout.enter":
 		if o.kind != outAnswer && o.kind != outReport {
 			return m, openOutput(o), true
 		}
@@ -408,21 +405,10 @@ func (m tuiModel) flowGeometry() flowGeom {
 	if ref := styDim.Render(m.flowID); ansi.StringWidth(g.head)+ansi.StringWidth(ref)+3 < w {
 		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
-	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
-	keys := "j/k step · i resume the step · n next step · l/tab read · z widen · enter open run · o outputs · r result · e notes · x export · d remove step · c close · esc home"
-	if m.flowDetail {
-		keys = "j/k choose output · J/K space read · o open · e edit · y copy · enter its task · h back to steps · z widen · esc"
-	}
-	g.footer = styDim.Render(ansi.Truncate(keys, w, "…"))
-	if m.composing {
-		g.footer = m.composeLine(w) + "\n" + styDim.Render("enter start · ctrl-e open in $EDITOR · esc cancel")
-	} else if m.steering || (m.steerMsg != "" && time.Since(m.steerAt) < steerNoticeFor) {
-		g.footer = m.steerBar() + "\n" + g.footer
-	} else if n := m.noticeLine(w); n != "" {
-		g.footer = n + "\n" + g.footer
-	}
+	g.title = "  " + styTitle.Render(render.Truncate(m.flowTitle(m.flowID), w-3))
+	g.footer = m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	if m.homeErr != nil {
-		g.footer = styRedBold.Render("✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
+		g.footer = styRedBold.Render("✗ ") + styRed.Render(render.Truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
 	}
 	g.bodyH = max(3, m.height-lipgloss.Height(g.head+"\n"+g.title)-lipgloss.Height(g.footer))
 	if m.flowZoom {
@@ -489,13 +475,13 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	rows = append(rows, "")
 	section("Notes")
 	if strings.TrimSpace(f.Notes) == "" {
-		for _, l := range wrapText("none — e to write what every step should know", w-2) {
+		for _, l := range wrapText("none — "+m.keyName("flow.notes")+" to write what every step should know", w-2) {
 			rows = append(rows, styDim.Render("  "+l))
 		}
 	} else {
 		n := renderMarkdown(f.Notes, w-2, styYellow)
 		if len(n) > 6 {
-			n = append(n[:6], styDim.Render("  … e to see all"))
+			n = append(n[:6], styDim.Render("  … "+m.keyName("flow.notes")+" to see all"))
 		}
 		for _, l := range n {
 			rows = append(rows, "  "+l)
@@ -505,11 +491,11 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	section("Steps")
 	for i, r := range steps {
 		icon, style := runIcon(r, m.frame)
-		label := fmt.Sprintf("%d %s %s", i+1, style.Render(icon), truncate(m.stepRequest(f, i, r), w-12))
+		label := fmt.Sprintf("%d %s %s", i+1, style.Render(icon), render.Truncate(m.stepRequest(f, i, r), w-12))
 		prog := styDim.Render(fmt.Sprintf("%d/%d", r.Done, r.Tasks))
 		line := fitCells(label, w-6) + prog
 		if i == m.flowSel {
-			line = stySel.Render(padRight(ansi.Strip(line), w))
+			line = stySel.Render(render.PadRight(ansi.Strip(line), w))
 		}
 		rows = append(rows, line)
 	}
@@ -593,12 +579,12 @@ func (m tuiModel) flowStepHead(w int, outs []output, sel int) []string {
 	end := min(len(outs), top+limit)
 	for i := top; i < end; i++ {
 		o := outs[i]
-		kind := outputKindStyle(o.kind).Render(padRight(outputLabels[o.kind], 7))
-		row := kind + styDim.Render(padRight(truncate(o.task, 10), 11)) + truncate(o.title, max(4, w-20))
+		kind := outputKindStyle(o.kind).Render(render.PadRight(outputLabels[o.kind], 7))
+		row := kind + styDim.Render(render.PadRight(render.Truncate(o.task, 10), 11)) + render.Truncate(o.title, max(4, w-20))
 		if i == sel {
 			mark := styCyanBold.Render("▸ ")
 			if m.flowDetail {
-				row = mark + stySel.Render(padRight(ansi.Strip(row), w-2))
+				row = mark + stySel.Render(render.PadRight(ansi.Strip(row), w-2))
 			} else {
 				row = mark + row
 			}
@@ -645,7 +631,7 @@ func (m tuiModel) flowStepDetail(w, h int) string {
 	rows := max(1, h-len(pane)-1)
 	scroll := min(m.flowScroll, max(0, len(lines)-rows))
 	end := min(len(lines), scroll+rows)
-	label := truncate(outs[sel].title, max(4, w-20))
+	label := render.Truncate(outs[sel].title, max(4, w-20))
 	if len(lines) > rows {
 		label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 		if end < len(lines) {
@@ -726,10 +712,10 @@ func (m tuiModel) flowStages(width int) string {
 		}
 		head, tail := fmt.Sprintf("[%d %s ", i+1, icon), fmt.Sprintf(" %d/%d]", r.Done, r.Tasks)
 		room := width - 2 - others - ansi.StringWidth(head+tail)
-		label := head + truncate(oneLine(runLabel(r)), max(8, room)) + tail
+		label := head + render.Truncate(oneLine(runLabel(r)), max(8, room)) + tail
 		parts = append(parts, style.Bold(true).Render(label))
 	}
-	return ansi.Truncate("  "+strings.Join(parts, sep), width, "…")
+	return render.Truncate("  "+strings.Join(parts, sep), width)
 }
 
 // stepRun moves to the previous or next step of the watched run's flow.

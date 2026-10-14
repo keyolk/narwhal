@@ -31,6 +31,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/render"
 
 	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
@@ -121,25 +123,26 @@ func (m tuiModel) composeLine(w int) string {
 	if m.composeFlow == "" {
 		lead = "» "
 	}
-	return ansi.Truncate(styCyanBold.Render(lead)+text+styCyan.Render("▏")+more, max(1, w), "…")
+	return render.Truncate(styCyanBold.Render(lead)+text+styCyan.Render("▏")+more, max(1, w))
 }
 
 // handleComposeKey drives the new-request line. Every key belongs to it
 // while it is open, and arrives as typed: a request written in Korean must
 // arrive in Korean.
 func (m tuiModel) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEsc:
+	b, _ := m.keymap().ResolveRaw([]keys.Ctx{ctxCompose}, msg, m.keyOpts())
+	switch b.Action {
+	case "compose.cancel":
 		m.composing = false
 		return m, nil
-	case tea.KeyCtrlC:
+	case "quit":
 		m.quit = true
 		return m, tea.Quit
-	case tea.KeyCtrlE:
+	case "compose.editor":
 		// What has been typed so far goes into the editor with it.
 		m.composing = false
 		return m, m.openEditor()
-	case tea.KeyEnter:
+	case "compose.start":
 		prompt := strings.TrimSpace(string(m.composeBuf))
 		if prompt == "" {
 			return m, nil
@@ -147,6 +150,8 @@ func (m tuiModel) handleComposeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composing, m.starting = false, prompt
 		m.homeErr = nil
 		return m, m.submitRequest(prompt)
+	}
+	switch msg.Type {
 	case tea.KeyBackspace:
 		if n := len(m.composeBuf); n > 0 {
 			m.composeBuf = m.composeBuf[:n-1]
@@ -215,7 +220,8 @@ func (m tuiModel) viewHome() string {
 		}
 		line = styCyanBold.Render("» ") + text + styCyan.Render("▏") + more
 	default:
-		line = styDim.Render("» press n and describe the work, or e to write it in $EDITOR")
+		line = styDim.Render("» press " + m.keyName("home.new") + " and describe the work, or " +
+			m.keyName("home.editor") + " to write it in $EDITOR")
 	}
 	title := "New request"
 	if m.composing {
@@ -223,18 +229,18 @@ func (m tuiModel) viewHome() string {
 	}
 	box := framedBox(title+styDim.Render("  in "+where), []string{line}, w-2)
 	if m.homeErr != nil {
-		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-4))
+		box += "\n" + styRedBold.Render(" ✗ ") + styRed.Render(render.Truncate(m.homeErr.Error(), w-4))
 	} else if n := m.noticeLine(w - 2); n != "" {
-		box += "\n " + n
+		box += "\n " + strings.ReplaceAll(n, "\n", "\n ")
 	}
 
-	keys := "enter open · n new request · e write in $EDITOR · u flow · d remove · j/k move · ? help · q quit"
+	stack := m.screenStack()
 	if m.composing {
-		keys = "enter start · ctrl-e open in $EDITOR · esc cancel"
+		stack = []keys.Ctx{ctxCompose}
 	}
 	top := head + "\n" + box + "\n"
 	room := m.height - strings.Count(top, "\n") - 2
-	return pinFooter(top+m.homeList(w, room), styDim.Render(keys), m.height)
+	return pinFooter(top+m.homeList(w, room), m.keyFooter(stack, w), m.height)
 }
 
 // homeList is the work, grouped by how it stands, in at most rows lines,
@@ -242,7 +248,7 @@ func (m tuiModel) viewHome() string {
 // title over its steps; a flow of one is that run.
 func (m tuiModel) homeList(width, rows int) string {
 	if len(m.runs) == 0 {
-		return styDim.Render("\n   Nothing yet. Press n to start the first request.")
+		return styDim.Render("\n   Nothing yet. Press " + m.keyName("home.new") + " to start the first request.")
 	}
 	var lines []string
 	selTop := 0
@@ -295,13 +301,13 @@ func (m tuiModel) homeList(width, rows int) string {
 func (m tuiModel) flowHeaderRow(id string, steps []store.LiveRun, width int) string {
 	last := steps[len(steps)-1]
 	icon, style := runIcon(last, m.frame)
-	right := progressBar(last.Done, last.Failed, last.Tasks, 10) + " " + padRight(fmt.Sprintf("%d/%d", last.Done, last.Tasks), 5) +
+	right := progressBar(last.Done, last.Failed, last.Tasks, 10) + " " + render.PadRight(fmt.Sprintf("%d/%d", last.Done, last.Tasks), 5) +
 		" " + styDim.Render(fmt.Sprintf("%4s", ago(runStartTime(last))))
 	extra := ""
 	if f, ok := m.flows[id]; ok && f.Closed {
 		extra = styDim.Render("  closed")
 	}
-	left := "   " + style.Render(icon) + " " + styTitle.Render(truncate(m.flowTitle(id), max(10, width-ansi.StringWidth(right)-24))) +
+	left := "   " + style.Render(icon) + " " + styTitle.Render(render.Truncate(m.flowTitle(id), max(10, width-ansi.StringWidth(right)-24))) +
 		styDim.Render(fmt.Sprintf("  %d steps", len(steps))) + extra
 	return left + strings.Repeat(" ", max(1, width-ansi.StringWidth(left)-ansi.StringWidth(right))) + right
 }
@@ -321,7 +327,7 @@ func (m tuiModel) stepRow(r store.LiveRun, steps []store.LiveRun, selected bool,
 	icon, style := runIcon(r, m.frame)
 	f := m.flows[m.flowOf(r)]
 	right := styDim.Render(fmt.Sprintf("%d/%d  %4s", r.Done, r.Tasks, ago(runStartTime(r))))
-	label := truncate(fmt.Sprintf("%d %s", pos+1, m.stepRequest(f, pos, r)), max(10, width-ansi.StringWidth(right)-14))
+	label := render.Truncate(fmt.Sprintf("%d %s", pos+1, m.stepRequest(f, pos, r)), max(10, width-ansi.StringWidth(right)-14))
 	marker := "      "
 	if selected {
 		marker = "    " + styCyanBold.Render("▸") + " "
@@ -351,7 +357,7 @@ func (m tuiModel) homeRow(r store.LiveRun, selected bool, width int) []string {
 	}
 
 	// Right side: progress and age, fixed width so the column lines up.
-	progress := progressBar(r.Done, r.Failed, r.Tasks, 10) + " " + padRight(fmt.Sprintf("%d/%d", r.Done, r.Tasks), 5)
+	progress := progressBar(r.Done, r.Failed, r.Tasks, 10) + " " + render.PadRight(fmt.Sprintf("%d/%d", r.Done, r.Tasks), 5)
 	if r.Tasks == 0 {
 		// Padded as plain text, then styled: padding a styled string
 		// counts its escapes as cells and the column drifts.
@@ -359,7 +365,7 @@ func (m tuiModel) homeRow(r store.LiveRun, selected bool, width int) []string {
 		if runIsWorking(r) {
 			word = "planning…"
 		}
-		progress = styDim.Render(padRight(word, 16))
+		progress = styDim.Render(render.PadRight(word, 16))
 	}
 	right := progress + " " + styDim.Render(fmt.Sprintf("%4s", ago(runStartTime(r))))
 	rightW := ansi.StringWidth(right)
@@ -368,7 +374,7 @@ func (m tuiModel) homeRow(r store.LiveRun, selected bool, width int) []string {
 	if selected {
 		marker = " " + styCyanBold.Render("▸") + " "
 	}
-	label := truncate(runLabel(r), max(10, width-rightW-8))
+	label := render.Truncate(runLabel(r), max(10, width-rightW-8))
 	// History recedes: what you can still act on is what you are choosing
 	// between, and a list of identical rows hides the one live run.
 	styled := label
@@ -396,7 +402,7 @@ func (m tuiModel) homeRow(r store.LiveRun, selected bool, width int) []string {
 		detail = append(detail, fmt.Sprintf("%d msg", r.Messages))
 	}
 	second := "      " + styDim.Render(strings.Join(detail, styDim.Render(" · ")))
-	return []string{first, ansi.Truncate(second, width, "…")}
+	return []string{first, render.Truncate(second, width)}
 }
 
 // progressBar draws done and failed out of total in n cells.

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 
+	"github.com/keyolk/tuikit/render"
+
 	"github.com/keyolk/narwhal/internal/store"
 )
 
@@ -39,7 +41,7 @@ func runFlowCmd(w io.Writer, args []string) error {
 		}
 		fmt.Fprintf(w, "%s  %s\n", f.ID, f.Title)
 		for i, s := range f.Steps {
-			fmt.Fprintf(w, "  %d. %s  %s\n", i+1, s.RunID, truncate(oneLine(s.Request), 100))
+			fmt.Fprintf(w, "  %d. %s  %s\n", i+1, s.RunID, render.Truncate(oneLine(s.Request), 100))
 		}
 		if len(f.Removed) > 0 {
 			fmt.Fprintf(w, "  removed: %v\n", f.Removed)
@@ -53,7 +55,7 @@ func runFlowCmd(w io.Writer, args []string) error {
 			return err
 		}
 		fmt.Fprintf(w, "removed %s (%s) from flow %s; its run record is kept\n",
-			removed.RunID, truncate(oneLine(removed.Request), 60), args[1])
+			removed.RunID, render.Truncate(oneLine(removed.Request), 60), args[1])
 		if len(f.Steps) == 0 {
 			fmt.Fprintf(w, "flow %s had no steps left and was removed\n", args[1])
 		}

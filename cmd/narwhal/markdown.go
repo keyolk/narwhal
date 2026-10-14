@@ -15,6 +15,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -62,7 +63,7 @@ func renderMarkdown(text string, width int, base lipgloss.Style) []string {
 			// one cut at the edge.
 			blank()
 			for i++; i < len(lines) && !strings.HasPrefix(strings.TrimSpace(lines[i]), "```"); i++ {
-				out = append(out, styDim.Render("  "+ansi.Truncate(strings.ReplaceAll(lines[i], "\t", "    "), full-2, "…")))
+				out = append(out, styDim.Render("  "+render.Truncate(strings.ReplaceAll(lines[i], "\t", "    "), full-2)))
 			}
 			blank()
 		case strings.HasPrefix(trim, "|") && i+1 < len(lines) && mdTableSep.MatchString(lines[i+1]):
@@ -207,7 +208,7 @@ func renderTable(rows []string, width int, base lipgloss.Style) []string {
 			}
 			text := renderSpans(inline(c, style))
 			if runewidth.StringWidth(plainInline(c)) > w[j] {
-				text = ansi.Truncate(text, w[j], "…")
+				text = render.Truncate(text, w[j])
 			}
 			b.WriteString(text + strings.Repeat(" ", max(0, w[j]-ansi.StringWidth(text))))
 			if j < cols-1 {
@@ -326,7 +327,7 @@ func wrapSpans(sps []span, width int, hang string) []string {
 				cur.WriteString(" ")
 				curW++
 			}
-			fit := runewidth.Truncate(text, width-curW, "")
+			fit := render.TruncateMarker(text, width-curW, "")
 			if fit == "" {
 				newLine()
 				continue

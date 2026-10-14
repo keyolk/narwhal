@@ -141,13 +141,22 @@ func TestAWatcherNotificationIsOneQuietLine(t *testing.T) {
 	}
 }
 
-// ? shows the reference over everything; any key closes it.
+// ? shows the reference over the screen; j/k scroll it, and any other key
+// only closes it.
 func TestHelpOpensAndCloses(t *testing.T) {
 	m := press(fixtureRun(t), "?")
-	if got := viewText(m); !strings.Contains(got, "Open what you are looking at") {
+	got := viewText(m)
+	if !strings.Contains(got, "Narwhal monitor keys") || !strings.Contains(got, "open what the cursor is on") {
 		t.Fatalf("help not shown:\n%s", got)
 	}
-	if m = press(m, "j"); m.help || m.focus != focusRadio {
+	// Over the screen, not instead of it: the run's header is still there.
+	if !strings.Contains(got, "r-fixture") {
+		t.Errorf("help replaced the screen:\n%s", got)
+	}
+	if m = press(m, "j"); !m.help || m.helpOff != 1 {
+		t.Errorf("j in help: help=%v offset=%d — it should scroll", m.help, m.helpOff)
+	}
+	if m = press(m, "1"); m.help || m.focus != focusRadio {
 		t.Errorf("closing help: help=%v focus=%v — the key must only close it", m.help, m.focus)
 	}
 }
@@ -159,7 +168,7 @@ func TestTheFooterSaysWhatEnterOpens(t *testing.T) {
 		"1": "enter open task", "2": "enter open task", "3": "enter go to it", "4": "enter open message",
 	} {
 		m = press(m, "1", key)
-		if got := ansi.Strip(m.footerKeys()); !strings.HasPrefix(got, want) || !strings.Contains(got, "? help") {
+		if got := ansi.Strip(footerOf(m)); !strings.HasPrefix(got, want) || !strings.Contains(got, "? help") {
 			t.Errorf("pane %s footer: %q", key, got)
 		}
 	}

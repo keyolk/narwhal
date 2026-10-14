@@ -6,6 +6,8 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
+
+	"github.com/keyolk/tuikit/render"
 )
 
 // Every view built its output as "content, newline, hints" and stopped
@@ -225,7 +227,7 @@ func TestPickerRowsStayInsideThePane(t *testing.T) {
 	m.runCur = -1 // no selection, so no full-width reverse row
 
 	for _, line := range strings.Split(m.View(), "\n") {
-		if w := displayWidth(stripEscapes(line)); w > m.width {
+		if w := render.Width(stripEscapes(line)); w > m.width {
 			t.Fatalf("a row is %d columns wide in a %d-column pane: %q", w, m.width, line)
 		}
 	}

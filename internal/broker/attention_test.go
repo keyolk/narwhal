@@ -42,3 +42,20 @@ func TestAttentionNamesWhatARunNeeds(t *testing.T) {
 		t.Errorf("a day-old run is still an item: %+v", late)
 	}
 }
+
+func TestSummarizeCountsTasksAndCarriesTheResult(t *testing.T) {
+	r := New().CreateRun("r", "build\n  it", t.TempDir(), "main")
+	a := r.AddTask("api", "api", "x", nil)
+	b := r.AddTask("synthesis", "synthesis", "combine", []string{"api"})
+	a.StartDispatch("d", "w")
+	_ = a.RecordArtifact(ArtifactPR, "https://github.com/o/r/pull/7")
+	a.CompleteDispatch("## Done\n\n**API** validates keys. More.", r)
+	b.StartDispatch("d", "w")
+	s := Summarize(r.Snapshot())
+	if s.Request != "build it" || s.Done != 1 || s.Running != 1 || len(s.Tasks) != 2 {
+		t.Fatalf("summary = %+v", s)
+	}
+	if s.Tasks[0].Outcome != "API validates keys." || len(s.Artifacts.PRs) != 1 {
+		t.Errorf("task/artifacts = %+v %+v", s.Tasks[0], s.Artifacts)
+	}
+}

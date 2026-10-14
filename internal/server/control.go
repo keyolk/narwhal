@@ -81,6 +81,8 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, parts []s
 		s.handleControlQuestions(w, r)
 	case "attention":
 		s.handleControlAttention(w, r)
+	case "runs":
+		s.handleControlRuns(w, r)
 	case "answer":
 		s.handleControlAnswer(w, r)
 	default:
@@ -875,33 +877,12 @@ func (s *Server) resumePlanner(run *broker.Run) error {
 
 // handleControlAttention is what runs need from their person, for a
 // session's cockpit (broker/attention.go). session=<id> keeps the runs
-// that session started; without it, every run. The daemon's runs come
-// first; runs on disk finished in the last day fill in what a restart
-// dropped from memory.
+// that session started; without it, every run. Runs on disk written in the
+// last day fill in what a restart dropped from memory.
 func (s *Server) handleControlAttention(w http.ResponseWriter, r *http.Request) {
-	session := strings.TrimSpace(r.URL.Query().Get("session"))
 	now := time.Now()
-	seen := map[string]bool{}
-	var snaps []broker.Snapshot
-	for _, id := range s.control.KnownRuns() {
-		if run := s.broker.GetRun(id); run != nil {
-			seen[id] = true
-			snaps = append(snaps, run.Snapshot())
-		}
-	}
-	for _, id := range store.RunsModifiedSince(now.Add(-24 * time.Hour)) {
-		if seen[id] {
-			continue
-		}
-		if snap, err := store.LoadRun(id); err == nil {
-			snaps = append(snaps, snap)
-		}
-	}
 	items := []broker.AttentionItem{}
-	for _, snap := range snaps {
-		if session != "" && (snap.Origin == nil || snap.Origin.SessionID != session) {
-			continue
-		}
+	for _, snap := range s.sessionSnapshots(r.URL.Query().Get("session"), now.Add(-24*time.Hour)) {
 		items = append(items, broker.Attention(snap, now)...)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -912,6 +893,48 @@ func (s *Server) handleControlAttention(w http.ResponseWriter, r *http.Request) 
 		return items[i].At.After(items[j].At)
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+// handleControlRuns lists the runs a session started, newest first, with
+// their tasks and what they produced (broker/session_runs.go): the
+// cockpit's Work and Outputs tabs. session=<id> as for attention; runs on
+// disk from the last week fill in what a restart dropped.
+func (s *Server) handleControlRuns(w http.ResponseWriter, r *http.Request) {
+	runs := []broker.RunSummary{}
+	for _, snap := range s.sessionSnapshots(r.URL.Query().Get("session"), time.Now().Add(-7*24*time.Hour)) {
+		runs = append(runs, broker.Summarize(snap))
+	}
+	sort.SliceStable(runs, func(i, j int) bool { return runs[i].StartedAt.After(runs[j].StartedAt) })
+	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// sessionSnapshots are the snapshots of the runs a session started — every
+// run when session is empty: the daemon's, then those on disk written
+// since the given time that it no longer holds.
+func (s *Server) sessionSnapshots(session string, since time.Time) []broker.Snapshot {
+	session = strings.TrimSpace(session)
+	seen := map[string]bool{}
+	var snaps []broker.Snapshot
+	keep := func(snap broker.Snapshot) {
+		if session == "" || snap.Origin != nil && snap.Origin.SessionID == session {
+			snaps = append(snaps, snap)
+		}
+	}
+	for _, id := range s.control.KnownRuns() {
+		if run := s.broker.GetRun(id); run != nil {
+			seen[id] = true
+			keep(run.Snapshot())
+		}
+	}
+	for _, id := range store.RunsModifiedSince(since) {
+		if seen[id] {
+			continue
+		}
+		if snap, err := store.LoadRun(id); err == nil {
+			keep(snap)
+		}
+	}
+	return snaps
 }
 
 // attentionRank orders items by what waits on the person first.

@@ -34,3 +34,17 @@ func TestAttentionIsPerSession(t *testing.T) {
 		t.Errorf("all = %v", all)
 	}
 }
+
+// The session's runs, with their tasks, for the cockpit's Work and Outputs.
+func TestRunsArePerSession(t *testing.T) {
+	addr, _ := planFixture(t)
+	postPlan(t, addr, map[string]any{"cwd": t.TempDir(), "prompt": "mine", "origin": map[string]string{"session_id": "s-1"}})
+	postPlan(t, addr, map[string]any{"cwd": t.TempDir(), "prompt": "theirs", "origin": map[string]string{"session_id": "s-2"}})
+	mine := getJSON(t, addr+"/api/v1/control/runs?session=s-1")["runs"].([]any)
+	if len(mine) != 1 || mine[0].(map[string]any)["request"] != "mine" {
+		t.Fatalf("s-1 runs = %v", mine)
+	}
+	if all := getJSON(t, addr+"/api/v1/control/runs")["runs"].([]any); len(all) != 2 {
+		t.Errorf("all runs = %v", all)
+	}
+}

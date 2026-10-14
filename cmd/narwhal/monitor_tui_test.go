@@ -131,7 +131,7 @@ func TestManualNavigationReleasesTailFollowing(t *testing.T) {
 	before := m.radioCur
 	snap := m.snap
 	snap.Messages = append(snap.Messages, &broker.Message{Seq: 6, Sender: "w", Content: "new"})
-	next, _ := m.Update(snapshotMsg{snap: snap})
+	next, _ := m.Update(snapshotMsg{snap: snap, runID: m.live.RunID})
 	m = next.(tuiModel)
 	if m.radioCur != before {
 		t.Fatalf("cursor moved on poll while not following: %d → %d", before, m.radioCur)
@@ -151,7 +151,7 @@ func TestTailFollowingTracksNewMessages(t *testing.T) {
 	m := testModel(2, 3)
 	snap := m.snap
 	snap.Messages = append(snap.Messages, &broker.Message{Seq: 4, Sender: "w", Content: "newest"})
-	next, _ := m.Update(snapshotMsg{snap: snap})
+	next, _ := m.Update(snapshotMsg{snap: snap, runID: m.live.RunID})
 	m = next.(tuiModel)
 
 	if m.radioCur != 3 {

@@ -103,6 +103,11 @@ type snapshotMsg struct {
 	// activity is what each worker is doing, read alongside the snapshot
 	// so the transcripts are never touched on the UI goroutine.
 	activity map[string]agentLive
+	// runID is the run the poll was issued for, stamped when the command
+	// was built rather than read off snap: an error-only result has no
+	// snapshot to say which run it belongs to, and a poll still in flight
+	// when the user switches runs must not land on the new one.
+	runID string
 }
 
 // runsMsg carries a refreshed list of live runs.
@@ -354,9 +359,14 @@ func (m tuiModel) poll() tea.Cmd {
 // withActivity wraps a snapshot fetch so each result also carries what the
 // workers are doing. Both run in the same background command.
 func (m tuiModel) withActivity(fetch tea.Cmd) tea.Cmd {
+	runID := m.live.RunID
 	return func() tea.Msg {
 		msg, ok := fetch().(snapshotMsg)
-		if !ok || msg.snap.RunID == "" {
+		if !ok {
+			return msg
+		}
+		msg.runID = runID
+		if msg.snap.RunID == "" {
 			return msg
 		}
 		msg.activity = m.gatherLive(msg.snap, time.Now())
@@ -576,6 +586,15 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case snapshotMsg:
+		// A poll issued for another run — the one watched before selectRun
+		// switched away — is dropped whole. Applied, it would draw the old
+		// run's tasks, and as the new run's "first snapshot" it would set
+		// seenChannel and lastSeq from the wrong channel: the new run's
+		// history then replays as pulses, or its newer messages lose their
+		// flash because the old run's seq is higher.
+		if msg.runID != m.live.RunID {
+			return m, nil
+		}
 		// An error with no snapshot leaves what is on screen alone: a
 		// blank view is worse than a stale one, and the header says the
 		// broker is unreachable either way. An error *with* a snapshot is

@@ -261,7 +261,10 @@ func (m tuiModel) doRun(action string) (tea.Model, tea.Cmd) {
 	case "run.questions":
 		m.openQuestions()
 	case "run.tmux":
-		return m, m.openTmuxPanes()
+		// Not "return m, m.openTmuxPanes()": the call bumps m.tmuxGen, and
+		// Go leaves unspecified whether m is read before or after it.
+		cmd := m.openTmuxPanes()
+		return m, cmd
 	case "run.flow":
 		// Up to the run's flow, however many steps it has: where its notes
 		// are written and its steps' results read side by side.

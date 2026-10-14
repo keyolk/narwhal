@@ -6,6 +6,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/chart"
+	"github.com/keyolk/tuikit/render"
 	"github.com/muesli/termenv"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -81,16 +83,30 @@ func TestHeaderIsQuietWithoutVerdicts(t *testing.T) {
 }
 
 func TestVerdictBarFillsToP(t *testing.T) {
+	saved := chartGlyphs
+	t.Cleanup(func() { chartGlyphs = saved })
+
+	chartGlyphs = chart.Unicode()
 	cases := map[float64]string{
-		0:    "░░░░░░░░░░",
-		0.5:  "█████░░░░░",
-		0.82: "████████░░",
-		1:    "██████████",
-		1.5:  "██████████",
+		0:    "▕        ▏",
+		0.5:  "▕████    ▏",
+		0.82: "▕██████▌ ▏",
+		0.99: "▕███████▉▏", // not done is never drawn full
+		1:    "▕████████▏",
+		1.5:  "▕████████▏",
 	}
 	for p, want := range cases {
 		if got := verdictBar(p); got != want {
 			t.Errorf("verdictBar(%v) = %q, want %q", p, got, want)
+		}
+	}
+	chartGlyphs = chart.ASCII()
+	if got := verdictBar(0.5); got != "[####----]" {
+		t.Errorf("ASCII verdictBar(0.5) = %q", got)
+	}
+	for _, p := range []float64{0, 0.33, 1} {
+		if w := render.Width(verdictBar(p)); w != verdictBarWidth {
+			t.Errorf("verdictBar(%v) is %d cells, want %d", p, w, verdictBarWidth)
 		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/chart"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -24,16 +25,11 @@ import (
 
 const verdictBarWidth = 10
 
-// verdictBar draws p as a filled bar of verdictBarWidth cells.
+// verdictBar draws p as a bar of verdictBarWidth cells, brackets included.
+// It fills by eighths of a cell and is full only at 1, so a 0.96 does not
+// read as certain.
 func verdictBar(p float64) string {
-	if p < 0 {
-		p = 0
-	}
-	if p > 1 {
-		p = 1
-	}
-	filled := int(p*verdictBarWidth + 0.5)
-	return strings.Repeat("█", filled) + strings.Repeat("░", verdictBarWidth-filled)
+	return chart.Bar(p, verdictBarWidth, chart.BarOpts{Look: chart.Look{Glyphs: chartGlyphs}})
 }
 
 // verdictStyle is the colour of what the dispatcher did with a verdict.

@@ -24,11 +24,13 @@
 package main
 
 import (
+	"math"
 	"regexp"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/chart"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -208,27 +210,28 @@ func spinnerAt(frame int) string {
 	return spinnerFrames[frame%len(spinnerFrames)]
 }
 
-// sparkline renders counts as block characters, scaled to their own max so
-// a quiet worker's activity is still visible.
+// chartGlyphs is the glyph set of the sparklines and bars: block elements,
+// or ASCII under a CJK locale, where block elements draw two cells wide
+// and would push a row past its width.
+var chartGlyphs = chart.DetectGlyphs("NARWHAL")
+
+// sparkline renders counts as one cell each, scaled to their own max so a
+// quiet worker's activity is still visible. A second with nothing in it is
+// a blank cell, not the lowest step: an idle worker shows no line at all.
 func sparkline(counts []int) string {
-	const ramp = "▁▂▃▄▅▆▇█"
-	steps := []rune(ramp)
-	max := 0
-	for _, c := range counts {
-		if c > max {
-			max = c
+	vals := make([]float64, len(counts))
+	for i, c := range counts {
+		vals[i] = float64(c)
+		if c == 0 {
+			// The chart draws a gap for NaN; zero would be the lowest step.
+			vals[i] = math.NaN()
 		}
 	}
-	var b strings.Builder
-	for _, c := range counts {
-		if max == 0 || c == 0 {
-			b.WriteRune(' ')
-			continue
-		}
-		i := c * (len(steps) - 1) / max
-		b.WriteRune(steps[i])
-	}
-	return b.String()
+	return chart.Sparkline(vals, len(counts), chart.SparkOpts{
+		Look: chart.Look{Glyphs: chartGlyphs},
+		Agg:  chart.Max,
+		Min:  chart.Fixed(0),
+	})
 }
 
 // animating reports whether anything on screen moves, so the animation

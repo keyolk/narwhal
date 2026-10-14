@@ -11,6 +11,7 @@ import (
 
 	"github.com/keyolk/narwhal/internal/broker"
 
+	"github.com/keyolk/tuikit/chart"
 	"github.com/keyolk/tuikit/render"
 )
 
@@ -322,7 +323,9 @@ func TestNodeHeadlineOffersTheSessionKeys(t *testing.T) {
 	if !strings.Contains(got, "enter open · a attach") {
 		t.Errorf("headline does not offer the session keys: %q", got)
 	}
-	if !strings.ContainsAny(got, "▁▃█") {
+	// Compared with the sparkline itself, so the check holds under a CJK
+	// locale too, where the ramp is ASCII.
+	if !strings.Contains(got, sparkline([]int{0, 1, 3, 1})) {
 		t.Errorf("headline has no activity sparkline: %q", got)
 	}
 	if narrow := ansi.Strip(m.inspectorHeadline(m.taskByID("alpha-worker"), 30)); strings.Contains(narrow, "attach") {
@@ -331,11 +334,29 @@ func TestNodeHeadlineOffersTheSessionKeys(t *testing.T) {
 }
 
 func TestSparklineScalesToItsOwnPeak(t *testing.T) {
-	if got := sparkline([]int{0, 1, 2, 4}); got != " ▂▄█" {
+	saved := chartGlyphs
+	t.Cleanup(func() { chartGlyphs = saved })
+
+	chartGlyphs = chart.Unicode()
+	// Each count takes an equal share of the ramp: 1 of 4 is the third
+	// step, 2 of 4 the fifth, the peak the top.
+	if got := sparkline([]int{0, 1, 2, 4}); got != " ▃▅█" {
 		t.Errorf("sparkline = %q", got)
 	}
 	if got := sparkline([]int{0, 0}); got != "  " {
 		t.Errorf("an idle sparkline = %q, want blanks", got)
+	}
+	// One cell per second, whatever the counts: the headline's width
+	// does not move as a worker gets busier.
+	if got := render.Width(sparkline([]int{3, 0, 99, 1, 0, 7})); got != 6 {
+		t.Errorf("sparkline is %d cells for 6 seconds", got)
+	}
+
+	// Under a CJK locale the block ramp is two cells a glyph; the ASCII
+	// set keeps the line one cell a second.
+	chartGlyphs = chart.ASCII()
+	if got := sparkline([]int{0, 1, 2, 4}); got != " .=#" {
+		t.Errorf("ASCII sparkline = %q", got)
 	}
 }
 

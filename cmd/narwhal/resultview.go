@@ -21,6 +21,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -66,7 +67,7 @@ func openables(a broker.Artifacts) []string {
 // files carry the digit that opens them.
 func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) []string {
 	var out []string
-	label := func(s string) string { return styDim.Render(padRight(s, 8)) }
+	label := func(s string) string { return styDim.Render(render.PadRight(s, 8)) }
 	n := 0
 	key := func() string {
 		n++
@@ -88,18 +89,18 @@ func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) 
 		case "?":
 			st = styDim.Render("?")
 		}
-		out = append(out, ansi.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width, "…"))
+		out = append(out, render.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width))
 	}
 	// Files one to a line: each is something to open.
 	for _, f := range res.Artifacts.Files {
-		out = append(out, ansi.Truncate(key()+label("file")+abbreviatePath(f)+styDim.Render("  "+f), width, "…"))
+		out = append(out, render.Truncate(key()+label("file")+abbreviatePath(f)+styDim.Render("  "+f), width))
 	}
 	list := func(name string, vals []string) {
 		if len(vals) == 0 {
 			return
 		}
-		out = append(out, ansi.Truncate("  "+label(name)+strings.Join(vals, "  ")+
-			styDim.Render(fmt.Sprintf("  (%d)", len(vals))), width, "…"))
+		out = append(out, render.Truncate("  "+label(name)+strings.Join(vals, "  ")+
+			styDim.Render(fmt.Sprintf("  (%d)", len(vals))), width))
 	}
 	list("branch", res.Artifacts.Branches)
 	list("commit", res.Artifacts.Commits)
@@ -155,7 +156,7 @@ func (m tuiModel) viewResult() string {
 	}
 	var body []string
 	section := func(name string) { body = append(body, "", styTitle.Render(name)) }
-	body = append(body, styDim.Render("asked  ")+truncate(oneLine(m.snap.Prompt), w-8))
+	body = append(body, styDim.Render("asked  ")+render.Truncate(oneLine(m.snap.Prompt), w-8))
 	if stages := m.flowStages(w); stages != "" {
 		body = append(body, stages)
 	}
@@ -179,8 +180,8 @@ func (m tuiModel) viewResult() string {
 	section("Tasks")
 	for _, t := range m.sortedTasks() {
 		ic, st := taskIconStyle(t.State)
-		line := "  " + st.Render(ic) + " " + styCyan.Render(padRight(t.ID, 14)) + " " + flattenMarkdown(firstLine(t.Outcome))
-		body = append(body, ansi.Truncate(line, w, "…"))
+		line := "  " + st.Render(ic) + " " + styCyan.Render(render.PadRight(t.ID, 14)) + " " + flattenMarkdown(firstLine(t.Outcome))
+		body = append(body, render.Truncate(line, w))
 	}
 
 	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))

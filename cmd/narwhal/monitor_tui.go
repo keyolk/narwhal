@@ -29,7 +29,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/prefs"
@@ -1444,14 +1444,14 @@ func (m tuiModel) viewHeader() string {
 	if gap := w - ansi.StringWidth(left) - ansi.StringWidth(ref); gap >= 3 {
 		line += strings.Repeat(" ", gap) + styDim.Render(ref)
 	}
-	line = ansi.Truncate(line, w, "…")
+	line = render.Truncate(line, w)
 	// What waits on the operator, on its own row and only when there is
 	// something. See attention.go.
 	if band := m.needsYouBand(w); band != "" {
 		line += "\n" + band
 	}
 	if m.autoZoomed() {
-		line += "\n" + styDim.Render(ansi.Truncate(fmt.Sprintf("narrow terminal (%d cols): one pane at a time · tab or 1-4 switch", m.width), w, "…"))
+		line += "\n" + styDim.Render(render.Truncate(fmt.Sprintf("narrow terminal (%d cols): one pane at a time · tab or 1-4 switch", m.width), w))
 	}
 
 	prompt := oneLine(m.snap.Prompt)
@@ -1468,7 +1468,7 @@ func (m tuiModel) viewHeader() string {
 	lines := wrapSpans([]span{{prompt, lipgloss.NewStyle()}}, max(10, w-3), "")
 	if len(lines) > 2 {
 		lines = lines[:2]
-		lines[1] = runewidth.Truncate(lines[1], max(10, w-3)-1, "") + "…"
+		lines[1] = render.TruncateMarker(lines[1], max(10, w-3)-1, "") + render.Ellipsis()
 	}
 	for i := range lines {
 		lines[i] = "  " + lines[i]
@@ -1629,7 +1629,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		if m.focus == focusTasks {
 			selected = m.taskCur
 		}
-		out = append(out, printable(m.styleBoxLine(r, truncate(r.text, width), selected, marks[i], headline[i])))
+		out = append(out, printable(m.styleBoxLine(r, render.Truncate(r.text, width), selected, marks[i], headline[i])))
 	}
 	return padRows(out, width, height)
 }
@@ -1771,11 +1771,11 @@ func (m tuiModel) taskRow(r graphRow, width int, selected bool) string {
 
 	plain := r.gutter + " " + icon + " " + label
 	if selected {
-		return stySel.Render(padRight(truncate(plain, width), width))
+		return stySel.Render(render.PadRight(render.Truncate(plain, width), width))
 	}
-	if displayWidth(plain) > width {
+	if render.Width(plain) > width {
 		head := r.gutter + " " + icon + " "
-		label = truncate(label, width-displayWidth(head))
+		label = render.Truncate(label, width-render.Width(head))
 	}
 	return styDim.Render(r.gutter) + " " + style.Render(icon) + " " + label
 }
@@ -1828,7 +1828,7 @@ func tabbedPaneTitle(n int, tabs []string, active int, focused bool, width int) 
 		} else {
 			b.WriteString(styDim.Render(t))
 		}
-		plain += displayWidth(t)
+		plain += render.Width(t)
 	}
 	if rule := width - plain - 1; rule > 0 {
 		b.WriteString(" " + styDim.Render(strings.Repeat("─", rule)))
@@ -1848,7 +1848,7 @@ func paneTitle(label string, focused bool, width int) string {
 		// against dim neighbours.
 		styled = styCyanBold.Render(label)
 	}
-	rule := width - displayWidth(label) - 2
+	rule := width - render.Width(label) - 2
 	if rule < 1 {
 		return styled
 	}
@@ -1882,7 +1882,7 @@ func padRows(rows []string, width, height int) string {
 	for i, r := range rows {
 		out[i] = fitCells(r, width)
 		if ansi.StringWidth(r) > width {
-			out[i] = ansi.Truncate(r, width-1, "") + "…"
+			out[i] = render.TruncateMarker(r, width-1, "") + render.Ellipsis()
 		}
 	}
 	return strings.Join(out, "\n")
@@ -2131,71 +2131,6 @@ func shortName(s string) string {
 		return "you"
 	}
 	return strings.TrimPrefix(s, "worker-")
-}
-
-// truncate cuts s to w display columns, ending a cut line with "…".
-//
-// Without the mark a cut line ran into the border and read as complete —
-// "전반적인 동작 방식과 사용법 등을 정리해서" with the rest of the request
-// simply gone. A line that fits is returned as it is.
-//
-// This is on the hot path: every visible row is truncated on every frame,
-// and a frame happens on every keystroke. The obvious implementation —
-// drop one rune at a time and re-measure — costs ~0.9ms on a long styled
-// line because each measurement re-parses ANSI escapes, which put whole-View
-// latency at 34ms and made navigation feel sluggish.
-//
-// Instead: fast-path pure-ASCII strings (the common case) with a byte slice,
-// and otherwise accumulate rune widths in a single pass.
-func truncate(s string, w int) string {
-	if w <= 0 {
-		return ""
-	}
-	if isASCII(s) {
-		if len(s) <= w {
-			return s
-		}
-		return s[:w-1] + "…"
-	}
-	if runewidth.StringWidth(s) <= w {
-		return s
-	}
-	total := 0
-	for i, r := range s {
-		rw := runewidth.RuneWidth(r)
-		if total+rw > w-1 {
-			return s[:i] + "…"
-		}
-		total += rw
-	}
-	return s
-}
-
-// isASCII reports whether s is plain ASCII with no escape sequences, in
-// which case byte length equals display width.
-func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] >= 0x80 || s[i] == 0x1b {
-			return false
-		}
-	}
-	return true
-}
-
-// displayWidth is the column count of s, using the same fast path.
-func displayWidth(s string) int {
-	if isASCII(s) {
-		return len(s)
-	}
-	return runewidth.StringWidth(s)
-}
-
-func padRight(s string, w int) string {
-	gap := w - displayWidth(s)
-	if gap <= 0 {
-		return s
-	}
-	return s + strings.Repeat(" ", gap)
 }
 
 // wrapText breaks content into display lines, preserving existing newlines.

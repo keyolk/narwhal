@@ -24,6 +24,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/keyolk/tuikit/render"
+
 	"github.com/keyolk/narwhal/internal/launcher"
 )
 
@@ -385,7 +387,7 @@ func renderNarrative(entries []transcriptEntry, width int) []string {
 			return
 		}
 		out = append(out, styDim.Render("         ")+styCyan.Render("→ ")+
-			styDim.Render(truncate(foldTools(tools), width-11)))
+			styDim.Render(render.Truncate(foldTools(tools), width-11)))
 		tools = nil
 	}
 	for _, e := range entries {

@@ -72,8 +72,8 @@ func (m tuiModel) viewHelpOverlay(base string) string {
 	g, rows := m.helpGeom()
 	list, _ := keys.RenderHelp(m.helpSections(), g.innerW, rows, m.helpOff, helpStyle)
 	lines := []string{
-		styCyanBold.Render("Narwhal monitor keys") + styDim.Render(ansi.Truncate("  · rebind in "+abbreviatePath(keys.ConfigPath(prefsApp)), max(0, g.innerW-20), "…")),
-		styDim.Render(ansi.Truncate(helpIntro, g.innerW, "…")),
+		styCyanBold.Render("Narwhal monitor keys") + styDim.Render(render.Truncate("  · rebind in "+abbreviatePath(keys.ConfigPath(prefsApp)), max(0, g.innerW-20))),
+		styDim.Render(render.Truncate(helpIntro, g.innerW)),
 		"",
 	}
 	lines = append(lines, list...)
@@ -138,7 +138,7 @@ func (m tuiModel) paletteRows() int { return max(1, min(12, m.height-8)) }
 func (m tuiModel) viewPaletteOverlay(base string) string {
 	g := m.overlayGeom(72, m.paletteRows()+5)
 	es := m.paletteEntries()
-	lines := []string{styCyanBold.Render(": ") + ansi.Truncate(string(m.paletteQuery), g.innerW-3, "…") + styCyan.Render("▏")}
+	lines := []string{styCyanBold.Render(": ") + render.Truncate(string(m.paletteQuery), g.innerW-3) + styCyan.Render("▏")}
 	rows := g.innerH - 2
 	start, end, _ := render.Window(len(es), rows, m.paletteSel, 0)
 	keyW := 0

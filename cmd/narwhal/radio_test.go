@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -33,6 +32,7 @@ func claim(who, path string) *broker.Message {
 // A card is the message as prose: two lines at most, its markdown
 // flattened, and a tag that repeats its sender dropped.
 func TestARadioCardIsTwoLinesOfProse(t *testing.T) {
+	t.Setenv("LC_ALL", "en_US.UTF-8") // the cut marker is "…" outside a CJK locale
 	long := "[synthesis] **결과** " + strings.Repeat("split-tui 재검증 완료 — 워커 보고와 일치한다. ", 20)
 	m := radioModel(t, &broker.Message{Sender: "worker-synthesis", Content: long})
 	got := ansi.Strip(m.viewRadio(100, 10))
@@ -53,7 +53,10 @@ func TestARadioCardIsTwoLinesOfProse(t *testing.T) {
 		t.Errorf("a cut card does not say so: %q", card[1])
 	}
 	for _, l := range lines {
-		if n := runewidth.StringWidth(l); n > 100 {
+		// Measured the way the pane lays out (lipgloss and the kit's
+		// render): go-runewidth counts "—" two cells under a CJK locale
+		// and failed this test there while the layout was unchanged.
+		if n := ansi.StringWidth(l); n > 100 {
 			t.Errorf("line is %d cells: %q", n, l)
 		}
 	}

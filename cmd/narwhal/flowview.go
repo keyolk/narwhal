@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
@@ -257,7 +258,7 @@ func (m tuiModel) removeFlowStep(steps []store.LiveRun) (tea.Model, tea.Cmd) {
 		m.setRemoveResult("", err)
 		return m, nil
 	}
-	m.setRemoveResult(fmt.Sprintf("removed step %d: %s", m.flowSel+1, truncate(oneLine(removed.Request), 60)), nil)
+	m.setRemoveResult(fmt.Sprintf("removed step %d: %s", m.flowSel+1, render.Truncate(oneLine(removed.Request), 60)), nil)
 	if len(f.Steps) == 0 {
 		m.flowView, m.picker = false, true
 	}
@@ -282,7 +283,7 @@ func (m tuiModel) removeHomeRun() (tea.Model, tea.Cmd) {
 		m.removeStep = r.RunID
 		m.homeErr = nil
 		m.askRemove(fmt.Sprintf("remove %q from %s? d again to remove, any other key to keep it "+
-			"(the run's record stays on disk)", truncate(oneLine(r.Prompt), 40), where))
+			"(the run's record stays on disk)", render.Truncate(oneLine(r.Prompt), 40), where))
 		return m, nil
 	}
 	m.removeStep = ""
@@ -294,7 +295,7 @@ func (m tuiModel) removeHomeRun() (tea.Model, tea.Cmd) {
 		m.setRemoveResult("", err)
 		return m, nil
 	}
-	m.setRemoveResult(fmt.Sprintf("removed %q from %s", truncate(oneLine(r.Prompt), 50), where), nil)
+	m.setRemoveResult(fmt.Sprintf("removed %q from %s", render.Truncate(oneLine(r.Prompt), 50), where), nil)
 	m.runCur = max(0, min(m.runCur, len(m.runs)-2))
 	return m, refreshFlows()
 }
@@ -404,10 +405,10 @@ func (m tuiModel) flowGeometry() flowGeom {
 	if ref := styDim.Render(m.flowID); ansi.StringWidth(g.head)+ansi.StringWidth(ref)+3 < w {
 		g.head += strings.Repeat(" ", w-ansi.StringWidth(g.head)-ansi.StringWidth(ref)) + ref
 	}
-	g.title = "  " + styTitle.Render(truncate(m.flowTitle(m.flowID), w-3))
+	g.title = "  " + styTitle.Render(render.Truncate(m.flowTitle(m.flowID), w-3))
 	g.footer = m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	if m.homeErr != nil {
-		g.footer = styRedBold.Render("✗ ") + styRed.Render(truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
+		g.footer = styRedBold.Render("✗ ") + styRed.Render(render.Truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
 	}
 	g.bodyH = max(3, m.height-lipgloss.Height(g.head+"\n"+g.title)-lipgloss.Height(g.footer))
 	if m.flowZoom {
@@ -490,11 +491,11 @@ func (m tuiModel) flowLeft(f store.Flow, steps []store.LiveRun, w, h int) string
 	section("Steps")
 	for i, r := range steps {
 		icon, style := runIcon(r, m.frame)
-		label := fmt.Sprintf("%d %s %s", i+1, style.Render(icon), truncate(m.stepRequest(f, i, r), w-12))
+		label := fmt.Sprintf("%d %s %s", i+1, style.Render(icon), render.Truncate(m.stepRequest(f, i, r), w-12))
 		prog := styDim.Render(fmt.Sprintf("%d/%d", r.Done, r.Tasks))
 		line := fitCells(label, w-6) + prog
 		if i == m.flowSel {
-			line = stySel.Render(padRight(ansi.Strip(line), w))
+			line = stySel.Render(render.PadRight(ansi.Strip(line), w))
 		}
 		rows = append(rows, line)
 	}
@@ -578,12 +579,12 @@ func (m tuiModel) flowStepHead(w int, outs []output, sel int) []string {
 	end := min(len(outs), top+limit)
 	for i := top; i < end; i++ {
 		o := outs[i]
-		kind := outputKindStyle(o.kind).Render(padRight(outputLabels[o.kind], 7))
-		row := kind + styDim.Render(padRight(truncate(o.task, 10), 11)) + truncate(o.title, max(4, w-20))
+		kind := outputKindStyle(o.kind).Render(render.PadRight(outputLabels[o.kind], 7))
+		row := kind + styDim.Render(render.PadRight(render.Truncate(o.task, 10), 11)) + render.Truncate(o.title, max(4, w-20))
 		if i == sel {
 			mark := styCyanBold.Render("▸ ")
 			if m.flowDetail {
-				row = mark + stySel.Render(padRight(ansi.Strip(row), w-2))
+				row = mark + stySel.Render(render.PadRight(ansi.Strip(row), w-2))
 			} else {
 				row = mark + row
 			}
@@ -630,7 +631,7 @@ func (m tuiModel) flowStepDetail(w, h int) string {
 	rows := max(1, h-len(pane)-1)
 	scroll := min(m.flowScroll, max(0, len(lines)-rows))
 	end := min(len(lines), scroll+rows)
-	label := truncate(outs[sel].title, max(4, w-20))
+	label := render.Truncate(outs[sel].title, max(4, w-20))
 	if len(lines) > rows {
 		label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 		if end < len(lines) {
@@ -711,10 +712,10 @@ func (m tuiModel) flowStages(width int) string {
 		}
 		head, tail := fmt.Sprintf("[%d %s ", i+1, icon), fmt.Sprintf(" %d/%d]", r.Done, r.Tasks)
 		room := width - 2 - others - ansi.StringWidth(head+tail)
-		label := head + truncate(oneLine(runLabel(r)), max(8, room)) + tail
+		label := head + render.Truncate(oneLine(runLabel(r)), max(8, room)) + tail
 		parts = append(parts, style.Bold(true).Render(label))
 	}
-	return ansi.Truncate("  "+strings.Join(parts, sep), width, "…")
+	return render.Truncate("  "+strings.Join(parts, sep), width)
 }
 
 // stepRun moves to the previous or next step of the watched run's flow.

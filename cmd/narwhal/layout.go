@@ -22,6 +22,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -233,7 +234,7 @@ func (m tuiModel) readerTabs(w int) string {
 	}
 	rule := w - ansi.StringWidth(title) - 1
 	if rule < 1 {
-		return ansi.Truncate(title, w, "…")
+		return render.Truncate(title, w)
 	}
 	return title + " " + styDim.Render(strings.Repeat("─", rule))
 }
@@ -297,7 +298,7 @@ func borderTitle(title string, w int) string {
 	room := max(0, w-3)
 	tail := ""
 	if core > room {
-		tail = "…"
+		tail = render.Ellipsis()
 	}
 	text := ansi.Truncate(title, min(core, room), tail) + " "
 	return styDim.Render("─ ") + text + styDim.Render(strings.Repeat("─", max(0, w-2-ansi.StringWidth(text))))

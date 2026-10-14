@@ -19,7 +19,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 )
 
 // fileReadCap bounds what is read of a file for the pane; o pages the rest.
@@ -166,7 +166,7 @@ func cachedRender(id, text string, width int, markdown bool) []string {
 		out = renderMarkdown(text, width, lipgloss.NewStyle())
 	} else {
 		for _, l := range strings.Split(strings.TrimRight(expandTabs(text), "\n"), "\n") {
-			out = append(out, ansi.Truncate(l, width, "…"))
+			out = append(out, render.Truncate(l, width))
 		}
 	}
 	outputBodyCache.Lock()
@@ -273,18 +273,18 @@ func (m tuiModel) outputList(outs []output, lw int) ([]string, int) {
 			if len(lines) > 0 {
 				lines = append(lines, "")
 			}
-			lines = append(lines, styTitle.Render(truncate(fmt.Sprintf("Step %d  %s", o.step+1, o.run), lw)))
+			lines = append(lines, styTitle.Render(render.Truncate(fmt.Sprintf("Step %d  %s", o.step+1, o.run), lw)))
 			lastStep, lastKind = o.step, -1
 		}
 		if o.kind != lastKind {
 			lines = append(lines, outputKindStyle(o.kind).Render(" "+kindHeading(o.kind)))
 			lastKind = o.kind
 		}
-		label := truncate(o.title, max(4, lw-14))
-		task := padRight(truncate(o.task, 10), 10)
+		label := render.Truncate(o.title, max(4, lw-14))
+		task := render.PadRight(render.Truncate(o.task, 10), 10)
 		if i == m.outputSel {
 			selLine = len(lines)
-			lines = append(lines, stySel.Render(padRight(truncate("  "+task+" "+label, lw), lw)))
+			lines = append(lines, stySel.Render(render.PadRight(render.Truncate("  "+task+" "+label, lw), lw)))
 			continue
 		}
 		lines = append(lines, "  "+styDim.Render(task)+" "+label)
@@ -327,7 +327,7 @@ func (m tuiModel) viewOutputs() string {
 		}
 	}
 	head := styDim.Render("‹ ") + styCyanBold.Render("Outputs") + styDim.Render(fmt.Sprintf("   %d from %s", len(outs), from))
-	title := "  " + truncate(oneLine(prompt), w-3)
+	title := "  " + render.Truncate(oneLine(prompt), w-3)
 	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	bodyH := max(3, m.height-2-lipgloss.Height(keys))
 	rows := max(1, bodyH-3)
@@ -351,7 +351,7 @@ func (m tuiModel) viewOutputs() string {
 		lines := m.outputBody(*sel, rw)
 		scroll := min(m.outputScroll, max(0, len(lines)-rows))
 		end := min(len(lines), scroll+rows)
-		label := truncate(sel.title, max(4, rw-20))
+		label := render.Truncate(sel.title, max(4, rw-20))
 		if len(lines) > rows {
 			label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 			if end < len(lines) {

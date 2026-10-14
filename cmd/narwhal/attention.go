@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -46,7 +47,7 @@ func (m tuiModel) needsYouBand(w int) string {
 		return ""
 	}
 	band := styYellowBold.Render("▌ needs you  ") + strings.Join(items, styDim.Render("   "))
-	return ansi.Truncate(band, max(1, w), "…")
+	return render.Truncate(band, max(1, w))
 }
 
 func plural(n int) string {

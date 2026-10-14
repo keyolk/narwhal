@@ -19,8 +19,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -269,7 +269,7 @@ func (m tuiModel) viewQuestions() string {
 	if n := len(m.pendingAnswers); n > 0 {
 		head += "  " + styYellow.Render(fmt.Sprintf("%d answers to send", n))
 	}
-	title := "  " + truncate(oneLine(m.snap.Prompt), w-3)
+	title := "  " + render.Truncate(oneLine(m.snap.Prompt), w-3)
 
 	var body []string
 	if len(qs) == 0 {
@@ -334,13 +334,13 @@ func (m tuiModel) viewQuestions() string {
 				opt += "  ← recommended"
 			}
 			if q.ForOperator() {
-				body = append(body, "     "+styCyan.Render(truncate(opt, inner-4)))
+				body = append(body, "     "+styCyan.Render(render.Truncate(opt, inner-4)))
 			} else {
-				body = append(body, "     "+styDim.Render(truncate(opt, inner-4)))
+				body = append(body, "     "+styDim.Render(render.Truncate(opt, inner-4)))
 			}
 		}
 		if q.Assumed != "" {
-			body = append(body, "     "+styDim.Render("assumes: ")+truncate(q.Assumed, inner-9))
+			body = append(body, "     "+styDim.Render("assumes: ")+render.Truncate(q.Assumed, inner-9))
 		}
 		if q.Candidate {
 			body = append(body, "     "+styDim.Render("waiting for the run's review — it may be settled from the findings first"))
@@ -352,19 +352,19 @@ func (m tuiModel) viewQuestions() string {
 		case !q.Open() && q.AcceptedAssumption:
 			body = append(body, "     "+styGreen.Render("answered: as assumed"))
 		case !q.Open() && q.ResolvedBy != "":
-			body = append(body, "     "+styGreen.Render("settled by "+q.ResolvedBy+": ")+truncate(q.Answer, inner-14))
+			body = append(body, "     "+styGreen.Render("settled by "+q.ResolvedBy+": ")+render.Truncate(q.Answer, inner-14))
 		case !q.Open():
-			body = append(body, "     "+styGreen.Render("answered: ")+truncate(q.Answer, inner-10))
+			body = append(body, "     "+styGreen.Render("answered: ")+render.Truncate(q.Answer, inner-10))
 		case pending && p.asAssumed:
 			body = append(body, "     "+styCyan.Render("to send: as assumed"))
 		case pending:
-			body = append(body, "     "+styCyan.Render("to send: ")+truncate(p.text, inner-9))
+			body = append(body, "     "+styCyan.Render("to send: ")+render.Truncate(p.text, inner-9))
 		}
 	}
 
 	foot := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 	if m.answering {
-		foot = ansi.Truncate(styCyanBold.Render("» answer: ")+string(m.answerBuf)+styCyan.Render("▏"), w, "…") +
+		foot = render.Truncate(styCyanBold.Render("» answer: ")+string(m.answerBuf)+styCyan.Render("▏"), w) +
 			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — S sends every kept answer at once")
 	}
 	avail := max(1, m.height-2-strings.Count(foot, "\n")-1)

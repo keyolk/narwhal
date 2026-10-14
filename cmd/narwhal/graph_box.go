@@ -35,6 +35,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/keyolk/tuikit/render"
+
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
@@ -557,9 +559,9 @@ func measureBox(n graphNode, width int, iconFor func(broker.TaskState) (string, 
 	}
 
 	// " icon label badge " plus two borders.
-	inner := 1 + displayWidth(icon) + 1 + displayWidth(label) + 1
+	inner := 1 + render.Width(icon) + 1 + render.Width(label) + 1
 	if badge != "" {
-		inner += displayWidth(badge) + 1
+		inner += render.Width(badge) + 1
 	}
 	max := width - 2
 	if max < 10 {
@@ -592,15 +594,15 @@ func drawBox(c *canvas, b placedBox) {
 
 	body := " " + b.icon + " " + b.label
 	inner := b.w - 2
-	if b.badge != "" && displayWidth(body)+displayWidth(b.badge)+2 <= inner {
-		pad := inner - displayWidth(body) - displayWidth(b.badge) - 1
+	if b.badge != "" && render.Width(body)+render.Width(b.badge)+2 <= inner {
+		pad := inner - render.Width(body) - render.Width(b.badge) - 1
 		body += strings.Repeat(" ", pad) + b.badge + " "
 	}
-	body = padRight(truncate(body, inner), inner)
+	body = render.PadRight(render.Truncate(body, inner), inner)
 
 	c.putText(b.x+1, b.y+1, body)
 	if b.detail != "" && b.h > 3 {
-		c.putText(b.x+1, b.y+2, padRight(truncate(" "+fitDetail(b.detail, inner-1), inner), inner))
+		c.putText(b.x+1, b.y+2, render.PadRight(render.Truncate(" "+fitDetail(b.detail, inner-1), inner), inner))
 	}
 }
 
@@ -1018,7 +1020,7 @@ func sourceJunction(x, lo, hi int) rune {
 
 // runeCells is the column width of a single rune.
 func runeCells(r rune) int {
-	w := displayWidth(string(r))
+	w := render.Width(string(r))
 	if w < 1 {
 		return 1
 	}
@@ -1034,23 +1036,23 @@ func fitDetail(detail string, w int) string {
 		// The sentence where enough of it shows to be read; the tool
 		// where it would be a fragment.
 		const readable = 16
-		if displayWidth(prose) <= w || w >= readable {
+		if render.Width(prose) <= w || w >= readable {
 			return fitDetail(prose, w)
 		}
 		return fitDetail(alt, w)
 	}
-	if displayWidth(detail) <= w {
+	if render.Width(detail) <= w {
 		return detail
 	}
 	if !strings.Contains(detail, "  ") {
 		// Prose, not "Tool  argument": cut it where it ends, and say so.
-		return truncate(detail, w)
+		return render.Truncate(detail, w)
 	}
 	tool, arg, ok := strings.Cut(detail, "  ")
-	if !ok || displayWidth(tool)+4 > w {
-		return truncate(tool, w)
+	if !ok || render.Width(tool)+4 > w {
+		return render.Truncate(tool, w)
 	}
-	return tool + " " + truncate(arg, w-displayWidth(tool)-1)
+	return tool + " " + render.Truncate(arg, w-render.Width(tool)-1)
 }
 
 // barCellWithoutDrop is the glyph at the child's column on a bar once a

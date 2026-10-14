@@ -28,6 +28,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
 
@@ -271,7 +272,7 @@ func (m tuiModel) steerPrompt() string {
 // be steered says why instead of taking keystrokes into nowhere.
 func (m tuiModel) steerBar() string {
 	w := max(1, m.width)
-	fit := func(s string) string { return ansi.Truncate(s, w, "…") }
+	fit := func(s string) string { return render.Truncate(s, w) }
 	if m.composing {
 		return m.composeLine(w)
 	}
@@ -317,7 +318,7 @@ func (m tuiModel) steerBar() string {
 	if last.routed {
 		state = styMagenta.Render("→"+strings.Join(last.addressed, ",")) + " " + state
 	}
-	right := styDim.Render("last: ") + truncate(last.text, 40) + "  " + state
+	right := styDim.Render("last: ") + render.Truncate(last.text, 40) + "  " + state
 	gap := w - ansi.StringWidth(left) - ansi.StringWidth(right)
 	if gap < 2 {
 		return fit(left + "  " + right)

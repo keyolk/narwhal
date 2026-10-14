@@ -23,6 +23,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -145,7 +146,7 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 	}
 	switch e.kind {
 	case "tool":
-		head := styDim.Render(stamp) + styCyan.Render("→ ") + styCyan.Render(truncate(e.text, width-len(stamp)-2))
+		head := styDim.Render(stamp) + styCyan.Render("→ ") + styCyan.Render(render.Truncate(e.text, width-len(stamp)-2))
 		if !open || strings.TrimSpace(e.detail) == "" {
 			return []string{head}
 		}
@@ -166,7 +167,7 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 				if shown == 2 {
 					break
 				}
-				out = append(out, pad+styDim.Render(truncate(oneLine(l), width-len(pad))))
+				out = append(out, pad+styDim.Render(render.Truncate(oneLine(l), width-len(pad))))
 				shown++
 			}
 			if rest := len(lines) - shown; rest > 0 && shown == 2 {
@@ -187,9 +188,9 @@ func renderTaskEntryUncached(e transcriptEntry, width int, open bool, st *feedSt
 			res = renderMarkdown(e.detail, inner-2, lipgloss.NewStyle())
 		}
 		if !open {
-			out := []string{head + "  " + truncate(flattenMarkdown(e.text), width-12)}
+			out := []string{head + "  " + render.Truncate(flattenMarkdown(e.text), width-12)}
 			if e.detail != "" {
-				out = append(out, pad+styDim.Render("↳ ")+truncate(flattenMarkdown(e.detail), inner-2))
+				out = append(out, pad+styDim.Render("↳ ")+render.Truncate(flattenMarkdown(e.detail), inner-2))
 			}
 			if len(body) > 1 || len(res) > 1 {
 				out = append(out, more(len(body)+len(res)-2))
@@ -483,7 +484,7 @@ func (m tuiModel) taskSummaryLines(t broker.TaskSnapshot, width int) []string {
 				out = append(out, "  "+a.said)
 			}
 			if a.tool != "" {
-				out = append(out, styCyan.Render("  → "+truncate(a.tool, inner-4)))
+				out = append(out, styCyan.Render("  → "+render.Truncate(a.tool, inner-4)))
 			}
 			if !a.last.IsZero() {
 				out = append(out, styDim.Render("  last activity "+ago(a.last)+" ago — tab for the full activity"))

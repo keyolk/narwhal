@@ -15,7 +15,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -198,11 +198,11 @@ func (m tuiModel) viewBrief(width, height int) string {
 	section := func(name string) {
 		rows = append(rows, styTitle.Render(" "+name))
 	}
-	// These lines are styled before they are fitted, so the cut has to
-	// skip escape sequences: truncate counts them as cells, which ends a
-	// line early and can split a colour code in half.
+	// These lines are styled before they are fitted; render.Truncate skips
+	// escape sequences, so a cut never ends a line early or splits a colour
+	// code in half.
 	line := func(s string) {
-		rows = append(rows, ansi.Truncate(s, width, "…"))
+		rows = append(rows, render.Truncate(s, width))
 	}
 
 	section("Needs a decision")
@@ -219,7 +219,7 @@ func (m tuiModel) viewBrief(width, height int) string {
 		if d.urgent {
 			style = styRedBold
 		}
-		line("  " + style.Render(d.glyph) + " " + styCyan.Render(padRight(d.who, 12)) + " " +
+		line("  " + style.Render(d.glyph) + " " + styCyan.Render(render.PadRight(d.who, 12)) + " " +
 			d.what + styDim.Render("  "+d.at))
 	}
 
@@ -229,7 +229,7 @@ func (m tuiModel) viewBrief(width, height int) string {
 		if t.State == broker.TaskDispatched {
 			icon = spinnerAt(m.frame)
 		}
-		line("  " + style.Render(icon) + " " + styCyan.Render(padRight(t.ID, 12)) + " " + m.briefWorkerLine(t))
+		line("  " + style.Render(icon) + " " + styCyan.Render(render.PadRight(t.ID, 12)) + " " + m.briefWorkerLine(t))
 	}
 
 	section("Your instructions")
@@ -240,9 +240,9 @@ func (m tuiModel) viewBrief(width, height int) string {
 	for _, in := range ins {
 		// Who answered goes before the text: the text is long, and the
 		// answer is the part that tells you whether to follow up.
-		mark, state := styYellow.Render("…"), styYellow.Render(padRight("waiting", 14))
+		mark, state := styYellow.Render("…"), styYellow.Render(render.PadRight("waiting", 14))
 		if len(in.answeredBy) > 0 {
-			mark, state = styGreen.Render("✓"), styGreen.Render(padRight(strings.Join(in.answeredBy, ","), 14))
+			mark, state = styGreen.Render("✓"), styGreen.Render(render.PadRight(strings.Join(in.answeredBy, ","), 14))
 		}
 		via := ""
 		if in.routed {

@@ -2384,15 +2384,7 @@ func (m tuiModel) sessionIDPath(taskID string) string {
 // when it is not recorded — a run started before the launcher began pinning
 // session ids, or a task that has not been dispatched.
 func (m tuiModel) workerSessionID(taskID string) string {
-	path := m.sessionIDPath(taskID)
-	if path == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(strings.Join(globalFiles.lines(m.sessionIDPath(taskID)), "\n"))
 }
 
 // attachDoneMsg reports back when an attached session exits.
@@ -2449,23 +2441,11 @@ func (m tuiModel) attachToSession(taskID string) (tea.Cmd, error) {
 	}), nil
 }
 
-// workerOutputLines reads a worker's whole session log, newest last.
-// Returns nil when the file does not exist yet — the task has not been
+// workerOutputLines reads a worker's whole session log, newest last,
+// through globalFiles so a frame only stats it. Returns nil when the file does not exist yet — the task has not been
 // dispatched, or this run keeps its sessions elsewhere.
 func (m tuiModel) workerOutputLines(taskID string) []string {
-	path := m.sessionLogPath(taskID)
-	if path == "" {
-		return nil
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	text := strings.TrimRight(string(data), "\n")
-	if text == "" {
-		return nil
-	}
-	return strings.Split(text, "\n")
+	return globalFiles.lines(m.sessionLogPath(taskID))
 }
 
 // scrollWindow clamps a scroll offset to a body length and returns the

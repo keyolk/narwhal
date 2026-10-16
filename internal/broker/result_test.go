@@ -7,13 +7,13 @@ import (
 )
 
 func TestExtractArtifactsFromProse(t *testing.T) {
-	text := "브랜치 `CPLAT-11892-kiro-acp-parity` (워크트리), 커밋 5개: `29b539a` alias, `83ac223` reaper, size `1234567` lines.\n" +
-		"PR: https://github.com/sendbird/ccproxy/pull/227 and https://github.com/sendbird/ccproxy/pull/227 again."
+	text := "브랜치 `ABC-11892-kiro-acp-parity` (워크트리), 커밋 5개: `29b539a` alias, `83ac223` reaper, size `1234567` lines.\n" +
+		"PR: https://github.com/acme/proxy/pull/227 and https://github.com/acme/proxy/pull/227 again."
 	a := ExtractArtifacts(text)
-	if strings.Join(a.PRs, ",") != "https://github.com/sendbird/ccproxy/pull/227" {
+	if strings.Join(a.PRs, ",") != "https://github.com/acme/proxy/pull/227" {
 		t.Errorf("prs %v", a.PRs)
 	}
-	if strings.Join(a.Branches, ",") != "CPLAT-11892-kiro-acp-parity" {
+	if strings.Join(a.Branches, ",") != "ABC-11892-kiro-acp-parity" {
 		t.Errorf("branches %v", a.Branches)
 	}
 	// 1234567 has no letter: a number, not a hash.

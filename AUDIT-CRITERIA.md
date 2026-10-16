@@ -191,4 +191,4 @@ not a finding.
   109 of them, 8,982 tool calls
 - `~/.local/state/kmd/rag.jsonl` — 7,500+ RAG decisions, including which
   worker prompts retrieved context and which came back empty
-- the repo itself at `/Users/gavin.jeong/src/keyolk/narwhal`
+- the repo itself at `~/src/keyolk/narwhal`

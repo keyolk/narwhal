@@ -555,6 +555,8 @@ narwhal config unset jev.overturned.threshold
 |---|---|---|
 | `jev.enabled` | `true` | Consult the Jev judge at all |
 | `jev.timeout` | `3s` | How long one dispatcher judgement may take |
+| `jev.endpoint` | Vercel AI Gateway | The gateway's evaluate URL |
+| `jev.pass_entry` | — | pass(1) entry with the gateway key, when `NARWHAL_JEV_KEY` is unset; with neither, judgements are off |
 | `jev.<judgement>.enabled` | `true` | One judgement on or off |
 | `jev.<judgement>.threshold` | calibrated | The probability it acts at |
 | `scene_notes.enabled` | `true` | One-line timeline notes from a small model |

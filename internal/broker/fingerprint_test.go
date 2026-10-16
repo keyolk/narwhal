@@ -123,8 +123,8 @@ func TestAHumanRetypingIsNotCaught(t *testing.T) {
 	//
 	// These two are the real pair: the same EKS request resubmitted four
 	// minutes after a restart orphaned the first. One comma moved.
-	first := "EKS 네이티브 kubeSchedulerConfig(2026-08-12 GA) 위에서, Sendbird mesg 클러스터의 비용 효율화"
-	second := "EKS 네이티브 kubeSchedulerConfig(2026-08-12 GA) 위에서 Sendbird mesg 클러스터의 비용 효율화"
+	first := "EKS 네이티브 kubeSchedulerConfig(2026-08-12 GA) 위에서, Acme prod 클러스터의 비용 효율화"
+	second := "EKS 네이티브 kubeSchedulerConfig(2026-08-12 GA) 위에서 Acme prod 클러스터의 비용 효율화"
 
 	if Fingerprint("/src/x", first) == Fingerprint("/src/x", second) {
 		t.Skip("normalization got stronger — reconsider whether it now over-matches")

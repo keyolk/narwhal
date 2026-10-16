@@ -154,7 +154,7 @@ func TestThePlannersQuestionIsThePlans(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer srv.Shutdown()
-	postJSON(t, addr+"/api/v1/agents/"+main.Token+"/ask", map[string]any{"question": "sendbird or delight?", "assumed": "sendbird"})
+	postJSON(t, addr+"/api/v1/agents/"+main.Token+"/ask", map[string]any{"question": "staging or production?", "assumed": "production"})
 	qs := run.Questions()
 	if len(qs) != 1 || qs[0].TaskID != broker.PlanAsker {
 		t.Fatalf("questions = %+v", qs)

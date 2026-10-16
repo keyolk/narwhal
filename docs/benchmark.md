@@ -181,9 +181,9 @@ Docker containers rather than on a host checkout. That is a different harness.
 have manufactured a Narwhal loss had they gone unnoticed:**
 
 1. **Username path split.** Claude Code's scratchpad encodes the username
-   with dots replaced by hyphens (`-Users-gavin-jeong`), but a worker
+   with dots replaced by hyphens (`-Users-jane-doe`), but a worker
    rebuilding a path under its own `$HOME` writes the dotted form
-   (`-Users-gavin.jeong`). Both directories exist; the worker reported
+   (`-Users-jane.doe`). Both directories exist; the worker reported
    success and the judge found nothing. Narwhal's first answer (36 KB, 399
    lines, 8/8 when recovered) was scored 0 until the cause was traced. Both
    arms now write to `/tmp/narwhal-bench/…` (no username in the path).

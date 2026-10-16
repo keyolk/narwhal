@@ -5,8 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/keyolk/narwhal/internal/config"
 )
 
 func TestAskSendsTheQuestionAndReadsTheProbability(t *testing.T) {
@@ -76,5 +81,38 @@ func TestMissingKeyIsUndecidedWithoutTouchingTheNetwork(t *testing.T) {
 	}
 	if hit {
 		t.Error("called the gateway without a key")
+	}
+}
+
+// Where the key lives is the person's to say: with no jev.pass_entry, pass(1)
+// is not run at all; with one, that entry is what is read.
+func TestTheKeyComesFromTheConfiguredPassEntry(t *testing.T) {
+	t.Setenv("NARWHAL_JEV_KEY", "")
+	bin := t.TempDir()
+	log := filepath.Join(bin, "called")
+	script := "#!/bin/sh\necho \"$@\" > " + log + "\necho secret-key\n"
+	if err := os.WriteFile(filepath.Join(bin, "pass"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	config.UseFile(cfg)
+	t.Cleanup(func() { config.UseFile("") })
+
+	if _, err := defaultKey(); err == nil {
+		t.Fatal("found a key with no pass entry configured")
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("ran pass with no entry configured")
+	}
+	if err := config.Set("jev.pass_entry", "me/gateway-key"); err != nil {
+		t.Fatal(err)
+	}
+	key, err := defaultKey()
+	if err != nil || key != "secret-key" {
+		t.Fatalf("key = %q, %v", key, err)
+	}
+	if b, _ := os.ReadFile(log); strings.TrimSpace(string(b)) != "show me/gateway-key" {
+		t.Errorf("pass called with %q", b)
 	}
 }

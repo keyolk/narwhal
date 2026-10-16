@@ -18,9 +18,9 @@ mkdir -p "$TRIAL/agent"
 # and copied back afterwards.
 #
 # Why: Claude Code's scratchpad path embeds the username with dots replaced by
-# hyphens (/private/tmp/claude-502/-Users-gavin-jeong/...), but a worker
+# hyphens (/private/tmp/claude-<uid>/-Users-jane-doe/...), but a worker
 # reconstructing a path under its own $HOME writes the dotted form
-# (-Users-gavin.jeong). Both directories then exist, the worker reports
+# (-Users-jane.doe). Both directories then exist, the worker reports
 # success, and the judge finds nothing. A path with no username in it cannot
 # be rewritten this way.
 ANSWER_DIR="/tmp/narwhal-bench/$(basename "$(dirname "$TRIAL")")-$(basename "$TRIAL")"

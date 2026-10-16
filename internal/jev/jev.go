@@ -25,18 +25,26 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/keyolk/narwhal/internal/config"
 )
 
 const (
-	Endpoint = "https://ai-gateway.vercel.sh/v1/evaluate"
-	Model    = "typesafe-ai/jev"
-
-	// PassEntry is where the gateway key lives when NARWHAL_JEV_KEY is
-	// unset. It is the same entry ~/.claude/hooks/jev.py reads, so one key
-	// rotation covers both.
-	PassEntry = "sendbird/vercel/ai-gateway/api-key"
+	// DefaultEndpoint is the Vercel AI Gateway's evaluate API; jev.endpoint
+	// in the config file points elsewhere.
+	DefaultEndpoint = "https://ai-gateway.vercel.sh/v1/evaluate"
+	Model           = "typesafe-ai/jev"
 
 	DefaultTimeout = 3 * time.Second
+)
+
+var (
+	settingEndpoint = config.Register(config.Key{Name: "jev.endpoint", Kind: config.String,
+		Default: DefaultEndpoint, Help: "the gateway's evaluate URL"})
+	// The key comes from NARWHAL_JEV_KEY, else from this pass(1) entry.
+	// Empty by default: where a person keeps their key is theirs to say.
+	settingPassEntry = config.Register(config.Key{Name: "jev.pass_entry", Kind: config.String,
+		Default: "", Help: "pass(1) entry holding the gateway key, used when NARWHAL_JEV_KEY is unset"})
 )
 
 // Client asks Jev questions. The zero value is not usable; use New.
@@ -50,14 +58,18 @@ type Client struct {
 }
 
 // New returns a client that reads its key from NARWHAL_JEV_KEY, falling
-// back to `pass show PassEntry`. The key is resolved on first use, not
-// here, so constructing a client on a machine without a key costs nothing
-// and fails only as "undecided".
+// back to `pass show <jev.pass_entry>`. The key is resolved on first use,
+// not here, so constructing a client on a machine without a key costs
+// nothing and fails only as "undecided".
 func New() *Client {
+	url := config.GetString(settingEndpoint.Name)
+	if url == "" {
+		url = DefaultEndpoint
+	}
 	return &Client{
 		http:  &http.Client{Timeout: DefaultTimeout},
 		keyFn: defaultKey,
-		url:   Endpoint,
+		url:   url,
 	}
 }
 
@@ -74,20 +86,24 @@ func defaultKey() (string, error) {
 	if k := strings.TrimSpace(os.Getenv("NARWHAL_JEV_KEY")); k != "" {
 		return k, nil
 	}
+	entry := config.GetString(settingPassEntry.Name)
+	if entry == "" {
+		return "", fmt.Errorf("no gateway key: set NARWHAL_JEV_KEY, or jev.pass_entry to a pass(1) entry")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "pass", "show", PassEntry)
+	cmd := exec.CommandContext(ctx, "pass", "show", entry)
 	// The daemon has no terminal. A locked gpg-agent would otherwise raise
 	// a pinentry window from a background process, or block until the
 	// timeout; failing fast leaves the judge undecided, which is harmless.
 	cmd.Env = append(os.Environ(), "PASSWORD_STORE_GPG_OPTS=--pinentry-mode=error")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("pass show %s: %w", PassEntry, err)
+		return "", fmt.Errorf("pass show %s: %w", entry, err)
 	}
 	line, _, _ := strings.Cut(string(out), "\n")
 	if line = strings.TrimSpace(line); line == "" {
-		return "", fmt.Errorf("pass show %s: empty", PassEntry)
+		return "", fmt.Errorf("pass show %s: empty", entry)
 	}
 	return line, nil
 }

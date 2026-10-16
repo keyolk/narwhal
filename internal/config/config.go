@@ -36,6 +36,7 @@ const (
 	Bool     Kind = "bool"
 	Float    Kind = "float"
 	Duration Kind = "duration"
+	String   Kind = "string"
 )
 
 // Key is one setting.
@@ -215,6 +216,12 @@ func GetFloat(name string) float64 {
 	return f
 }
 
+// GetString is a string setting.
+func GetString(name string) string {
+	_, v, _ := raw(name)
+	return strings.TrimSpace(v)
+}
+
 // GetDuration is a duration setting.
 func GetDuration(name string) time.Duration {
 	k, v, _ := raw(name)
@@ -240,6 +247,8 @@ func parse(kind Kind, v string) (any, error) {
 			return nil, fmt.Errorf("%q is not a number", v)
 		}
 		return f, nil
+	case String:
+		return v, nil
 	case Duration:
 		d, err := time.ParseDuration(v)
 		if err != nil || d <= 0 {

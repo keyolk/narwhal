@@ -282,7 +282,11 @@ func homeWindow(n, selTop, rows int) (int, int) {
 func (m tuiModel) homeLines(width int) (lines []string, runAt []int, selTop int) {
 	add := func(run int, ls ...string) {
 		for _, l := range ls {
-			lines = append(lines, l)
+			// The mouse maps one line to one row (RowHit), so a line wider
+			// than the screen would wrap and shift every row below it. Row
+			// builders floor their title at 10 cells, which a narrow pane
+			// cannot hold; clip here so no builder has to get it right.
+			lines = append(lines, render.Truncate(l, width))
 			runAt = append(runAt, run)
 		}
 	}

@@ -86,6 +86,28 @@ func TestMouseHomeClickSelectsAndSecondClickOpens(t *testing.T) {
 	}
 }
 
+// A key between two clicks breaks the pair. Click a run, j, k back to it,
+// click again inside the double-click window: that is a fresh first click,
+// so it selects and must not open the run.
+func TestMouseHomeKeyBetweenClicksBreaksTheDoubleClick(t *testing.T) {
+	m := homeMouseModel(t)
+	m = clickAt(t, m, "charlie job")
+	for _, k := range []string{"j", "k"} {
+		next, _ := m.Update(keyMsg(k))
+		m = next.(tuiModel)
+	}
+	if selectedRun(m) != "run-c" {
+		t.Fatalf("selected %q after j, k; want back on run-c", selectedRun(m))
+	}
+	m = clickAt(t, m, "charlie job")
+	if !m.picker {
+		t.Fatalf("a key between the clicks must break the double click; run %q opened", m.live.RunID)
+	}
+	if selectedRun(m) != "run-c" {
+		t.Fatalf("selected %q, want run-c still selected", selectedRun(m))
+	}
+}
+
 func TestMouseHomeSecondClickOnAnotherRunOnlySelects(t *testing.T) {
 	m := homeMouseModel(t)
 	m = clickAt(t, m, "charlie job")
@@ -240,6 +262,27 @@ func TestMouseGraphSecondClickOnSelectedTaskOpensIt(t *testing.T) {
 		if m.detail != detailSession || selectedID(m) != "d" {
 			t.Fatalf("box=%v: second click: detail=%v selected=%q", box, m.detail, selectedID(m))
 		}
+	}
+}
+
+// The graph shares the detector: a key between two clicks on a task breaks
+// the pair, so the second click only selects and the task stays closed.
+func TestMouseGraphKeyBetweenClicksBreaksTheDoubleClick(t *testing.T) {
+	m := runMouseModel(t, false)
+	m = clickTask(t, m, "d")
+	for _, k := range []string{"j", "k"} {
+		next, _ := m.Update(keyMsg(k))
+		m = next.(tuiModel)
+	}
+	if selectedID(m) != "d" {
+		t.Fatalf("selected %q after j, k; want back on d", selectedID(m))
+	}
+	m = clickTask(t, m, "d")
+	if m.detail != detailClosed {
+		t.Fatalf("a key between the clicks must break the double click; detail=%v", m.detail)
+	}
+	if selectedID(m) != "d" {
+		t.Fatalf("selected %q, want d still selected", selectedID(m))
 	}
 }
 
@@ -545,6 +588,38 @@ func TestMouseGraphClickOnAScrolledGraphHitsTheRowDrawn(t *testing.T) {
 		got := clickTask(t, m, drawn)
 		if selectedID(got) != drawn {
 			t.Fatalf("box=%v: clicked task %q on a scrolled graph and selected %q", box, drawn, selectedID(got))
+		}
+	}
+}
+
+// The home list maps one line to one run row. A line wider than the screen
+// wraps in the terminal (View never shows it) and every click below lands one
+// row low. A flow header's title is floored at 10 cells, which overflowed a
+// narrow pane; every line must fit at every width.
+func TestMouseHomeRowsFitTheScreen(t *testing.T) {
+	now := time.Now().Unix()
+	long := strings.Repeat("아주 긴 요청 very long prompt text ", 10)
+	var runs []store.LiveRun
+	for i, st := range []string{"active", "done", "failed"} {
+		runs = append(runs, store.LiveRun{RunID: "run-" + st, BrokerURL: "http://x",
+			CWD: "/src/" + strings.Repeat("deep/", 20) + "repo", Prompt: long, Flow: "flow-" + strings.Repeat("longflowname", 8),
+			StartedAt: now - int64(600*(i+1)), State: st, Tasks: 5, Done: 2, Running: 1, Messages: 3})
+	}
+	runs = append(runs, store.LiveRun{RunID: "run-solo", CWD: "/src/" + strings.Repeat("deep/", 20) + "repo",
+		Prompt: long, StartedAt: now - 60, State: "done", Tasks: 5, Done: 5})
+	for _, w := range []int{30, 40, 50, 60, 80, 120} {
+		m := homeModel(t, runs...)
+		m.width, m.height = w, 30
+		lines, _, _ := m.homeLines(w)
+		for i, l := range lines {
+			if n := ansi.StringWidth(l); n > w {
+				t.Errorf("width %d: home line %d is %d cells: %q", w, i, n, ansi.Strip(l))
+			}
+		}
+		for i, l := range strings.Split(m.View(), "\n") {
+			if n := ansi.StringWidth(l); n > w {
+				t.Errorf("width %d: view line %d is %d cells: %q", w, i, n, ansi.Strip(l))
+			}
 		}
 	}
 }

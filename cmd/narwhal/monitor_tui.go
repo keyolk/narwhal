@@ -34,6 +34,7 @@ import (
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/tmux"
 	"github.com/keyolk/tuikit/toast"
@@ -315,6 +316,11 @@ type tuiModel struct {
 	// steerStep is the flow step the open line sends to, when it was
 	// opened from the flow view; nil for the watched run.
 	steerStep *steerTarget
+
+	// clicks tells a second click on the selected row from two single
+	// ones; mouseNow stands in for the clock in tests. See mouse.go.
+	clicks   mouse.Clicks
+	mouseNow func() time.Time
 
 	width  int
 	height int
@@ -787,6 +793,9 @@ func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd := m.poll()
 		return m, cmd
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case tea.KeyMsg:
 		// An error on screen long enough to be read goes with the next key.
@@ -1594,8 +1603,7 @@ func (m tuiModel) viewTasks(width, height int) string {
 	out := make([]string, 0, height)
 	out = append(out, title)
 
-	visible := height - 1
-	start := scrollStart(m.taskCur, visible, len(rows))
+	start := m.laneStart(height, len(rows))
 	for i := start; i < len(rows) && len(out) < height; i++ {
 		out = append(out, m.taskRow(rows[i], width, i == m.taskCur && m.focus == focusTasks))
 	}
@@ -1603,6 +1611,25 @@ func (m tuiModel) viewTasks(width, height int) string {
 		out = append(out, styDim.Render("(no tasks yet)"))
 	}
 	return padRows(out, width, height)
+}
+
+// laneStart is the first graph row drawn in a lane-mode pane height rows
+// tall. The mouse handler calls it too, so a click lands on the row drawn.
+func (m tuiModel) laneStart(height, total int) int {
+	return scrollStart(m.taskCur, height-1, total)
+}
+
+// boxStart is the first rendered line drawn in a box-mode pane height rows
+// tall: the window is anchored on the first line of the selected task's box.
+func (m tuiModel) boxStart(rows []boxRow, height int) int {
+	anchor := 0
+	for i, r := range rows {
+		if r.owns(m.taskCur) {
+			anchor = i
+			break
+		}
+	}
+	return scrollStart(anchor, height-1, len(rows))
 }
 
 // viewTasksBoxed renders the box view. Scrolling works in rendered lines
@@ -1624,18 +1651,7 @@ func (m tuiModel) viewTasksBoxed(title string, width, height int) string {
 		return lipgloss.NewStyle().Width(width).Render(strings.Join(out, "\n"))
 	}
 
-	// Find the first line of the selected task's box so the window can be
-	// anchored on it.
-	anchor := 0
-	for i, r := range rows {
-		if r.owns(m.taskCur) {
-			anchor = i
-			break
-		}
-	}
-
-	visible := height - 1
-	start := scrollStart(anchor, visible, len(rows))
+	start := m.boxStart(rows, height)
 	for i := start; i < len(rows) && len(out) < height; i++ {
 		r := rows[i]
 		selected := -1

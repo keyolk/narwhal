@@ -113,12 +113,22 @@ const resultMinRows = 6
 // far and what it produced. A graph of five tasks is a dozen rows, and the
 // column below it was empty on every terminal tall enough to read in.
 func (m tuiModel) viewLeft(w, h int) string {
-	graphH := min(h, m.graphContentHeight(w))
+	graphH := m.graphHeight(w, h)
 	rest := h - graphH
 	if rest < resultMinRows {
 		return m.viewTasks(w, h)
 	}
 	return m.viewTasks(w, graphH) + "\n" + padRows(m.resultSummary(w, rest), w, rest)
+}
+
+// graphHeight is the rows the graph is drawn at in a left column h rows
+// tall: its content, or all of h when the result would not fit under it.
+func (m tuiModel) graphHeight(w, h int) int {
+	graphH := min(h, m.graphContentHeight(w))
+	if h-graphH < resultMinRows {
+		return h
+	}
+	return graphH
 }
 
 // resultSummary is the run's result in brief: its answer's opening lines,
@@ -205,6 +215,22 @@ func (m tuiModel) viewReader(w, h int) string {
 	return strings.Join(lines, "\n")
 }
 
+// readerTab is one tab of the right column's title.
+type readerTab struct {
+	n, label string
+	pane     focusPane
+}
+
+// readerTabList is the tabs in title order. readerTabs draws them and the
+// mouse handler measures them, so a click lands on the tab drawn there.
+func (m tuiModel) readerTabList() []readerTab {
+	radio := "Radio"
+	if m.briefTab {
+		radio = "Brief"
+	}
+	return []readerTab{{"2", "Task", focusNode}, {"3", "Timeline", focusTimeline}, {"4", radio, focusRadio}}
+}
+
 // readerTabs is the right column's title: each pane it can show, by the
 // number that shows it, the shown one marked.
 func (m tuiModel) readerTabs(w int) string {
@@ -219,12 +245,12 @@ func (m tuiModel) readerTabs(w int) string {
 		}
 		return styDim.Render(n + " " + label)
 	}
-	radio := "Radio"
-	if m.briefTab {
-		radio = "Brief"
-	}
 	sep := styDim.Render(" · ")
-	title := tab("2", "Task", focusNode) + sep + tab("3", "Timeline", focusTimeline) + sep + tab("4", radio, focusRadio) + m.radioBadge()
+	var parts []string
+	for _, t := range m.readerTabList() {
+		parts = append(parts, tab(t.n, t.label, t.pane))
+	}
+	title := strings.Join(parts, sep) + m.radioBadge()
 	if cur == focusRadio {
 		other := "Brief"
 		if m.briefTab {

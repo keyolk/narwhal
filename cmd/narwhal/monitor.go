@@ -17,6 +17,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/mouse"
 
 	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
@@ -142,7 +143,7 @@ func monitorCmd(args []string) {
 	if m.pinnedTask == "" {
 		m.enablePrefs()
 	}
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, append([]tea.ProgramOption{tea.WithAltScreen()}, mouse.ProgramOptions()...)...)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "monitor: %v\n", err)
 		os.Exit(1)

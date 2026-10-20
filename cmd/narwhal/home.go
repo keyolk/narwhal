@@ -201,6 +201,18 @@ var groupTitles = []string{"In progress", "Abandoned — workers may still be ru
 // viewHome draws the home screen.
 func (m tuiModel) viewHome() string {
 	w := m.width
+	top, room := m.homeTop()
+	stack := m.screenStack()
+	if m.composing {
+		stack = []keys.Ctx{ctxCompose}
+	}
+	return pinFooter(top+m.homeList(w, room), m.keyFooter(stack, w), m.height)
+}
+
+// homeTop is everything above the run list and the rows left for the list.
+// The mouse handler reads it too, so a click lands on the row View drew.
+func (m tuiModel) homeTop() (string, int) {
+	w := m.width
 	where := abbreviatePath(m.homeCWD)
 	head := styCyanBold.Render("Narwhal") + styDim.Render("  "+m.runCountLabel())
 
@@ -234,13 +246,8 @@ func (m tuiModel) viewHome() string {
 		box += "\n " + strings.ReplaceAll(n, "\n", "\n ")
 	}
 
-	stack := m.screenStack()
-	if m.composing {
-		stack = []keys.Ctx{ctxCompose}
-	}
 	top := head + "\n" + box + "\n"
-	room := m.height - strings.Count(top, "\n") - 2
-	return pinFooter(top+m.homeList(w, room), m.keyFooter(stack, w), m.height)
+	return top, m.height - strings.Count(top, "\n") - 2
 }
 
 // homeList is the work, grouped by how it stands, in at most rows lines,
@@ -250,8 +257,35 @@ func (m tuiModel) homeList(width, rows int) string {
 	if len(m.runs) == 0 {
 		return styDim.Render("\n   Nothing yet. Press " + m.keyName("home.new") + " to start the first request.")
 	}
-	var lines []string
-	selTop := 0
+	lines, _, selTop := m.homeLines(width)
+	start, end := homeWindow(len(lines), selTop, rows)
+	return strings.Join(lines[start:end], "\n")
+}
+
+// homeWindow is the slice of the list's lines drawn in rows lines, scrolled
+// so the selection (whose first line is selTop) is on screen.
+func homeWindow(n, selTop, rows int) (int, int) {
+	start := 0
+	if rows > 0 && selTop+2 > rows {
+		start = selTop + 2 - rows
+	}
+	end := n
+	if rows > 0 {
+		end = min(end, start+rows)
+	}
+	return start, end
+}
+
+// homeLines is every line of the home list and, for each, the index in
+// m.runs of the run it belongs to (-1 for a group or flow heading). selTop is
+// the first line of the selected run.
+func (m tuiModel) homeLines(width int) (lines []string, runAt []int, selTop int) {
+	add := func(run int, ls ...string) {
+		for _, l := range ls {
+			lines = append(lines, l)
+			runAt = append(runAt, run)
+		}
+	}
 	group, flow := -1, ""
 	counts := map[int]int{}
 	seen := map[string]bool{}
@@ -270,30 +304,22 @@ func (m tuiModel) homeList(width, rows int) string {
 			if g == 1 {
 				style = styYellow
 			}
-			lines = append(lines, " "+style.Render(groupTitles[g])+styDim.Render(fmt.Sprintf(" · %d", counts[g])))
+			add(-1, " "+style.Render(groupTitles[g])+styDim.Render(fmt.Sprintf(" · %d", counts[g])))
 		}
 		if len(steps) > 1 && id != flow {
 			flow = id
-			lines = append(lines, m.flowHeaderRow(id, steps, width))
+			add(-1, m.flowHeaderRow(id, steps, width))
 		}
 		if i == m.runCur {
 			selTop = len(lines)
 		}
 		if len(steps) > 1 {
-			lines = append(lines, m.stepRow(r, steps, i == m.runCur, width))
+			add(i, m.stepRow(r, steps, i == m.runCur, width))
 			continue
 		}
-		lines = append(lines, m.homeRow(r, i == m.runCur, width)...)
+		add(i, m.homeRow(r, i == m.runCur, width)...)
 	}
-	start := 0
-	if rows > 0 && selTop+2 > rows {
-		start = selTop + 2 - rows
-	}
-	end := len(lines)
-	if rows > 0 {
-		end = min(end, start+rows)
-	}
-	return strings.Join(lines[start:end], "\n")
+	return lines, runAt, selTop
 }
 
 // flowHeaderRow names a flow of several runs: its title, how many steps,

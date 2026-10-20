@@ -18,6 +18,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/render"
 )
 
@@ -70,6 +71,12 @@ func (m tuiModel) helpGeom() (overlayGeom, int) {
 }
 
 func (m tuiModel) viewHelpOverlay(base string) string {
+	lines, g := m.helpBox()
+	return m.overlay(base, lines, g)
+}
+
+// helpBox is the help overlay's text, without the frame.
+func (m tuiModel) helpBox() ([]string, overlayGeom) {
 	g, rows := m.helpGeom()
 	list, _ := keys.RenderHelp(m.helpSections(), g.innerW, rows, m.helpOff, helpStyle)
 	lines := []string{
@@ -82,7 +89,18 @@ func (m tuiModel) viewHelpOverlay(base string) string {
 		lines = append(lines, "")
 	}
 	lines = append(lines, m.keyFooter([]keys.Ctx{ctxHelp}, g.innerW))
-	return m.overlay(base, lines, g)
+	return lines, g
+}
+
+// overlayRect is where overlay draws a box holding lines: centred, or the
+// whole screen on a terminal too small for a frame.
+func (m tuiModel) overlayRect(lines []string) mouse.Rect {
+	if m.width < 24 || m.height < 8 {
+		return mouse.Rect{W: m.width, H: m.height}
+	}
+	box := overlayBox.Render(strings.Join(lines, "\n"))
+	bw, bh := lipgloss.Size(box)
+	return mouse.Rect{X: max(0, (m.width-bw)/2), Y: max(0, (m.height-bh)/2), W: bw, H: bh}
 }
 
 // clampHelp stores the offset RenderHelp would draw, so holding j does not
@@ -137,11 +155,23 @@ func (m tuiModel) paletteEntries() []keys.Entry {
 func (m tuiModel) paletteRows() int { return max(1, min(12, m.height-8)) }
 
 func (m tuiModel) viewPaletteOverlay(base string) string {
+	lines, g := m.paletteBox()
+	return m.overlay(base, lines, g)
+}
+
+// paletteWindow is the matches drawn: es[start:end].
+func (m tuiModel) paletteWindow(n int, g overlayGeom) (int, int) {
+	start, end, _ := render.Window(n, g.innerH-2, m.paletteSel, 0)
+	return start, end
+}
+
+// paletteBox is the palette overlay's text, without the frame. Its first
+// line is the query and the matches follow from the second.
+func (m tuiModel) paletteBox() ([]string, overlayGeom) {
 	g := m.overlayGeom(72, m.paletteRows()+5)
 	es := m.paletteEntries()
 	lines := []string{styCyanBold.Render(": ") + fieldView(m.paletteQuery, g.innerW-2)}
-	rows := g.innerH - 2
-	start, end, _ := render.Window(len(es), rows, m.paletteSel, 0)
+	start, end := m.paletteWindow(len(es), g)
 	keyW := 0
 	for _, e := range es[start:end] {
 		keyW = max(keyW, ansi.StringWidth(keys.Names{}.Name(e.Keys[0])))
@@ -168,7 +198,7 @@ func (m tuiModel) viewPaletteOverlay(base string) string {
 		lines = append(lines, "")
 	}
 	lines = append(lines[:g.innerH-1], m.keyFooter([]keys.Ctx{ctxPalette}, g.innerW))
-	return m.overlay(base, lines, g)
+	return lines, g
 }
 
 // handlePaletteKey edits the query and runs the chosen action as if its
@@ -190,20 +220,27 @@ func (m tuiModel) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.paletteSel = max(0, m.paletteSel-1)
 		return m, nil
 	case "palette.run":
-		m.palette = false
-		if m.paletteSel >= len(es) {
-			return m, nil
-		}
-		if bd, ok := m.bindingIn(m.screenStack(), es[m.paletteSel].Action); ok {
-			return m.do(bd, 1)
-		}
-		return m, nil
+		return m.runPaletteSel()
 	}
 	if f, _ := m.paletteQuery.Update(msg); f.Value() != m.paletteQuery.Value() {
 		m.paletteSel = 0
 		m.paletteQuery = f
 	} else {
 		m.paletteQuery = f // a cursor move
+	}
+	return m, nil
+}
+
+// runPaletteSel closes the palette and runs the selected match as if its key
+// had been pressed on the screen underneath. A click on a row calls it too.
+func (m tuiModel) runPaletteSel() (tea.Model, tea.Cmd) {
+	es := m.paletteEntries()
+	m.palette = false
+	if m.paletteSel >= len(es) {
+		return m, nil
+	}
+	if bd, ok := m.bindingIn(m.screenStack(), es[m.paletteSel].Action); ok {
+		return m.do(bd, 1)
 	}
 	return m, nil
 }

@@ -6,30 +6,38 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/selection"
+	"github.com/keyolk/tuikit/tuitest"
 
 	"github.com/keyolk/narwhal/internal/broker"
 	"github.com/keyolk/narwhal/internal/store"
 )
 
 // Coordinates come from where View drew text (cellOf), never from the pane
-// arithmetic under test. The copy is captured through copySelection; the
-// clipboard command is never run.
+// arithmetic under test. The copy is captured through selection.Clipboard
+// and the commands Update returns are run, the path the app takes; the
+// real clipboard is never written.
 
 func captureCopies(t *testing.T) *[]string {
 	t.Helper()
-	var got []string
-	old := copySelection
-	copySelection = func(s string) tea.Cmd {
+	var (
+		mu  sync.Mutex
+		got []string
+	)
+	old := selection.Clipboard
+	selection.Clipboard = func(s string) error {
+		mu.Lock()
+		defer mu.Unlock()
 		got = append(got, s)
-		return func() tea.Msg { return nil }
+		return nil
 	}
-	t.Cleanup(func() { copySelection = old })
+	t.Cleanup(func() { selection.Clipboard = old })
 	return &got
 }
 
@@ -40,25 +48,34 @@ func lastCopy(c *[]string) string {
 	return (*c)[len(*c)-1]
 }
 
-// markSelection draws the highlight as upper case, so a test sees which
-// cells it covers whatever the color profile.
-func markSelection(t *testing.T) {
-	t.Helper()
-	old := selectionStyle
-	selectionStyle = lipgloss.NewStyle().Transform(strings.ToUpper)
-	t.Cleanup(func() { selectionStyle = old })
+// sendRun is send that also runs the command Update returned and feeds the
+// copy's result back, as Bubble Tea would. An auto-scroll tick takes longer
+// than the wait and is left out: tests that want it drain it themselves.
+func sendRun(m tuiModel, msg tea.Msg) tuiModel {
+	next, cmd := m.Update(msg)
+	m = next.(tuiModel)
+	for _, out := range tuitest.Drain(cmd, 10*time.Millisecond) {
+		if c, ok := out.(selection.CopiedMsg); ok {
+			next, _ = m.Update(c)
+			m = next.(tuiModel)
+		}
+	}
+	return m
 }
 
+// highlighted is the text drawn in reverse video, one entry per row.
+func highlighted(m tuiModel) []string { return tuitest.Reversed(m.View()) }
+
 func lpress(m tuiModel, x, y int) tuiModel {
-	return send(m, mouseMsg(x, y, tea.MouseButtonLeft, tea.MouseActionPress))
+	return sendRun(m, mouseMsg(x, y, tea.MouseButtonLeft, tea.MouseActionPress))
 }
 
 func lmotion(m tuiModel, x, y int) tuiModel {
-	return send(m, mouseMsg(x, y, tea.MouseButtonLeft, tea.MouseActionMotion))
+	return sendRun(m, mouseMsg(x, y, tea.MouseButtonLeft, tea.MouseActionMotion))
 }
 
 func lrelease(m tuiModel, x, y int) tuiModel {
-	return send(m, mouseMsg(x, y, tea.MouseButtonNone, tea.MouseActionRelease))
+	return sendRun(m, mouseMsg(x, y, tea.MouseButtonNone, tea.MouseActionRelease))
 }
 
 func dragFrom(m tuiModel, x0, y0, x1, y1 int) tuiModel {
@@ -71,7 +88,6 @@ func screenRow(m tuiModel, y int) string {
 
 func TestDragFromTheGraphTowardTheRadioStaysInTheGraph(t *testing.T) {
 	c := captureCopies(t)
-	markSelection(t)
 	m := runMouseModel(t, false)
 	x0, y0 := taskCell(t, m, "b")
 	_, y1 := taskCell(t, m, "d")
@@ -87,14 +103,16 @@ func TestDragFromTheGraphTowardTheRadioStaysInTheGraph(t *testing.T) {
 	if !strings.Contains(got, "c") {
 		t.Fatalf("the copy should hold the graph rows dragged over: %q", got)
 	}
-	// The highlight is upper case: nothing right of the divider may be.
-	row := screenRow(m, y1)
-	cols := strings.Split(row, "│")
-	if len(cols) < 3 || !strings.Contains(cols[1], "D") {
-		t.Fatalf("the graph cells on the last row should be highlighted: %q", row)
+	// One highlighted run per row, all of them inside the graph: the last
+	// ends on task d's row, and none reaches the divider or the radio.
+	hl := highlighted(m)
+	if len(hl) != y1-y0+1 || !strings.Contains(hl[len(hl)-1], "d") {
+		t.Fatalf("the graph rows b..d should be highlighted, got %q", hl)
 	}
-	if right := cols[2]; right != strings.ToLower(right) {
-		t.Fatalf("the highlight reached into the radio: %q", row)
+	for _, run := range hl {
+		if strings.Contains(run, "│") || strings.Contains(run, "message") {
+			t.Fatalf("the highlight reached into the radio: %q", hl)
+		}
 	}
 }
 
@@ -224,6 +242,13 @@ func TestHelpOpenLeavesTheBaseUnselectable(t *testing.T) {
 	if !got.help {
 		t.Fatal("a drag inside help must not close it")
 	}
+	// The cell left of the title is the box's padding, not its text: a
+	// drag from there selects nothing that starts with it.
+	*c = nil
+	dragFrom(m, x-1, y, x+15, y)
+	if s := lastCopy(c); strings.HasPrefix(s, " ") {
+		t.Fatalf("a drag from the help box's padding copied it: %q", s)
+	}
 }
 
 func TestDragWhileSteeringNeverTypes(t *testing.T) {
@@ -277,6 +302,14 @@ func TestDragPastTheBottomOfAnOutputScrollsAndKeepsTheLinesThatLeft(t *testing.T
 	if strings.Contains(ansi.Strip(m.View()), "plan line 01") {
 		t.Fatal("dragging past the bottom of the output should scroll it")
 	}
+	// The bottom row as the release finds it: the copied toast that
+	// follows takes a row from the pane.
+	last := ""
+	for _, l := range strings.Split(ansi.Strip(m.View()), "\n") {
+		if i := strings.Index(l, "plan line"); i >= 0 {
+			last = strings.TrimRight(strings.TrimSuffix(strings.TrimRight(l, " "), "│"), " ")[i:]
+		}
+	}
 	m = lrelease(m, m.width-3, m.height+2)
 	got := lastCopy(c)
 	if !strings.HasPrefix(got, "plan line 01") {
@@ -284,12 +317,6 @@ func TestDragPastTheBottomOfAnOutputScrollsAndKeepsTheLinesThatLeft(t *testing.T
 	}
 	if strings.Contains(got, "│") || strings.Contains(got, "Client findings") {
 		t.Fatalf("the copy reached the frame or the list: %q", got)
-	}
-	last := ""
-	for _, l := range strings.Split(ansi.Strip(m.View()), "\n") {
-		if i := strings.Index(l, "plan line"); i >= 0 {
-			last = strings.TrimRight(strings.TrimSuffix(strings.TrimRight(l, " "), "│"), " ")[i:]
-		}
 	}
 	if !strings.HasSuffix(strings.TrimRight(got, "\n"), last) {
 		t.Fatalf("the copy should run to the bottom row %q, got ...%q", last, got[max(len(got)-40, 0):])
@@ -376,11 +403,8 @@ func TestDragPastTheTopOfTheResultAfterGScrollsUp(t *testing.T) {
 
 func TestDragUpOverTheGraphTitleStopsAtItsFirstRow(t *testing.T) {
 	c := captureCopies(t)
-	markSelection(t)
 	m := runMouseModel(t, false)
 	x, y := taskCell(t, m, "c")
-	_, ya := taskCell(t, m, "a")
-	_, title := cellOf(t, m.View(), "1 Graph")
 	// Up over the title edge to the screen's top row: the graph has no
 	// whole content to scroll, so the rows stop at its first task.
 	m = dragFrom(m, x, y, x, 0)
@@ -391,10 +415,92 @@ func TestDragUpOverTheGraphTitleStopsAtItsFirstRow(t *testing.T) {
 	if first := strings.SplitN(got, "\n", 2)[0]; !strings.HasSuffix(strings.TrimSpace(first), "a") {
 		t.Fatalf("the copy should start at task a's row: %q", got)
 	}
-	if row := screenRow(m, title); strings.Contains(row, "GRAPH") {
-		t.Fatalf("the highlight reached the title edge: %q", row)
+	hl := highlighted(m)
+	for _, run := range hl {
+		if strings.Contains(run, "Graph") || strings.ContainsAny(run, "─╭┬") {
+			t.Fatalf("the highlight reached the title edge: %q", hl)
+		}
 	}
-	if row := screenRow(m, ya); row == strings.ToLower(row) {
-		t.Fatalf("task a's row should be highlighted: %q", row)
+	if len(hl) == 0 || !strings.HasSuffix(strings.TrimSpace(hl[0]), "a") {
+		t.Fatalf("task a's row should be the first highlighted: %q", hl)
+	}
+}
+
+// planOutputs is Outputs reading a PLAN.md far longer than the pane.
+func planOutputs(t *testing.T) tuiModel {
+	t.Helper()
+	m := withOutputs(t)
+	var b strings.Builder
+	for i := range 80 {
+		fmt.Fprintf(&b, "plan line %02d\n\n", i)
+	}
+	must(t, os.WriteFile(filepath.Join(m.snap.CWD, "PLAN.md"), []byte(b.String()), 0o644))
+	m = press(m, "o")
+	if !m.outputsView {
+		t.Fatal("setup: Outputs is not open")
+	}
+	return m
+}
+
+// G parks outputScroll far past the end (1<<20); the pane draws its last
+// page. A drag past the top must move it from the line drawn, which is
+// what applying Result.Offset does: adding Result.Scroll to the parked
+// value leaves it past the end, and nothing moves.
+func TestDragPastTheTopOfAnOutputAfterGScrollsUp(t *testing.T) {
+	captureCopies(t)
+	m := press(planOutputs(t), "G")
+	x, y := cellOf(t, m.View(), "plan line 79")
+	_, top := cellOf(t, m.View(), "plan line")
+	before := strings.TrimSpace(screenRow(m, top))
+	m = lpress(m, x, y)
+	m = lmotion(m, x, 0)
+	if after := strings.TrimSpace(screenRow(m, top)); after == before {
+		t.Fatalf("a drag past the top after G did not scroll the output up: still %q", after)
+	}
+}
+
+// A drag resting past the bottom keeps scrolling on AutoScrollMsg ticks:
+// the terminal sends no motion for a pointer that does not move.
+func TestADragRestingPastTheBottomKeepsScrolling(t *testing.T) {
+	captureCopies(t)
+	m := resultModel(t)
+	x0, y0 := cellOf(t, m.View(), "answer line 01")
+	m = lpress(m, x0, y0)
+	next, cmd := m.Update(mouseMsg(m.width-1, m.height+2, tea.MouseButtonLeft, tea.MouseActionMotion))
+	m = next.(tuiModel)
+	// Where the first answer line on screen is drawn: a scroll by one line
+	// moves it a row up, or swaps it for the next.
+	topLine := func(m tuiModel) string {
+		x, y := cellOf(t, m.View(), "answer line")
+		return fmt.Sprintf("%q at %d,%d", strings.TrimSpace(screenRow(m, y)), x, y)
+	}
+	before := topLine(m)
+	var tick tea.Msg
+	for _, msg := range tuitest.Drain(cmd, 500*time.Millisecond) {
+		if _, ok := msg.(selection.AutoScrollMsg); ok {
+			tick = msg
+		}
+	}
+	if tick == nil {
+		t.Fatal("a drag past the bottom should schedule an auto-scroll tick")
+	}
+	next, cmd = m.Update(tick)
+	m = next.(tuiModel)
+	if after := topLine(m); after == before {
+		t.Fatalf("the tick did not scroll the result: still %s", after)
+	}
+	if cmd == nil {
+		t.Fatal("while the drag rests past the edge the tick schedules the next")
+	}
+}
+
+func TestNoColorKeepsTheSelectionHighlight(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	captureCopies(t)
+	m := resultModel(t)
+	x0, y0 := cellOf(t, m.View(), "answer line 01")
+	m = dragFrom(m, x0, y0, x0+10, y0)
+	if hl := highlighted(m); len(hl) != 1 || !strings.HasPrefix(hl[0], "answer line") {
+		t.Fatalf("under NO_COLOR the selection should still be drawn in reverse: %q", hl)
 	}
 }

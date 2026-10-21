@@ -241,6 +241,7 @@ func bindings() []keys.Binding {
 		short(foot(b(ctxMessage, grpRead, "message.task", "the task it came from or went to, at that moment", "enter", "s"), 1), "its task at this moment"),
 		grouped(b(ctxMessage, grpRead, "detail.next", "the next message", "n"), 4, "message"),
 		grouped(b(ctxMessage, grpRead, "detail.prev", "the previous message", "p"), 4, "message"),
+		short(foot(messageLinkBinding(), 5), "open link"),
 
 		short(foot(b(ctxResult, grpResult, "result.outputs", "outputs, each read its own way", "o", "O"), 1), "outputs"),
 		short(foot(b(ctxResult, grpResult, "result.report", "write the run's report", "e"), 2), "write report"),

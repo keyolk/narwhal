@@ -356,7 +356,10 @@ func (m tuiModel) viewOutputs() string {
 		}
 		right = append([]string{paneTitle(label, true, rw)}, lines[scroll:end]...)
 	}
-	body := framedBand(lw, rw, rows, padRows(left, lw, bodyH-2), padRows(right, rw, bodyH-2))
+	body := framedBand(m.band(bandOutputs), lw, rw, rows, padRows(left, lw, bodyH-2), padRows(right, rw, bodyH-2))
+	if g.zoom {
+		body = framedSingle(rw, rows, padRows(right, rw, bodyH-2), "")
+	}
 	return pinFooter(head+"\n"+title+"\n"+body, keys, m.height)
 }
 
@@ -368,9 +371,12 @@ type outputsGeom struct {
 	keys        string
 	bodyH, rows int
 	lw, rw      int
-	lines       []string
-	scroll      int
-	top         int // the band's top border row
+	// zoom draws the selected output alone, on a terminal too narrow for
+	// both columns' minimums.
+	zoom   bool
+	lines  []string
+	scroll int
+	top    int // the band's top border row
 }
 
 func (m tuiModel) outputsGeom() outputsGeom {
@@ -378,8 +384,10 @@ func (m tuiModel) outputsGeom() outputsGeom {
 	g := outputsGeom{keys: m.footerBlock(w, m.keyFooter(m.screenStack(), w))}
 	g.bodyH = max(3, m.height-2-lipgloss.Height(g.keys))
 	g.rows = max(1, g.bodyH-3)
-	g.lw = min(max(w/3, 28), 48)
-	g.rw = max(10, w-g.lw-bandBorderCols)
+	g.lw, g.rw, g.zoom = m.bandWidths(bandOutputs)
+	if g.zoom {
+		g.rw = max(10, w-4)
+	}
 	// The head and the prompt line, one row each: the head is a label and a
 	// count, far short of any width the screen is drawn at, and the prompt
 	// line is truncated to the width.

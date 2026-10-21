@@ -162,11 +162,16 @@ func (m tuiModel) outputsPanes() []selection.Pane {
 	g := m.outputsGeom()
 	// The band's top edge is its titles; the columns start one row under it.
 	y := g.top + 1
-	panes := []selection.Pane{{ID: paneOutputList, Kind: selection.List,
-		Rect: mouse.Rect{X: 2, Y: y, W: g.lw, H: g.rows}}}
+	var panes []selection.Pane
+	rx := bandFrameLeft
+	if !g.zoom {
+		panes = append(panes, selection.Pane{ID: paneOutputList, Kind: selection.List,
+			Rect: mouse.Rect{X: bandFrameLeft, Y: y, W: g.lw, H: g.rows}})
+		rx = bandFrameLeft + g.lw + bandDivider
+	}
 	if g.lines != nil {
 		panes = append(panes, selection.Pane{ID: paneOutput, Kind: selection.Text,
-			Rect:  mouse.Rect{X: g.lw + 4, Y: y, W: g.rw, H: min(g.rows, len(g.lines)-g.scroll)},
+			Rect:  mouse.Rect{X: rx, Y: y, W: g.rw, H: min(g.rows, len(g.lines)-g.scroll)},
 			Lines: g.lines, Offset: g.scroll})
 	}
 	return panes
@@ -177,9 +182,9 @@ func (m tuiModel) flowPanes() []selection.Pane {
 	top := lipgloss.Height(g.head + "\n" + g.title)
 	inner := g.bodyH - 2
 	var panes []selection.Pane
-	rx := 2
-	if !m.flowZoom {
-		rx = g.lw + 4
+	rx := bandFrameLeft
+	if !g.zoom {
+		rx = bandFrameLeft + g.lw + bandDivider
 		panes = append(panes, selection.Pane{ID: paneFlowWork, Kind: selection.Text,
 			Rect: mouse.Rect{X: 2, Y: top + 1, W: g.lw, H: inner}})
 	}

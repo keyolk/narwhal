@@ -40,6 +40,11 @@ func (m tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.toasts = toast.Dismiss(m.toasts, "remove")
 		}
 	}
+	// The split sees the event first: a press on the divider between two
+	// columns is a resize drag, never a text selection or a click.
+	if next, consumed := m.splitMouse(msg); consumed {
+		return next, nil
+	}
 	// The selection sees every event before any click handling, release and
 	// motion included; a press that does not move stays the click below.
 	m, selCmd, consumed := m.selectMouse(msg)

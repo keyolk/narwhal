@@ -343,7 +343,8 @@ func (m tuiModel) nodePaneWidth() int {
 		return m.width - 1
 	}
 	// The activity feed is indented one cell inside the pane.
-	return max(20, m.width-m.columnWidth()-bandBorderCols) - 1
+	_, rw, _ := m.bandWidths(bandRun)
+	return max(rw, 1) - 1
 }
 
 // pendingDeps returns the task's dependencies that have not finished, in

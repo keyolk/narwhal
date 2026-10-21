@@ -10,6 +10,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/split"
 	"github.com/keyolk/tuikit/toast"
 )
 
@@ -54,6 +55,8 @@ func (m tuiModel) do(b keys.Binding, n int) (tea.Model, tea.Cmd) {
 	case "palette":
 		m.openPalette()
 		return m, nil
+	case split.ActionGrow, split.ActionShrink, split.ActionReset:
+		return m.doSplit(b)
 	}
 	switch b.Ctx {
 	case ctxHome:
@@ -172,10 +175,6 @@ func (m tuiModel) doRun(action string) (tea.Model, tea.Cmd) {
 		} else {
 			m.zoom = m.focus
 		}
-	case "run.wider":
-		m.widthDelta += 4
-	case "run.narrower":
-		m.widthDelta -= 4
 	case "graph.down":
 		m.moveVertical(1)
 	case "graph.up":

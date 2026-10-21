@@ -241,6 +241,15 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// Features are what this daemon does that an older one does not, for a
+// client that must not proceed against an older one.
+//
+// decodeBody ignores fields it does not know, so a daemon from before run
+// permissions accepts a spawn that asks for dontAsk and launches its workers
+// in bypass mode. A caller that depends on the policy holding checks for
+// "run_permissions" here before it spawns.
+var Features = []string{"run_permissions"}
+
 // graphGap reports what a multi-worker run is missing, or "" when it is
 // well-formed.
 //
@@ -479,7 +488,7 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 				"parent_run":     snap.ParentRun,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+		writeJSON(w, http.StatusOK, map[string]any{"runs": runs, "features": Features})
 		return
 	}
 

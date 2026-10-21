@@ -77,6 +77,11 @@ are added to the allow list, so it can still report. The policy is stored
 with the run and survives a daemon restart. It is fixed once the run
 exists: a later spawn on the same run with a different policy gets `409`.
 
+A client that depends on the policy holding should check that
+`GET /api/v1/control/status` lists `"run_permissions"` in `features` before
+it spawns: an older daemon ignores the field and runs the workers in bypass
+mode.
+
 Settings the worker's cwd picks up still apply, so give such a run a
 directory of its own rather than a home or repository directory whose
 `.claude/settings*.json` allows more.

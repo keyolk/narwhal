@@ -63,3 +63,16 @@ func TestSpawnRejectsAPolicyItCannotHonour(t *testing.T) {
 		t.Errorf("allow list without dontAsk: %d %v", code, out)
 	}
 }
+
+func TestStatusAdvertisesRunPermissions(t *testing.T) {
+	// A client that needs the policy to hold must be able to tell an older
+	// daemon, which would accept the field and ignore it.
+	addr := spawnFixture(t)
+	features, _ := getJSON(t, addr+"/api/v1/control/status")["features"].([]any)
+	for _, f := range features {
+		if f == "run_permissions" {
+			return
+		}
+	}
+	t.Fatalf("features = %v", features)
+}

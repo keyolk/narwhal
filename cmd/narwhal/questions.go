@@ -354,12 +354,7 @@ func (m tuiModel) viewQuestions() string {
 		}
 	}
 
-	foot := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
-	if m.answering {
-		lead := styCyanBold.Render("» answer: ")
-		foot = render.Truncate(lead+fieldView(m.answerBuf, w-render.Width(lead)), w) +
-			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — "+m.keyName("questions.send")+" sends every kept answer at once")
-	}
+	foot := m.questionsFooter()
 	avail := max(1, m.height-2-strings.Count(foot, "\n")-1)
 	start := 0
 	if len(body) > avail {
@@ -375,4 +370,16 @@ func (m tuiModel) viewQuestions() string {
 	}
 	end := min(len(body), start+avail)
 	return pinFooter(head+"\n"+title+"\n"+strings.Join(body[start:end], "\n"), foot, m.height)
+}
+
+// questionsFooter is the bottom of the Questions screen: the keys, or the
+// answer being typed. viewQuestions draws it and drag selection measures it.
+func (m tuiModel) questionsFooter() string {
+	w := max(m.width, 1)
+	if m.answering {
+		lead := styCyanBold.Render("» answer: ")
+		return render.Truncate(lead+fieldView(m.answerBuf, w-render.Width(lead)), w) +
+			"\n" + m.keyFooter([]keys.Ctx{ctxAnswer}, w) + styDim.Render(" — "+m.keyName("questions.send")+" sends every kept answer at once")
+	}
+	return m.footerBlock(w, m.keyFooter(m.screenStack(), w))
 }

@@ -328,11 +328,8 @@ func (m tuiModel) viewOutputs() string {
 	}
 	head := styDim.Render("‹ ") + styCyanBold.Render("Outputs") + styDim.Render(fmt.Sprintf("   %d from %s", len(outs), from))
 	title := "  " + render.Truncate(oneLine(prompt), w-3)
-	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
-	bodyH := max(3, m.height-2-lipgloss.Height(keys))
-	rows := max(1, bodyH-3)
-	lw := min(max(w/3, 28), 48)
-	rw := max(10, w-lw-bandBorderCols)
+	g := m.outputsGeom()
+	keys, bodyH, rows, lw, rw := g.keys, g.bodyH, g.rows, g.lw, g.rw
 
 	list, selLine := m.outputList(outs, lw)
 	if len(outs) == 0 {
@@ -348,8 +345,7 @@ func (m tuiModel) viewOutputs() string {
 
 	right := []string{paneTitle("", false, rw)}
 	if sel != nil {
-		lines := m.outputBody(*sel, rw)
-		scroll := min(m.outputScroll, max(0, len(lines)-rows))
+		lines, scroll := g.lines, g.scroll
 		end := min(len(lines), scroll+rows)
 		label := render.Truncate(sel.title, max(4, rw-20))
 		if len(lines) > rows {
@@ -362,4 +358,36 @@ func (m tuiModel) viewOutputs() string {
 	}
 	body := framedBand(lw, rw, rows, padRows(left, lw, bodyH-2), padRows(right, rw, bodyH-2))
 	return pinFooter(head+"\n"+title+"\n"+body, keys, m.height)
+}
+
+// outputsGeom is the Outputs screen's layout: the footer, the band's height,
+// the rows each column shows and their widths, and the selected output's
+// lines with the scroll they are drawn from. viewOutputs draws with it and
+// drag selection reads it, so both use one set of numbers.
+type outputsGeom struct {
+	keys        string
+	bodyH, rows int
+	lw, rw      int
+	lines       []string
+	scroll      int
+	top         int // the band's top border row
+}
+
+func (m tuiModel) outputsGeom() outputsGeom {
+	w := max(m.width, 1)
+	g := outputsGeom{keys: m.footerBlock(w, m.keyFooter(m.screenStack(), w))}
+	g.bodyH = max(3, m.height-2-lipgloss.Height(g.keys))
+	g.rows = max(1, g.bodyH-3)
+	g.lw = min(max(w/3, 28), 48)
+	g.rw = max(10, w-g.lw-bandBorderCols)
+	// The head and the prompt line, one row each: the head is a label and a
+	// count, far short of any width the screen is drawn at, and the prompt
+	// line is truncated to the width.
+	g.top = 2
+	outs := m.outputs()
+	if m.outputSel < len(outs) {
+		g.lines = m.outputBody(outs[m.outputSel], g.rw)
+		g.scroll = min(m.outputScroll, max(0, len(g.lines)-g.rows))
+	}
+	return g
 }

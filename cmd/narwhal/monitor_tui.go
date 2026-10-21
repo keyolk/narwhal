@@ -36,6 +36,7 @@ import (
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/selection"
 	"github.com/keyolk/tuikit/tmux"
 	"github.com/keyolk/tuikit/toast"
 
@@ -321,6 +322,8 @@ type tuiModel struct {
 	// ones; mouseNow stands in for the clock in tests. See mouse.go.
 	clicks   mouse.Clicks
 	mouseNow func() time.Time
+	// sel is the drag selection (drag_select.go), cleared where clicks is.
+	sel selection.Selection
 
 	width  int
 	height int
@@ -797,10 +800,16 @@ func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
 
+	case selection.CopiedMsg:
+		m.noteCopied(msg)
+		return m, nil
+
 	case tea.KeyMsg:
 		// A key between two clicks breaks the pair: click, move away and back
 		// by keyboard, click again must not count as a double click.
 		m.clicks = mouse.Clicks{}
+		// A key ends the drag selection too, as it does in the mod engine.
+		m.sel.Clear()
 		// An error on screen long enough to be read goes with the next key.
 		m.toasts = toast.OnKey(m.toasts)
 		next, cmd := m.handleKey(msg)
@@ -1027,6 +1036,13 @@ func (m tuiModel) sortedTasks() []broker.TaskSnapshot {
 }
 
 func (m tuiModel) View() string {
+	// The drag selection is drawn last, over the panes the mouse used.
+	return m.sel.Render(m.view(), m.selectionPanes(), selectionStyle)
+}
+
+// view is the frame without the selection: what a selection reads its text
+// from, so a highlight style never leaks into a copy.
+func (m tuiModel) view() string {
 	if m.quit {
 		return ""
 	}

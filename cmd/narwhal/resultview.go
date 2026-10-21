@@ -146,7 +146,11 @@ func prShort(u string) string {
 }
 
 // viewResult draws the watched run's result.
-func (m tuiModel) viewResult() string {
+func (m tuiModel) viewResult() string { return m.resultParts().render(m.height) }
+
+// resultParts is the result screen before it is drawn. viewResult draws it
+// and drag selection reads its whole body (detail_parts.go).
+func (m tuiModel) resultParts() detailParts {
 	w := max(m.width, 1)
 	res := m.snap.Result()
 	icon, state := runGlyph(m.snap.State)
@@ -185,9 +189,13 @@ func (m tuiModel) viewResult() string {
 	}
 
 	keys := m.footerBlock(w, m.keyFooter(m.screenStack(), w))
-	avail := max(1, m.height-1-lipgloss.Height(keys))
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
-	return pinFooter(head+pos+"\n"+strings.Join(body[scroll:end], "\n"), keys, m.height)
+	return detailParts{
+		prefix:   func(pos string) string { return head + pos + "\n" },
+		body:     body,
+		avail:    max(1, m.height-1-lipgloss.Height(keys)),
+		scrollAt: m.detailScroll,
+		footer:   keys,
+	}
 }
 
 // copyCmd puts text on the clipboard; what names it in the notice.

@@ -130,6 +130,18 @@ func toolDefinitions() []map[string]any {
 							"required": []string{"assignment"},
 						},
 					},
+					"permissions": map[string]any{
+						"type": "object",
+						"description": "Policy for every worker of a NEW run (fixed once the run exists). " +
+							"Default is bypassPermissions. For read-only work use mode dontAsk with an " +
+							"allow list of Claude Code rules (e.g. \"Read\", \"Bash(kubectl get:*)\"); " +
+							"anything not allowed is refused without asking. deny wins over allow.",
+						"properties": map[string]any{
+							"mode":  map[string]any{"type": "string", "enum": []string{"bypassPermissions", "dontAsk"}},
+							"allow": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+							"deny":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+						},
+					},
 				},
 				"required": []string{"cwd", "workers"},
 			},

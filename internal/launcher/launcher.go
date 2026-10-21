@@ -17,10 +17,12 @@ package launcher
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +52,9 @@ type WorkerConfig struct {
 	// candidate questions before they reach the operator. See
 	// broker/questions.go.
 	Reviewer bool
+	// Permissions is the run's permission policy; the zero value is
+	// bypassPermissions. See broker/permissions.go.
+	Permissions broker.Permissions
 }
 
 // WorkerConfigFor builds the config for a task's worker.
@@ -738,15 +743,13 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 		return fmt.Errorf("create log file: %w", err)
 	}
 
-	// bypassPermissions is required: workers run headless with --print, so
-	// there is no interactive approval path. Without it every Bash call
-	// touching the agent workspace (wrapper scripts, ack artifacts) is
-	// blocked by the permission gate and the worker cannot do its job.
-	// AgentRadio's own startup scripts use the same flag for this reason.
-	args := []string{"claude", "--print",
-		"--permission-mode", "bypassPermissions",
-		"--append-system-prompt", string(instructions),
+	perm, err := permissionArgs(cfg.Permissions, filepath.Join(agentDir, "scripts"))
+	if err != nil {
+		logFile.Close()
+		return err
 	}
+	args := append([]string{"claude", "--print"}, perm...)
+	args = append(args, "--append-system-prompt", string(instructions))
 	// Pin the session id so the worker's transcript can be found later.
 	// A --print worker writes nothing to stdout until it finishes, so the
 	// captured log is empty for the whole run and there is nothing to
@@ -825,6 +828,59 @@ func (l *Launcher) Launch(agentDir string, cfg WorkerConfig) error {
 	}()
 
 	return nil
+}
+
+// permissionArgs is the permission part of a worker's command line.
+//
+// bypassPermissions is the default: workers run headless with --print, so
+// there is no interactive approval path. Without it every Bash call
+// touching the agent workspace (wrapper scripts, ack artifacts) is blocked
+// by the permission gate and the worker cannot do its job. AgentRadio's own
+// startup scripts use the same flag for this reason.
+//
+// A dontAsk run gets the same reach to its own workspace by a different
+// route: every wrapper script in scriptsDir is added to the allow list, in
+// both forms a worker calls it (the instructions say "bash <path>", and a
+// worker that drops the prefix still works). Everything else is what the
+// run's rules allow; Claude Code refuses the rest without asking.
+//
+// The rules travel as --settings JSON rather than --allowedTools. That flag
+// is variadic and would take the prompt after it as one more rule.
+func permissionArgs(p broker.Permissions, scriptsDir string) ([]string, error) {
+	mode := p.Mode
+	if mode == "" {
+		mode = "bypassPermissions"
+	}
+	args := []string{"--permission-mode", mode}
+	allow := slices.Clone(p.Allow)
+	if mode == "dontAsk" {
+		entries, err := os.ReadDir(scriptsDir)
+		if err != nil {
+			return nil, fmt.Errorf("list wrapper scripts for the allow list: %w", err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			path := filepath.Join(scriptsDir, e.Name())
+			allow = append(allow, "Bash(bash "+path+":*)", "Bash("+path+":*)")
+		}
+	}
+	if len(allow) == 0 && len(p.Deny) == 0 {
+		return args, nil
+	}
+	rules := map[string][]string{}
+	if len(allow) > 0 {
+		rules["allow"] = allow
+	}
+	if len(p.Deny) > 0 {
+		rules["deny"] = p.Deny
+	}
+	settings, err := json.Marshal(map[string]any{"permissions": rules})
+	if err != nil {
+		return nil, err
+	}
+	return append(args, "--settings", string(settings)), nil
 }
 
 // recordPID writes the worker's process id next to its other artifacts.

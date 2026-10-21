@@ -131,6 +131,9 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		Prompt  string            `json:"prompt"`
 		Workers []spawnWorkerSpec `json:"workers"`
 		Origin  *broker.Origin    `json:"origin"`
+		// Permissions is the policy every worker of a new run runs under.
+		// See broker/permissions.go.
+		Permissions *broker.Permissions `json:"permissions"`
 	}
 	if err := decodeBody(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -153,7 +156,21 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Permissions != nil {
+		if err := req.Permissions.Validate(); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+
 	run := s.broker.GetRun(req.RunID)
+	// A run's policy is fixed when it is created. Letting a later spawn
+	// change it would let one caller widen what another caller's workers
+	// may do in the middle of their work.
+	if run != nil && req.Permissions != nil && !run.Permissions().Equal(*req.Permissions) {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "permissions are fixed when a run is created; this run has a different policy"})
+		return
+	}
 	if run == nil {
 		if req.RunID != "" {
 			writeJSON(w, http.StatusNotFound, map[string]any{"error": "run not found: " + req.RunID})
@@ -166,6 +183,9 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		run.CreateStandardThreads()
 		if req.Origin != nil {
 			run.SetOrigin(*req.Origin)
+		}
+		if req.Permissions != nil {
+			run.SetPermissions(*req.Permissions)
 		}
 	}
 
@@ -220,6 +240,15 @@ func (s *Server) handleSpawn(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// Features are what this daemon does that an older one does not, for a
+// client that must not proceed against an older one.
+//
+// decodeBody ignores fields it does not know, so a daemon from before run
+// permissions accepts a spawn that asks for dontAsk and launches its workers
+// in bypass mode. A caller that depends on the policy holding checks for
+// "run_permissions" here before it spawns.
+var Features = []string{"run_permissions"}
 
 // graphGap reports what a multi-worker run is missing, or "" when it is
 // well-formed.
@@ -279,6 +308,7 @@ func DispatchTask(reg *broker.AgentRegistry, l *launcher.Launcher, run *broker.R
 	agent := reg.Register(agentID, run.ID, false)
 	cfg := launcher.WorkerConfigFor(task)
 	cfg.AgentID = agentID
+	cfg.Permissions = run.Permissions()
 	agentDir, err := l.SetupAgent(agent, cfg)
 	if err != nil {
 		return fmt.Errorf("setup agent: %w", err)
@@ -458,7 +488,7 @@ func (s *Server) handleControlStatus(w http.ResponseWriter, r *http.Request) {
 				"parent_run":     snap.ParentRun,
 			})
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+		writeJSON(w, http.StatusOK, map[string]any{"runs": runs, "features": Features})
 		return
 	}
 

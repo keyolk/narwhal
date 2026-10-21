@@ -92,6 +92,9 @@ func RestoreRun(s Snapshot) *Run {
 	if s.Origin != nil {
 		r.origin = *s.Origin
 	}
+	if s.Permissions != nil {
+		r.permissions = clonePermissions(*s.Permissions)
+	}
 	if r.intakeCursor == 0 && len(s.Messages) > 0 {
 		for _, m := range s.Messages {
 			if m != nil && m.Seq > r.intakeCursor {

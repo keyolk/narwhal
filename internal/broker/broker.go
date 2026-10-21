@@ -325,6 +325,9 @@ type Run struct {
 	// origin is the Claude Code session that started the run, when one
 	// did through the MCP tools: where to say the run needs the person.
 	origin Origin
+	// permissions is how the run's workers ask for permission. See
+	// permissions.go. Guarded by mu.
+	permissions Permissions
 
 	// usageProbe measures a task's cost when it stops running. Nil in
 	// tests that do not care about accounting. Guarded by mu.
@@ -1243,10 +1246,13 @@ type Snapshot struct {
 	Flow      string `json:"flow,omitempty"`
 	ParentRun string `json:"parent_run,omitempty"`
 	// Origin is the Claude Code session that started the run, if any.
-	Origin   *Origin          `json:"origin,omitempty"`
-	Tasks    []TaskSnapshot   `json:"tasks"`
-	Threads  []ThreadSnapshot `json:"threads"`
-	Messages []*Message       `json:"messages"`
+	Origin *Origin `json:"origin,omitempty"`
+	// Permissions is the policy the run's workers run under, nil for the
+	// default (bypassPermissions).
+	Permissions *Permissions     `json:"permissions,omitempty"`
+	Tasks       []TaskSnapshot   `json:"tasks"`
+	Threads     []ThreadSnapshot `json:"threads"`
+	Messages    []*Message       `json:"messages"`
 }
 
 type TaskSnapshot struct {
@@ -1354,6 +1360,7 @@ func (r *Run) Snapshot() Snapshot {
 		Flow:           r.flow,
 		ParentRun:      r.parentRun,
 		Origin:         r.originPtr(),
+		Permissions:    r.permissionsPtr(),
 	}
 	for _, t := range r.Tasks {
 		s.Tasks = append(s.Tasks, t.snapshot())

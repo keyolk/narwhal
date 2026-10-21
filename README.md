@@ -56,6 +56,36 @@ The broker daemon starts on demand and outlives MCP server restarts, so a
 run survives Claude Code reconnecting. You can add workers to a run that is
 already in flight — the thing batch mode cannot do.
 
+### Worker permissions
+
+Workers run headless, so nobody is there to answer a permission prompt. By
+default they run with `bypassPermissions`. A run that must not write — an
+incident investigation against production, started before any person has
+joined — asks for `dontAsk` with an allow list when it is created:
+
+```json
+{"cwd": "/work/rca", "prompt": "...",
+ "permissions": {"mode": "dontAsk",
+                 "allow": ["Read", "Grep", "Bash(kubectl get:*)"],
+                 "deny":  ["Bash(kubectl delete:*)"]},
+ "workers": [...]}
+```
+
+Claude Code then runs what the rules allow and refuses everything else
+without asking. Each worker's own wrapper scripts (`task-done`, `send`, …)
+are added to the allow list, so it can still report. The policy is stored
+with the run and survives a daemon restart. It is fixed once the run
+exists: a later spawn on the same run with a different policy gets `409`.
+
+A client that depends on the policy holding should check that
+`GET /api/v1/control/status` lists `"run_permissions"` in `features` before
+it spawns: an older daemon ignores the field and runs the workers in bypass
+mode.
+
+Settings the worker's cwd picks up still apply, so give such a run a
+directory of its own rather than a home or repository directory whose
+`.claude/settings*.json` allows more.
+
 ### Batch
 
 ```bash

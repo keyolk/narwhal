@@ -627,9 +627,8 @@ func (m tuiModel) flowStepDetail(w, h int) string {
 	if len(outs) == 0 {
 		return padRows(pane, w, h)
 	}
-	lines := m.flowStepLines(w)
-	rows := max(1, h-len(pane)-1)
-	scroll := min(m.flowScroll, max(0, len(lines)-rows))
+	s := m.flowStepScroll(w, h, len(pane))
+	lines, rows, scroll := s.lines, s.rows, s.scroll
 	end := min(len(lines), scroll+rows)
 	label := render.Truncate(outs[sel].title, max(4, w-20))
 	if len(lines) > rows {
@@ -768,4 +767,24 @@ func (m tuiModel) adoptFlow(flowID string) error {
 		}
 	}
 	return fmt.Errorf("no run %s to continue", flowID)
+}
+
+// flowStepWindow is the scrolled part of a step's detail: every line of the
+// selected output, the rows it is drawn in and the first line drawn. above
+// is the pane lines before it — title, head and the output's rule — so its
+// first line sits at pane row above.
+type flowStepWindow struct {
+	lines  []string
+	rows   int
+	scroll int
+	above  int
+}
+
+// flowStepScroll is the window of a step detail w wide and h tall whose
+// title and head take headRows lines. flowStepDetail draws it and drag
+// selection reads it.
+func (m tuiModel) flowStepScroll(w, h, headRows int) flowStepWindow {
+	s := flowStepWindow{lines: m.flowStepLines(w), rows: max(1, h-headRows-1), above: headRows + 1}
+	s.scroll = min(m.flowScroll, max(0, len(s.lines)-s.rows))
+	return s
 }

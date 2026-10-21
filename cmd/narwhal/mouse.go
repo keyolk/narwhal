@@ -24,6 +24,9 @@ import (
 //     (esc); a click on a palette match runs it (enter on that match).
 //   - every other screen, and any open text line (request, steer, answer):
 //     ignored. A click never types.
+//   - a drag, on any screen, selects text inside the pane under the press
+//     (drag_select.go); a double or triple click in a text pane selects a
+//     word or a line. Neither ever types into an open text line.
 func (m tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.quit || m.width == 0 {
 		return m, nil
@@ -36,6 +39,12 @@ func (m tuiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.removeStep = ""
 			m.toasts = toast.Dismiss(m.toasts, "remove")
 		}
+	}
+	// The selection sees every event before any click handling, release and
+	// motion included; a press that does not move stays the click below.
+	m, copyCmd, consumed := m.selectMouse(msg)
+	if consumed {
+		return m, copyCmd
 	}
 	switch {
 	case m.palette:

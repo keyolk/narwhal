@@ -169,6 +169,12 @@ func (m tuiModel) viewMessageDetail() string {
 	if len(m.snap.Messages) == 0 {
 		return "no messages"
 	}
+	return m.messageParts().render(m.height)
+}
+
+// messageParts is the message screen before it is drawn, for
+// viewMessageDetail and drag selection. Call it with a message to show.
+func (m tuiModel) messageParts() detailParts {
 	msg := m.snap.Messages[m.radioCur]
 
 	from := msg.Sender
@@ -219,10 +225,15 @@ func (m tuiModel) viewMessageDetail() string {
 
 	footer := m.footerBlock(m.width, m.keyFooter(m.screenStack(), m.width))
 
-	avail := max(3, m.height-4)
-	scroll, end, pos := scrollWindow(m.detailScroll, avail, len(body))
-	return pinFooter(head+pos+"\n"+strings.Join(meta, styDim.Render("  "))+"\n\n"+
-		strings.Join(body[scroll:end], "\n"), footer, m.height)
+	return detailParts{
+		prefix: func(pos string) string {
+			return head + pos + "\n" + strings.Join(meta, styDim.Render("  ")) + "\n\n"
+		},
+		body:     body,
+		avail:    max(3, m.height-4),
+		scrollAt: m.detailScroll,
+		footer:   footer,
+	}
 }
 
 // viewTaskView is a task in three tabs: Summary — what it was asked,
@@ -235,10 +246,16 @@ func (m tuiModel) viewMessageDetail() string {
 // calls is a tab away. A running task opens on Activity, a finished one
 // on Summary.
 func (m tuiModel) viewTaskView() string {
-	t, ok := m.selectedTask()
-	if !ok {
+	if _, ok := m.selectedTask(); !ok {
 		return "no tasks"
 	}
+	return m.taskParts().render(m.height)
+}
+
+// taskParts is the task screen before it is drawn, for viewTaskView and drag
+// selection. Call it with a task selected.
+func (m tuiModel) taskParts() detailParts {
+	t, _ := m.selectedTask()
 	width := m.width - 2
 	tab := m.currentTaskTab(t)
 
@@ -292,26 +309,31 @@ func (m tuiModel) viewTaskView() string {
 		// Following pins the feed to the end as the worker works.
 		scrollAt = len(body) - avail
 	}
-	scroll, end, pos := scrollWindow(scrollAt, avail, len(body))
 
 	sel := -1
 	if tab == taskTabActivity {
 		sel = m.selectedEntry(len(l.entries))
-	}
-	shown := make([]string, 0, end-scroll)
-	for n := scroll; n < end; n++ {
-		gutter := " "
-		if sel >= 0 && n >= l.starts[sel] && n < l.starts[sel+1] {
-			// The entry under the cursor carries a bar down its left edge.
-			gutter = styCyanBold.Render("▌")
-		}
-		shown = append(shown, gutter+body[n])
 	}
 	follow := ""
 	if tab == taskTabActivity && m.sessionTail {
 		follow = styCyan.Render("  [following]")
 	}
 	footer := m.footerBlock(m.width, m.keyFooter(m.screenStack(), m.width))
-	return pinFooter(head+follow+"\n"+styDim.Render(strings.Join(meta, " · "))+"\n"+tabs+pos+"\n"+
-		strings.Join(shown, "\n"), footer, m.height)
+	return detailParts{
+		prefix: func(pos string) string {
+			return head + follow + "\n" + styDim.Render(strings.Join(meta, " · ")) + "\n" + tabs + pos + "\n"
+		},
+		body:     body,
+		avail:    avail,
+		scrollAt: scrollAt,
+		footer:   footer,
+		x:        1,
+		gutter: func(n int) string {
+			if sel >= 0 && n >= l.starts[sel] && n < l.starts[sel+1] {
+				// The entry under the cursor carries a bar down its left edge.
+				return styCyanBold.Render("▌")
+			}
+			return " "
+		},
+	}
 }

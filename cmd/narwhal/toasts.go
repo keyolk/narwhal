@@ -24,6 +24,7 @@ const (
 	srcRemove = "remove"
 	srcKeys   = "keys"
 	srcPrefs  = "prefs"
+	srcCopy   = "copy"
 )
 
 var toastStyles = toast.Styles{

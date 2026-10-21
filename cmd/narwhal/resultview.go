@@ -14,13 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/link"
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -89,7 +89,7 @@ func (m tuiModel) artifactLines(res broker.RunResult, width int, numbered bool) 
 		case "?":
 			st = styDim.Render("?")
 		}
-		out = append(out, render.Truncate(key()+label("PR")+prShort(u)+"  "+st+styDim.Render("  "+u), width))
+		out = append(out, render.Truncate(key()+label("PR")+link.Wrap(u, prShort(u))+"  "+st+styDim.Render("  "+u), width))
 	}
 	// Files one to a line: each is something to open.
 	for _, f := range res.Artifacts.Files {
@@ -119,7 +119,7 @@ func openArtifact(a broker.Artifacts, n int, cwd string) tea.Cmd {
 	}
 	target := list[n-1]
 	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return openURLCmd(target)
+		return link.Open(target)
 	}
 	path := target
 	if !filepath.IsAbs(path) && cwd != "" {
@@ -213,19 +213,5 @@ func copyCmd(text, what string) tea.Cmd {
 			return noticeMsg{text: fmt.Sprintf("copied %s (%d lines)", what, strings.Count(text, "\n")+1)}
 		}
 		return noticeMsg{err: fmt.Errorf("no clipboard command (pbcopy, wl-copy, xclip) found")}
-	}
-}
-
-// openURLCmd opens a URL in the browser.
-func openURLCmd(u string) tea.Cmd {
-	return func() tea.Msg {
-		opener := "xdg-open"
-		if runtime.GOOS == "darwin" {
-			opener = "open"
-		}
-		if err := exec.Command(opener, u).Start(); err != nil {
-			return noticeMsg{err: fmt.Errorf("%s: %w", opener, err)}
-		}
-		return noticeMsg{text: "opened " + prShort(u)}
 	}
 }

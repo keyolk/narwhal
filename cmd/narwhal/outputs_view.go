@@ -280,7 +280,7 @@ func (m tuiModel) outputList(outs []output, lw int) ([]string, int) {
 			lines = append(lines, outputKindStyle(o.kind).Render(" "+kindHeading(o.kind)))
 			lastKind = o.kind
 		}
-		label := render.Truncate(o.title, max(4, lw-14))
+		label := o.linked(render.Truncate(o.title, max(4, lw-14)))
 		task := render.PadRight(render.Truncate(o.task, 10), 10)
 		if i == m.outputSel {
 			selLine = len(lines)
@@ -347,7 +347,7 @@ func (m tuiModel) viewOutputs() string {
 	if sel != nil {
 		lines, scroll := g.lines, g.scroll
 		end := min(len(lines), scroll+rows)
-		label := render.Truncate(sel.title, max(4, rw-20))
+		label := sel.linked(render.Truncate(sel.title, max(4, rw-20)))
 		if len(lines) > rows {
 			label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 			if end < len(lines) {

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/keyolk/tuikit/link"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -324,7 +325,7 @@ func copyable(o output) (string, string) {
 func openOutput(o output) tea.Cmd {
 	switch o.kind {
 	case outPR:
-		return openURLCmd(o.ref)
+		return link.Open(o.ref)
 	case outCommit:
 		return gitPagerCmd(o.cwd, "show", "--color=always", o.ref)
 	case outBranch:

@@ -580,7 +580,7 @@ func (m tuiModel) flowStepHead(w int, outs []output, sel int) []string {
 	for i := top; i < end; i++ {
 		o := outs[i]
 		kind := outputKindStyle(o.kind).Render(render.PadRight(outputLabels[o.kind], 7))
-		row := kind + styDim.Render(render.PadRight(render.Truncate(o.task, 10), 11)) + render.Truncate(o.title, max(4, w-20))
+		row := kind + styDim.Render(render.PadRight(render.Truncate(o.task, 10), 11)) + o.linked(render.Truncate(o.title, max(4, w-20)))
 		if i == sel {
 			mark := styCyanBold.Render("▸ ")
 			if m.flowDetail {
@@ -630,7 +630,7 @@ func (m tuiModel) flowStepDetail(w, h int) string {
 	s := m.flowStepScroll(w, h, len(pane))
 	lines, rows, scroll := s.lines, s.rows, s.scroll
 	end := min(len(lines), scroll+rows)
-	label := render.Truncate(outs[sel].title, max(4, w-20))
+	label := outs[sel].linked(render.Truncate(outs[sel].title, max(4, w-20)))
 	if len(lines) > rows {
 		label += fmt.Sprintf("  %d-%d/%d", scroll+1, end, len(lines))
 		if end < len(lines) {

@@ -1,8 +1,7 @@
 package main
 
 import (
-	"fmt"
-	"unicode/utf8"
+	"errors"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -43,13 +42,6 @@ const (
 	paneOutputList = "output-list"
 	paneQuestions  = "questions"
 )
-
-// selectionStyle survives NO_COLOR: reverse video needs no color.
-var selectionStyle = lipgloss.NewStyle().Reverse(true)
-
-// copySelection builds the clipboard command for a finished selection. Tests
-// swap it to capture the text without ever writing the real clipboard.
-var copySelection = selection.Copy
 
 // selectionPanes lists what a drag can select on the screen view draws, from
 // the geometry view and the mouse hit tests use.
@@ -113,7 +105,7 @@ func (m tuiModel) overlayInner(lines []string) mouse.Rect {
 	if m.width < 24 || m.height < 8 {
 		return r
 	}
-	return mouse.Rect{X: r.X + 2, Y: r.Y + 1, W: max(r.W-4, 0), H: max(r.H-2, 0)}
+	return r.InsetStyle(overlayBox)
 }
 
 func (m tuiModel) homePanes() []selection.Pane {
@@ -204,49 +196,38 @@ func (m tuiModel) flowPanes() []selection.Pane {
 		Lines: s.lines, Offset: s.scroll})
 }
 
-// selectMouse feeds the event to the selection before any click handling.
-// handled means the selection consumed it and it is not also a click.
-func (m tuiModel) selectMouse(msg tea.MouseMsg) (tuiModel, tea.Cmd, bool) {
+// selectMouse feeds a mouse event or an auto-scroll tick to the selection
+// before any click handling. handled means the selection consumed it and it
+// is not also a click.
+func (m tuiModel) selectMouse(msg tea.Msg) (tuiModel, tea.Cmd, bool) {
 	// view is the frame panes without whole content are read from, before
 	// the highlight is drawn, so a highlight style never reaches a copy. It
 	// is pure (a value receiver), so calling it here changes nothing.
-	r := m.sel.Mouse(msg, m.selectionPanes(), m.view(), m.clock())
+	r, cmd := m.sel.Update(msg, m.selectionPanes, m.view, m.clock())
 	if r.Scroll != 0 {
-		m = m.scrollPane(r.ScrollPane, r.Scroll)
-	}
-	var cmd tea.Cmd
-	if r.Copy != "" {
-		cmd = copySelection(r.Copy)
+		m = m.scrollPaneTo(r.ScrollPane, r.Offset)
 	}
 	return m, cmd, r.Consumed
 }
 
-// scrollPane scrolls a text pane by n lines (negative is up) through the
-// state its keys scroll.
-func (m tuiModel) scrollPane(id string, n int) tuiModel {
+// scrollPaneTo puts line off of a text pane at its top, through the state
+// its keys scroll. off is the pane's drawn offset plus the drag's scroll,
+// so an offset parked past the end (G) never swallows a scroll up.
+func (m tuiModel) scrollPaneTo(id string, off int) tuiModel {
 	switch id {
 	case paneDetail:
-		p, ok := m.detailPartsOpen()
-		if !ok {
+		if _, ok := m.detailPartsOpen(); !ok {
 			return m
 		}
-		// Start from the line drawn at the top: detailScroll can be far
-		// past the end (G sets it so), and following pins it to the tail.
-		m.detailScroll = first(p.window())
-		act := "detail.down"
-		if n < 0 {
-			act = "detail.up"
-		}
-		for range max(n, -n) {
-			next, _ := m.doDetail(act)
-			m = next.(tuiModel)
-		}
+		// What j and k do besides moving: a scrolled task view stops
+		// following its newest output.
+		m.detailScroll = max(off, 0)
+		m.sessionTail = false
 	case paneOutput:
-		// No key moves one line here (J/K page), so the drag moves the
-		// offset the page keys move, from the line drawn at the top.
-		m.outputScroll = max(m.outputsGeom().scroll+n, 0)
+		m.outputScroll = max(off, 0)
 	case paneFlowStep:
-		m.scrollFlow(n)
+		m.flowScroll = off
+		m.scrollFlow(0) // clamps to the step's lines
 	}
 	return m
 }
@@ -256,7 +237,7 @@ func (m tuiModel) scrollPane(id string, n int) tuiModel {
 func (m *tuiModel) noteCopied(msg selection.CopiedMsg) {
 	var err error
 	if msg.Err != nil {
-		err = fmt.Errorf("copy failed: %w", msg.Err)
+		err = errors.New(msg.Note())
 	}
-	m.notifyFrom(srcCopy, fmt.Sprintf("copied %d chars", utf8.RuneCountInString(msg.Text)), err)
+	m.notifyFrom(srcCopy, msg.Note(), err)
 }

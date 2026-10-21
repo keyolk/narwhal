@@ -42,6 +42,8 @@ func (m tuiModel) doDetail(action string) (tea.Model, tea.Cmd) {
 		// To the newest, and stay there as it grows.
 		m.sessionTail = true
 		m.detailScroll = 1 << 30
+	case "link.open": // link.Action, spelled out for the dispatcher test's scan
+		return m, m.openMessageLink()
 	case "message.task":
 		// From a message, to the task it came from or went to, at the
 		// moment it was posted.

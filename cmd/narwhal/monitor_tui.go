@@ -34,6 +34,7 @@ import (
 	"github.com/keyolk/tuikit/render"
 
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/link"
 	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/prefs"
 	"github.com/keyolk/tuikit/selection"
@@ -799,9 +800,20 @@ func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+	case selection.AutoScrollMsg:
+		// A drag resting past a pane's edge keeps scrolling it: the
+		// terminal sends no motion for a pointer that does not move.
+		next, cmd, _ := m.selectMouse(msg)
+		return next, cmd
 
 	case selection.CopiedMsg:
 		m.noteCopied(msg)
+		return m, nil
+	case link.OpenedMsg:
+		m.noteOpened(msg, 1)
+		return m, nil
+	case linkOfMsg:
+		m.noteOpened(msg.OpenedMsg, msg.of)
 		return m, nil
 
 	case tea.KeyMsg:
@@ -1037,7 +1049,7 @@ func (m tuiModel) sortedTasks() []broker.TaskSnapshot {
 
 func (m tuiModel) View() string {
 	// The drag selection is drawn last, over the panes the mouse used.
-	return m.sel.Render(m.view(), m.selectionPanes(), selectionStyle)
+	return m.sel.Render(m.view(), m.selectionPanes(), selection.DefaultStyle())
 }
 
 // view is the frame without the selection: what a selection reads its text

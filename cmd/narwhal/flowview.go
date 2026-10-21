@@ -385,6 +385,9 @@ func (m *tuiModel) openRun(runID string) tea.Cmd {
 type flowGeom struct {
 	head, title, footer string
 	lw, rw, bodyH       int
+	// zoom draws the step's detail alone: asked for (z), or a terminal too
+	// narrow for both columns' minimums.
+	zoom bool
 }
 
 func (m tuiModel) flowGeometry() flowGeom {
@@ -411,11 +414,12 @@ func (m tuiModel) flowGeometry() flowGeom {
 		g.footer = styRedBold.Render("✗ ") + styRed.Render(render.Truncate(m.homeErr.Error(), w-3)) + "\n" + g.footer
 	}
 	g.bodyH = max(3, m.height-lipgloss.Height(g.head+"\n"+g.title)-lipgloss.Height(g.footer))
-	if m.flowZoom {
+	lw, rw, collapsed := m.bandWidths(bandFlow)
+	g.zoom = m.flowZoom || collapsed
+	if g.zoom {
 		g.lw, g.rw = 0, max(10, w-4)
 	} else {
-		g.lw = min(max(w*2/5, 30), w-24)
-		g.rw = max(10, w-g.lw-bandBorderCols)
+		g.lw, g.rw = lw, rw
 	}
 	return g
 }
@@ -448,10 +452,10 @@ func (m tuiModel) viewFlow() string {
 	g := m.flowGeometry()
 	right := m.flowStepDetail(g.rw, g.bodyH-1)
 	var body string
-	if m.flowZoom {
+	if g.zoom {
 		body = framedSingle(g.rw, g.bodyH-2, right, "")
 	} else {
-		body = framedBand(g.lw, g.rw, g.bodyH-2, m.flowLeft(f, steps, g.lw, g.bodyH-1), right)
+		body = framedBand(m.band(bandFlow), g.lw, g.rw, g.bodyH-2, m.flowLeft(f, steps, g.lw, g.bodyH-1), right)
 	}
 	return pinFooter(g.head+"\n"+g.title+"\n"+body, g.footer, m.height)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/split"
 	"github.com/keyolk/tuikit/toast"
 
 	"github.com/keyolk/narwhal/internal/broker"
@@ -70,6 +71,14 @@ func TestEveryHelpEntryIsReachable(t *testing.T) {
 	}
 }
 
+// kitActions are the binding actions tuikit names, by the constant a
+// dispatcher's case uses for them.
+var kitActions = map[string]string{
+	split.ActionGrow:   "split.ActionGrow",
+	split.ActionShrink: "split.ActionShrink",
+	split.ActionReset:  "split.ActionReset",
+}
+
 // Every action in the table is reachable on some screen and handled by a
 // dispatcher: a name in the table with no case for it would be a key that
 // the footer offers and that does nothing.
@@ -96,7 +105,12 @@ func TestEveryActionIsDocumentedAndHandled(t *testing.T) {
 		if !documented[b.Action] {
 			t.Errorf("%s (%s) is not reachable on any screen", b.Action, b.Ctx)
 		}
-		if !regexp.MustCompile(`case [^:\n]*"` + regexp.QuoteMeta(b.Action) + `"`).MatchString(src.String()) {
+		// The kit's actions are matched by the constant the case names.
+		name := `"` + regexp.QuoteMeta(b.Action) + `"`
+		if c, ok := kitActions[b.Action]; ok {
+			name = regexp.QuoteMeta(c) + `\b`
+		}
+		if !regexp.MustCompile(`case [^:\n]*` + name).MatchString(src.String()) {
 			t.Errorf("%s has no case in any dispatcher", b.Action)
 		}
 	}
@@ -161,8 +175,9 @@ func TestLayoutIsSavedAndRestored(t *testing.T) {
 
 	r := testModel(3, 3)
 	r.enablePrefs()
-	if r.focus != focusNode || r.boxMode || r.widthDelta != 4 {
-		t.Errorf("restored focus=%v boxMode=%v widthDelta=%d", r.focus, r.boxMode, r.widthDelta)
+	want := m.uiState().RunSplit
+	if r.focus != focusNode || r.boxMode || want.Ratio == 0 || r.uiState().RunSplit != want {
+		t.Errorf("restored focus=%v boxMode=%v run split=%v, want %v", r.focus, r.boxMode, r.uiState().RunSplit, want)
 	}
 }
 

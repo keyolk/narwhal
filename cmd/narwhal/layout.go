@@ -22,7 +22,9 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/keyolk/tuikit/mouse"
 	"github.com/keyolk/tuikit/render"
+	"github.com/keyolk/tuikit/split"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -92,8 +94,8 @@ func (m tuiModel) layout() paneLayout {
 		l.left, l.right, l.top = m.width, m.width, body
 		return l
 	}
-	l.left = m.columnWidth()
-	l.right = max(20, m.width-l.left-bandBorderCols)
+	l.left, l.right, _ = m.bandWidths(bandRun)
+	l.left = max(l.left, 1)
 	l.top = max(1, body-bandBorderRows)
 	return l
 }
@@ -101,7 +103,7 @@ func (m tuiModel) layout() paneLayout {
 // viewBands draws the main view's body: the graph with the run's result
 // under it, and the pane being read under a title that names the others.
 func (m tuiModel) viewBands(l paneLayout) string {
-	return framedBand(l.left, l.right, l.top, m.viewLeft(l.left, l.top+1), m.viewReader(l.right, l.top+1))
+	return framedBand(m.band(bandRun), l.left, l.right, l.top, m.viewLeft(l.left, l.top+1), m.viewReader(l.right, l.top+1))
 }
 
 // resultMinRows is the least room under the graph worth giving the result:
@@ -294,7 +296,7 @@ func framedSingle(w, h int, pane, note string) string {
 // Each pane is rendered as before, title row first, at one row taller than
 // the band's inner height. The title row becomes the band's top edge and
 // the rest its body, so the panes do not need to know they are framed.
-func framedBand(lw, rw, h int, left, right string) string {
+func framedBand(sp split.Model, lw, rw, h int, left, right string) string {
 	ll, rl := strings.Split(left, "\n"), strings.Split(right, "\n")
 	edge := func(lines []string, w int) string {
 		if len(lines) == 0 {
@@ -308,8 +310,11 @@ func framedBand(lw, rw, h int, left, right string) string {
 	var b strings.Builder
 	b.WriteString(styDim.Render("╭") + edge(ll, lc) + styDim.Render("┬") + edge(rl, rc) + styDim.Render("╮"))
 	bar := styDim.Render("│")
+	// The middle border and the air after it are the split's divider, drawn
+	// by the kit so a drag shows it heavy.
+	div := strings.Split(sp.DrawDivider(mouse.Rect{W: bandDivider, H: h}, styDim), "\n")
 	for i := 1; i <= h; i++ {
-		b.WriteString("\n" + bar + " " + fitCells(lineAt(ll, i), lw) + bar + " " + fitCells(lineAt(rl, i), rw) + bar)
+		b.WriteString("\n" + bar + " " + fitCells(lineAt(ll, i), lw) + lineAt(div, i-1) + fitCells(lineAt(rl, i), rw) + bar)
 	}
 	b.WriteString("\n" + styDim.Render("╰"+strings.Repeat("─", lc)+"┴"+strings.Repeat("─", rc)+"╯"))
 	return b.String()

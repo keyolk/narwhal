@@ -6,6 +6,7 @@ package main
 import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/keyolk/tuikit/keys"
+	"github.com/keyolk/tuikit/split"
 )
 
 // keymap is the model's table, or the default for a model built without
@@ -124,8 +125,15 @@ func (m tuiModel) keyVisible(action string) bool {
 		return !(m.focus == focusRadio && m.briefTab)
 	case "run.follow", "pane.4":
 		return m.focus == focusRadio
-	case "run.lanes", "run.narrower", "run.wider":
+	case "run.lanes":
 		return m.focus == focusTasks
+	case split.ActionGrow, split.ActionShrink, split.ActionReset:
+		// In the run view the width hint is the graph's, shown while the
+		// graph has the keys; the flow and Outputs views always show it.
+		if !m.flowView && !m.outputsView {
+			return m.focus == focusTasks
+		}
+		return true
 	case "message.task":
 		return m.detail == detailMessage && m.selectedMessageTask() != ""
 	case "flow.steer", "flow.compose", "flow.read", "flow.open", "flow.outputs", "flow.result",

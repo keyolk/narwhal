@@ -504,7 +504,7 @@ func TestMousePaletteClickRunsThatMatch(t *testing.T) {
 			kb = send2(kb, tea.KeyMsg{Type: tea.KeyDown})
 		}
 		kb = send2(kb, tea.KeyMsg{Type: tea.KeyEnter})
-		if kb.focus != m.focus || kb.zoom != m.zoom || kb.boxMode != m.boxMode || kb.widthDelta != m.widthDelta {
+		if kb.focus != m.focus || kb.zoom != m.zoom || kb.boxMode != m.boxMode || kb.columnWidth() != m.columnWidth() {
 			want, target = kb, e.Help
 			break
 		}
@@ -516,9 +516,9 @@ func TestMousePaletteClickRunsThatMatch(t *testing.T) {
 	if got.palette {
 		t.Fatal("a click on a match left the palette open")
 	}
-	if got.focus != want.focus || got.zoom != want.zoom || got.boxMode != want.boxMode || got.widthDelta != want.widthDelta {
+	if got.focus != want.focus || got.zoom != want.zoom || got.boxMode != want.boxMode || got.columnWidth() != want.columnWidth() {
 		t.Fatalf("click on %q: focus=%v zoom=%v box=%v width=%d; the keys give focus=%v zoom=%v box=%v width=%d",
-			target, got.focus, got.zoom, got.boxMode, got.widthDelta, want.focus, want.zoom, want.boxMode, want.widthDelta)
+			target, got.focus, got.zoom, got.boxMode, got.columnWidth(), want.focus, want.zoom, want.boxMode, want.columnWidth())
 	}
 }
 

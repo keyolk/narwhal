@@ -32,6 +32,7 @@ import (
 	"github.com/keyolk/tuikit/async"
 	"github.com/keyolk/tuikit/input"
 	"github.com/keyolk/tuikit/render"
+	"github.com/keyolk/tuikit/split"
 
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/link"
@@ -164,10 +165,13 @@ type tuiModel struct {
 	// to be the screen for a moment, and going through a separate detail
 	// view to get it loses the place you were in.
 	zoom focusPane
-	// widthDelta is the user's adjustment to the column split. Kept as a
-	// delta rather than an absolute size so the layout still adapts when
-	// the terminal is resized.
-	widthDelta int
+	// splits are the run, flow and Outputs views' column boundaries, and
+	// splitSet which of them the person moved; an unmoved one follows the
+	// width (split_band.go). legacyWidthDelta is an older ui.json's
+	// width_delta, waiting for the first size to become the run's ratio.
+	splits           [bandCount]split.Model
+	splitSet         [bandCount]bool
+	legacyWidthDelta int
 	// reader is the pane the right column showed last; it stays while the
 	// graph has the keys. See readerPane.
 	reader focusPane
@@ -658,6 +662,7 @@ func (m tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.migrateWidthDelta()
 		return m, nil
 
 	case tickMsg:
@@ -1176,33 +1181,12 @@ func (m tuiModel) graphPaneWidth() int {
 }
 
 // columnWidth is the inner width of the bands' left column, where the graph
-// and the timeline sit.
+// and the timeline sit: the run split's left pane (split_band.go).
 func (m tuiModel) columnWidth() int {
-	// Boxes need room for two borders plus a readable label, so the graph
-	// pane gets a wider floor in box mode than the lane gutter needs.
-	w := m.width/3 + m.widthDelta
-	minLeft, maxLeft := 24, 44
-	if m.boxMode {
-		minLeft, maxLeft = 30, 52
-	}
-	// The user's adjustment widens the ceiling — the cap exists so the
-	// graph does not eat the screen by default, not to stop someone who
-	// asked for it. The right side still keeps a usable minimum.
-	if max := m.width - 24; maxLeft < max {
-		maxLeft = max
-	}
-	if w < minLeft {
-		w = minLeft
-	}
-	if w > maxLeft {
-		w = maxLeft
-	}
-	if w > m.width-2 {
-		w = m.width - 2
-	}
+	lw, _, _ := m.bandWidths(bandRun)
 	// Never below one cell: a terminal narrower than the borders is drawn
 	// clipped, not with negative widths.
-	return max(w, 1)
+	return max(lw, 1)
 }
 
 // The palette. Colour carries meaning here rather than decorating: the

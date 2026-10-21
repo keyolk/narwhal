@@ -207,8 +207,6 @@ func bindings() []keys.Binding {
 		b(ctxRun, grpMove, "run.pageup", "page up", "ctrl+u", "pgup"),
 		labels(foot(b(ctxRun, grpLayout, "run.lanes", "boxes ↔ lanes for the graph", "b"), 4),
 			map[string]string{"boxes": "lanes", "lanes": "boxes"}),
-		grouped(b(ctxRun, grpLayout, "run.narrower", "narrower graph", "<"), 5, "width"),
-		grouped(b(ctxRun, grpLayout, "run.wider", "wider graph", ">"), 5, "width"),
 		labels(foot(b(ctxRun, grpLayout, "run.zoom", "this pane across the whole screen, and back", "z"), 10),
 			map[string]string{"zoomed": "unzoom", "": "zoom"}),
 		labels(foot(b(ctxRun, grpAct, "run.steer", "send the workers an instruction (@task to address one, ! urgent)", "i"), 11),
@@ -226,6 +224,8 @@ func bindings() []keys.Binding {
 		b(ctxRun, grpMove, "run.stepprev", "the previous step of the flow, or the previous run", "[", "shift+left"),
 		runQuit,
 	)
+	// The column boundary: < > = and a drag on the divider (split_band.go).
+	add(splitBindings(ctxRun, grpLayout, 5)...)
 
 	// Detail views: a message, a task, the result.
 	add(
@@ -335,6 +335,9 @@ func bindings() []keys.Binding {
 			map[string]string{"text": "go to the task"}),
 		foot(b(ctxOutputs, grpOutputs, "outputs.back", "back", "esc", "q", "O"), 10),
 	)
+
+	add(splitBindings(ctxFlow, grpFlow, 14)...)
+	add(splitBindings(ctxOutputs, grpOutputs, 11)...)
 
 	// Questions.
 	add(

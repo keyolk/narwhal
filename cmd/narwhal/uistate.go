@@ -9,6 +9,7 @@ package main
 
 import (
 	"github.com/keyolk/tuikit/prefs"
+	"github.com/keyolk/tuikit/split"
 )
 
 const prefsApp = "narwhal"
@@ -17,11 +18,19 @@ const prefsApp = "narwhal"
 // focusPane constant, so reordering the constants cannot reinterpret a
 // saved file.
 type uiState struct {
-	Focus      string `json:"focus"`
-	Reader     string `json:"reader"`
-	BoxMode    bool   `json:"box_mode"`
-	WidthDelta int    `json:"width_delta"`
-	BriefTab   bool   `json:"brief_tab"`
+	Focus    string `json:"focus"`
+	Reader   string `json:"reader"`
+	BoxMode  bool   `json:"box_mode"`
+	BriefTab bool   `json:"brief_tab"`
+	// The column boundaries the person moved, as fractions (split_band.go);
+	// an unmoved view saves nothing and follows the width.
+	RunSplit     split.State `json:"run_split,omitzero"`
+	FlowSplit    split.State `json:"flow_split,omitzero"`
+	OutputsSplit split.State `json:"outputs_split,omitzero"`
+	// WidthDelta is the graph width adjustment in columns an older narwhal
+	// saved. It is read to migrate (migrateWidthDelta) and kept only until
+	// the first size turns it into RunSplit.
+	WidthDelta int `json:"width_delta,omitzero"`
 }
 
 var paneNames = map[focusPane]string{focusTasks: "graph", focusNode: "task", focusTimeline: "timeline", focusRadio: "radio"}
@@ -37,11 +46,14 @@ func paneByName(name string, def focusPane) focusPane {
 
 func (m tuiModel) uiState() uiState {
 	return uiState{
-		Focus:      paneNames[m.focus],
-		Reader:     paneNames[m.reader],
-		BoxMode:    m.boxMode,
-		WidthDelta: m.widthDelta,
-		BriefTab:   m.briefTab,
+		Focus:        paneNames[m.focus],
+		Reader:       paneNames[m.reader],
+		BoxMode:      m.boxMode,
+		BriefTab:     m.briefTab,
+		RunSplit:     m.splitState(bandRun),
+		FlowSplit:    m.splitState(bandFlow),
+		OutputsSplit: m.splitState(bandOutputs),
+		WidthDelta:   m.legacyWidthDelta,
 	}
 }
 
@@ -55,8 +67,14 @@ func (m *tuiModel) applyUIState(s uiState) {
 	m.focus = paneByName(s.Focus, m.focus)
 	m.reader = paneByName(s.Reader, m.reader)
 	m.boxMode = s.BoxMode
-	m.widthDelta = s.WidthDelta
 	m.briefTab = s.BriefTab
+	m.restoreSplit(bandRun, s.RunSplit)
+	m.restoreSplit(bandFlow, s.FlowSplit)
+	m.restoreSplit(bandOutputs, s.OutputsSplit)
+	m.legacyWidthDelta = s.WidthDelta
+	// A size already known (a restore after the first WindowSizeMsg)
+	// migrates at once.
+	m.migrateWidthDelta()
 }
 
 // enablePrefs restores the saved layout and turns saving on. A file that

@@ -691,6 +691,11 @@ func (s *Server) handleTaskAction(w http.ResponseWriter, r *http.Request, agent 
 		// Whether the outcome answers the task, once per dispatch, after
 		// the gates that may still change it. See broker/answered.go.
 		hint := run.JudgeCriterion(task, req.Outcome)
+		// Before answered: a reported impossibility answers an assignment
+		// that allowed one, so answered passes what this gate exists for.
+		if hint == "" {
+			hint = run.JudgeGaveUp(task, req.Outcome)
+		}
 		if hint == "" {
 			hint = run.JudgeAnswered(task, req.Outcome)
 		}

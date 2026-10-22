@@ -288,13 +288,14 @@ func tellTask(sc *Scene, t TaskSnapshot) {
 	if escalated {
 		sc.Lines = append(sc.Lines, "같은 원인으로 거듭 실패해 더 강한 모델로 올림")
 	}
-	for _, q := range []string{QuestionCriterion, QuestionAnswered, QuestionFollowed, QuestionFolded} {
+	for _, q := range []string{QuestionCriterion, QuestionGaveUp, QuestionAnswered, QuestionFollowed, QuestionFolded} {
 		if returned[q] == 0 {
 			continue
 		}
 		why := map[string]string{
 			QuestionCriterion: "planner가 정한 기준(criterion)에 못 미쳐",
 			QuestionAnswered:  "결과가 과제에 대한 답으로 읽히지 않아",
+			QuestionGaveUp:    "다른 방법을 시도하지 않은 부정 결론이라",
 			QuestionFolded:    "peer의 결과를 빠뜨려",
 			QuestionFollowed:  "운영자의 답을 따르지 않은 결과라",
 		}[q]

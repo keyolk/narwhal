@@ -565,6 +565,8 @@ type Dispatch struct {
 	FoldAsked      bool
 	CriterionAsked bool
 	FollowAsked    bool
+	// GaveUpAsked: see gaveup.go.
+	GaveUpAsked bool
 }
 
 // Thread is a named conversation channel within a Run's radio layer.

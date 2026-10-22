@@ -1,14 +1,26 @@
 name: release
 
+# Every merge to main publishes the next patch release (latest v* tag + 1), so
+# what `cc-mods-tools update` installs is never older than main. Push a v* tag
+# yourself for a minor/major bump; later merges count up from it. Docs-only
+# merges do not release. workflow_dispatch is a snapshot build that publishes
+# nothing and keeps the archives on the run.
 on:
   push:
-    tags:
-      - "v*"
-  # Dry run on a branch: builds every platform without publishing.
+    branches: [main]
+    tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**"]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# One release run at a time, never cancelled mid-upload, so two quick merges
+# cannot both pick the same next patch number. GitHub keeps only the newest
+# pending run; a merge whose run is dropped ships in the next one.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
@@ -16,18 +28,44 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Next tag
+        id: tag
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        shell: bash
+        run: |
+          if [ -n "$(git tag --points-at HEAD 'v*')" ]; then
+            echo "HEAD is already released as $(git tag --points-at HEAD 'v*')"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -1)
+          last=${last#v}; last=${last:-0.0.0}
+          IFS=. read -r ma mi pa <<<"${last%%-*}"
+          tag="v$ma.$mi.$((pa + 1))"
+          # goreleaser releases the tag on HEAD, so it must exist and be pushed
+          # first. A tag pushed with this token starts no workflow, so it does
+          # not trigger a second run of this one.
+          git tag "$tag"
+          git push origin "$tag"
+          echo "releasing $tag"
+
       - uses: goreleaser/goreleaser-action@v6
+        if: steps.tag.outputs.skip != 'true'
         with:
           version: "~> v2"
-          args: ${{ startsWith(github.ref, 'refs/tags/') && 'release --clean' || 'release --clean --snapshot' }}
+          args: ${{ github.event_name == 'push' && 'release --clean' || 'release --clean --snapshot' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+      - if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: dist

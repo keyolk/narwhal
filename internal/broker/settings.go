@@ -46,6 +46,7 @@ var (
 		QuestionSameCause:  judgementSetting(QuestionSameCause, SameCauseThreshold, "two failures share a cause (move a tier up at or above)"),
 		QuestionCriterion:  judgementSetting(QuestionCriterion, CriterionThreshold, "an outcome meets its criterion (hand back below)"),
 		QuestionAnswered:   judgementSetting(QuestionAnswered, AnsweredThreshold, "an outcome answers its task (hand back below)"),
+		QuestionGaveUp:     judgementSetting(QuestionGaveUp, GaveUpThreshold, "a negative outcome was reached without trying another way (hand back above)"),
 		QuestionAffected:   judgementSetting(QuestionAffected, AffectedThreshold, "an upstream change reaches a dependent (leave it finished below)"),
 		QuestionFolded:     judgementSetting(QuestionFolded, FoldedThreshold, "the synthesis folds a peer in (hand back below)"),
 		QuestionStuck:      judgementSetting(QuestionStuck, StuckThreshold, "a running worker is stuck (flag at or above)"),

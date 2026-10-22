@@ -6,9 +6,20 @@ instead of an OpenAI-compatible endpoint. The scoring logic (status/score
 canonicalization, negative-rubric flip, must-have aggregation) is kept
 identical so the numbers stay comparable to the published harness.
 
-The judge model is pinned rather than routed through ccproxy: ccproxy
-rotates accounts, and a rubric scored by a different model than its
-neighbours makes the two arms incomparable.
+The judge model is pinned and checked. By default the judge calls `claude`
+directly rather than through ccproxy, which rotates accounts and can hand a
+turn to a non-Claude backend. When the direct account is out of quota,
+JUDGE_CMD routes it through ccproxy restricted to one account, e.g.
+JUDGE_CMD="ccproxy --accounts claude-personal claude". Either way every call
+runs under a pinned session id and its transcript is checked: a verdict from
+a model other than JUDGE_MODEL is treated as a failed call, not a score.
+
+A trial the judge could not finish — any rubric left unscored by transport
+errors or model drift — gets no evaluation_results.json, only
+verifier/judge_error.json, and exits 2. The judge failing is not the arm
+failing: the trial stays unjudged, run_slice.sh judges it again on the next
+pass without re-running the agent, and summarize.py leaves it out rather than
+scoring it 0.
 
 Usage: judge.py <task-dir> <trial-dir>
 """
@@ -16,12 +27,18 @@ Usage: judge.py <task-dir> <trial-dir>
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
+import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import usage  # noqa: E402
 
 MAX_RETRIES = 4
 JUDGE_MODEL = os.environ.get("JUDGE_MODEL", "opus")
+JUDGE_CMD = shlex.split(os.environ.get("JUDGE_CMD", "claude"))
 
 
 def _normalize_status(value):
@@ -136,14 +153,21 @@ def _parse_response(text):
     return None
 
 
-def ask_judge(system_prompt, user_content):
+def ask_judge(system_prompt, user_content, served):
+    sid = str(uuid.uuid4())
     proc = subprocess.run(
-        ["claude", "--print", "--model", JUDGE_MODEL,
-         "--append-system-prompt", system_prompt],
+        JUDGE_CMD + ["--print", "--model", JUDGE_MODEL, "--session-id", sid,
+                     "--append-system-prompt", system_prompt],
         input=user_content, capture_output=True, text=True, timeout=600,
     )
     if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.strip()[:300] or "claude exited nonzero")
+        # claude prints quota and auth failures on stdout, not stderr.
+        msg = (proc.stderr.strip() or proc.stdout.strip())[:300]
+        raise RuntimeError(msg or "claude exited nonzero")
+    models = usage.tally_sessions([sid])["served_models"]
+    served.update(models)
+    if usage.tier_matches(JUDGE_MODEL, models) is False:
+        raise RuntimeError(f"judge served by {models}, not {JUDGE_MODEL}")
     return proc.stdout
 
 
@@ -183,6 +207,8 @@ def main():
     problem = open(prompt_file).read().strip() if os.path.exists(prompt_file) else ""
 
     results = []
+    served = set()
+    errors = []
     for rubric in rubrics:
         title = re.sub(r"^\d+(\.\d+)*:\s*", "", rubric["title"])
         user_content = template.format(
@@ -191,7 +217,7 @@ def main():
         judged = None
         for attempt in range(MAX_RETRIES):
             try:
-                parsed = _parse_response(ask_judge(system_prompt, user_content))
+                parsed = _parse_response(ask_judge(system_prompt, user_content, served))
                 s = _score_from_status(_normalize_status(parsed.get("status"))) if parsed else None
                 p = _normalize_score(parsed.get("score")) if parsed else None
                 if parsed and (s in {"0", "1"} or p in {"0", "1"}):
@@ -200,6 +226,8 @@ def main():
             except Exception as e:  # noqa: BLE001 — retry any transport failure
                 wait = min(2 ** (attempt + 1), 30)
                 print(f"  retry {attempt+1}/{MAX_RETRIES}: {e}", file=sys.stderr)
+                if attempt == MAX_RETRIES - 1:
+                    errors.append({"rubric": rubric["id"], "error": str(e)})
                 time.sleep(wait)
         rubric_type = str(rubric.get("annotations", {}).get("type", ""))
         importance = rubric.get("importance") or \
@@ -209,6 +237,21 @@ def main():
                         "importance": importance, "score": result})
         mark = result["score"] if _is_scored(result) else "UNSCORED"
         print(f"  rubric {rubric['id'][:8]}: {mark}")
+
+    if errors:
+        # Leave no verdict behind: see the module docstring.
+        for stale in (results_path, reward_path):
+            if os.path.exists(stale):
+                os.remove(stale)
+        json.dump({"errors": errors, "judge_cmd": JUDGE_CMD,
+                   "judge_model": JUDGE_MODEL},
+                  open(os.path.join(verifier_dir, "judge_error.json"), "w"), indent=2)
+        print(f"Judge incomplete: {len(errors)}/{len(rubrics)} rubrics failed; "
+              f"first error: {errors[0]['error']}", file=sys.stderr)
+        sys.exit(2)
+    stale_err = os.path.join(verifier_dir, "judge_error.json")
+    if os.path.exists(stale_err):
+        os.remove(stale_err)
 
     must = [r for r in results if r["importance"] == "must have"]
     scored_must = [r for r in must if _is_scored(r["score"])]
@@ -220,7 +263,7 @@ def main():
 
     open(reward_path, "w").write(f"{reward}\n")
     json.dump({"reward": reward, "pass": all_pass, "agg_score": agg,
-               "judge_model": JUDGE_MODEL,
+               "judge_model": JUDGE_MODEL, "judge_served": sorted(served),
                "num_rubrics": len(rubrics), "num_scored": len(scored),
                "num_passed": passed, "rubric_scores": results},
               open(results_path, "w"), indent=2)

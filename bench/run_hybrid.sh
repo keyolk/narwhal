@@ -17,9 +17,14 @@ WORKER_MODEL="${WORKER_MODEL:-haiku}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$TRIAL/agent"
+# Absolute, because the agent is started after `cd "$REPO"` and a relative
+# trial path would then point inside the repository.
+TRIAL="$(cd "$TRIAL" && pwd)"
 
 # See run_narwhal.sh for why the answer path has no username in it.
-ANSWER_DIR="/tmp/narwhal-bench/$(basename "$(dirname "$TRIAL")")-$(basename "$TRIAL")"
+# Keyed by the last three path parts (<task>/<arm>/r<k>) so repeats and tasks
+# never share an answer file.
+ANSWER_DIR="/tmp/narwhal-bench/$(echo "$TRIAL" | awk -F/ '{print $(NF-2)"-"$(NF-1)"-"$NF}')"
 ANSWER="$ANSWER_DIR/answer.txt"
 mkdir -p "$ANSWER_DIR"
 rm -f "$ANSWER"
@@ -29,23 +34,12 @@ python3 "$HERE/make_prompt.py" "$TASK_DIR" "$REPO" "$ANSWER" --arm narwhal \
 
 cat >> "$TRIAL/prompt.txt" <<EOF
 
-## Plan requirement
+## Answer file
 
-Create a synthesis task with NO deps (so it starts immediately alongside
-the investigation tasks). Its assignment must state that it:
-
-  1. starts a background watcher on the radio immediately
-  2. drains the radio repeatedly, accumulating peer findings as they arrive
-  3. waits until every investigation task has called task-done (check via
-     the state script) before writing the final answer
-  4. writes the complete answer to ${ANSWER}, wrapped in <<FINAL_ANSWER>> tags,
-     using the exact format given above
-  5. preserves the concrete details peers reported (file paths, function
-     names, exact values) rather than summarizing them away
-
-This makes synthesis run in parallel with investigation, not after it —
-the DAG has depth 1 instead of 2, which is what keeps wall-clock competitive
-with a single agent.
+The synthesis task's assignment must also state that it writes the complete
+answer to ${ANSWER}, wrapped in <<FINAL_ANSWER>> tags, using the exact format
+given above, and that it keeps the concrete details peers reported (file
+paths, function names, exact values) rather than summarizing them away.
 
 EOF
 
@@ -68,28 +62,11 @@ END=$(python3 -c 'import time; print(time.time())')
 if [ -f "$ANSWER" ]; then
   cp "$ANSWER" "$TRIAL/agent/answer.txt"
 fi
+# Remove the scratch copy once it is in the trial: a later trial's agent
+# explores with full read access, and the same question's answer from another
+# arm sitting in /tmp is one `ls` away.
+rm -rf "$ANSWER_DIR"
 
-python3 - "$TRIAL" "$START" "$END" "$RC" "$PLANNER_MODEL" "$WORKER_MODEL" <<'EOF'
-import json, os, sys
-trial, start, end, rc = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), int(sys.argv[4])
-pm, wm = sys.argv[5], sys.argv[6]
-meta = {"arm": "hybrid", "planner_model": pm, "worker_model": wm,
-        "exit_code": rc, "wall_clock_sec": round(end - start, 1)}
-path = f"{trial}/agent/narwhal.json"
-try:
-    data = json.load(open(path))
-    snap = data.get("snapshot", {})
-    meta["tasks"] = len(snap.get("tasks", []))
-    meta["messages"] = len(snap.get("messages", []))
-    meta["session_dir"] = data.get("session_dir")
-    res = data.get("result", {})
-    meta["completed"] = len(res.get("Completed") or [])
-    meta["failed"] = len(res.get("Failed") or [])
-    meta["unreached"] = len(res.get("Unreached") or [])
-    meta["timed_out"] = bool(res.get("TimedOut"))
-except Exception as e:
-    meta["parse_error"] = str(e)
-json.dump(meta, open(f"{trial}/run_meta.json", "w"), indent=2)
-print("hybrid done: " + " ".join(f"{k}={v}" for k, v in meta.items()
-      if k not in ("session_dir",)))
-EOF
+python3 "$HERE/meta.py" "$TRIAL" hybrid "$START" "$END" "$RC" \
+  --narwhal "$TRIAL/agent/narwhal.json" \
+  --planner-tier "$PLANNER_MODEL" --worker-tier "$WORKER_MODEL"

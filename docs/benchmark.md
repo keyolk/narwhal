@@ -30,6 +30,27 @@ those whose rubrics are entirely code-reading claims ("identifies function F in
 file G"), which removes that confound but also removes the runtime-heavy tasks
 where the published gap is widest.
 
+## Known limits of the slices below
+
+The two slices below were run before the harness measured cost or checked
+models, and both gaps bear on how far their numbers can be read:
+
+- **B0 was not pinned to a model.** `run_b0.sh` called `ccproxy claude
+  --print` with no `--model`, and ccproxy routes on account and quota, so
+  which model answered each B0 trial is unknown. The arms may not have been
+  compared on the same model.
+- **One run per arm per task.** The spread between repeats of the same arm
+  was never measured, so a 2-rubric difference cannot be told from noise.
+- **No cost on either side, and no same-budget control.** Narwhal spends more
+  than B0; without the `fanout` arm it is open whether coordination or just
+  more parallel compute bought the extra rubrics.
+
+The harness now pins B0's model, records cost and served models for every
+arm (including the planner, which batch `narwhal plan` did not record),
+repeats each trial, adds the `fanout` arm, and reports a paired bootstrap CI.
+See [`../bench/README.md`](../bench/README.md). The tables below stand as
+the directional read they were, until a slice is rerun under it.
+
 ## Judge calibration
 
 Before either arm ran, the judge was checked against both ends of the scale on

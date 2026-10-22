@@ -13,6 +13,9 @@ CONC="${5:-3}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$TRIAL/agent"
+# Absolute, because the agent is started after `cd "$REPO"` and a relative
+# trial path would then point inside the repository.
+TRIAL="$(cd "$TRIAL" && pwd)"
 
 # The answer is written to a short neutral path, not into the trial directory,
 # and copied back afterwards.
@@ -23,7 +26,9 @@ mkdir -p "$TRIAL/agent"
 # (-Users-jane.doe). Both directories then exist, the worker reports
 # success, and the judge finds nothing. A path with no username in it cannot
 # be rewritten this way.
-ANSWER_DIR="/tmp/narwhal-bench/$(basename "$(dirname "$TRIAL")")-$(basename "$TRIAL")"
+# Keyed by the last three path parts (<task>/<arm>/r<k>) so repeats and tasks
+# never share an answer file.
+ANSWER_DIR="/tmp/narwhal-bench/$(echo "$TRIAL" | awk -F/ '{print $(NF-2)"-"$(NF-1)"-"$NF}')"
 ANSWER="$ANSWER_DIR/answer.txt"
 mkdir -p "$ANSWER_DIR"
 rm -f "$ANSWER"
@@ -34,25 +39,21 @@ python3 "$HERE/make_prompt.py" "$TASK_DIR" "$REPO" "$ANSWER" --arm narwhal \
 # The DAG completing is not the same as the artifact existing: without an
 # explicit synthesis contract the workers each report to the radio and nobody
 # writes the file the judge reads.
+#
+# Only the file is added here. How the synthesis is wired — deps on every
+# task, task-done as the completion gate — is the planner's own contract
+# (server/plan_instructions.go). This block used to also ask for a synthesis
+# with no deps that polled the state script, which E9 showed does not make a
+# worker wait; every October batch run copied it into the synthesis
+# assignment, contradicting the planner's instructions.
 cat >> "$TRIAL/prompt.txt" <<EOF
 
-## Plan requirement
+## Answer file
 
-Create a synthesis task with NO deps (so it starts immediately alongside
-the investigation tasks). Its assignment must state that it:
-
-  1. starts a background watcher on the radio immediately
-  2. drains the radio repeatedly, accumulating peer findings as they arrive
-  3. waits until every investigation task has called task-done (check via
-     the state script) before writing the final answer
-  4. writes the complete answer to ${ANSWER}, wrapped in <<FINAL_ANSWER>> tags,
-     using the exact format given above
-  5. preserves the concrete details peers reported (file paths, function
-     names, exact values) rather than summarizing them away
-
-This makes synthesis run in parallel with investigation, not after it —
-the DAG has depth 1 instead of 2, which is what keeps wall-clock competitive
-with a single agent.
+The synthesis task's assignment must also state that it writes the complete
+answer to ${ANSWER}, wrapped in <<FINAL_ANSWER>> tags, using the exact format
+given above, and that it keeps the concrete details peers reported (file
+paths, function names, exact values) rather than summarizing them away.
 
 EOF
 
@@ -78,27 +79,11 @@ END=$(python3 -c 'import time; print(time.time())')
 if [ -f "$ANSWER" ]; then
   cp "$ANSWER" "$TRIAL/agent/answer.txt"
 fi
+# Remove the scratch copy once it is in the trial: a later trial's agent
+# explores with full read access, and the same question's answer from another
+# arm sitting in /tmp is one `ls` away.
+rm -rf "$ANSWER_DIR"
 
-python3 - "$TRIAL" "$START" "$END" "$RC" <<'EOF'
-import json, os, sys
-trial, start, end, rc = sys.argv[1], float(sys.argv[2]), float(sys.argv[3]), int(sys.argv[4])
-meta = {"arm": "narwhal", "exit_code": rc, "wall_clock_sec": round(end - start, 1)}
-path = f"{trial}/agent/narwhal.json"
-try:
-    data = json.load(open(path))
-    snap = data.get("snapshot", {})
-    meta["tasks"] = len(snap.get("tasks", []))
-    meta["messages"] = len(snap.get("messages", []))
-    meta["session_dir"] = data.get("session_dir")
-    res = data.get("result", {})
-    # coordinator.Result carries no json tags, so Go marshals the Go field
-    # names verbatim.
-    meta["completed"] = len(res.get("Completed") or [])
-    meta["failed"] = len(res.get("Failed") or [])
-    meta["unreached"] = len(res.get("Unreached") or [])
-    meta["timed_out"] = bool(res.get("TimedOut"))
-except Exception as e:  # noqa: BLE001 — a crashed run still needs its meta
-    meta["parse_error"] = str(e)
-json.dump(meta, open(f"{trial}/run_meta.json", "w"), indent=2)
-print("narwhal done: " + " ".join(f"{k}={v}" for k, v in meta.items() if k != "session_dir"))
-EOF
+python3 "$HERE/meta.py" "$TRIAL" "${ARM_NAME:-narwhal}" "$START" "$END" "$RC" \
+  --narwhal "$TRIAL/agent/narwhal.json" \
+  --worker-tier "$WORKER_MODEL" --synthesis-tier "$SYNTHESIS_MODEL"

@@ -1,0 +1,50 @@
+#!/bin/sh
+# A `claude` that runs as an unconfigured install would, for benchmark runs.
+#
+# Put on PATH ahead of the real binary by bench/isolated.sh, so every Claude
+# session in a slice goes through it: both arms' agents, Narwhal's planner and
+# workers (ccproxy and the launcher find claude on PATH), and the judge.
+#
+# Why each piece is here — each one was found contaminating a run:
+#
+# --setting-sources ""   User settings carry hooks that inject other sessions'
+#                        recent activity (daily-activity, kmd-context) into the
+#                        prompt. In measure-1 the planner read earlier runs of
+#                        the same task through them and copied their DAG, and
+#                        judge output — rubric statements — was in the feed a
+#                        later B0 would have read. It also drops the user
+#                        CLAUDE.md (which made the judge answer in Korean) and
+#                        the settings env that disables adaptive thinking.
+# --strict-mcp-config    User-scope MCP servers (kmd, narwhal, ...) are not
+#                        part of a vanilla install. Workers report through
+#                        wrapper scripts, not MCP, so nothing needs them.
+# ccproxy's --settings   ccproxy attaches its plugin (slash commands and an
+#                        auto-continue Stop hook) through --settings. Dropped
+#                        so no session is continued past where it stopped;
+#                        any other --settings (a dontAsk run's permissions)
+#                        is kept.
+#
+# --bare would cover all of this but this machine's managed settings refuse
+# it (forceLoginMethod needs a first-party sign-in that --bare turns off).
+set -eu
+
+REAL="${BENCH_REAL_CLAUDE:?BENCH_REAL_CLAUDE not set; run through bench/isolated.sh}"
+
+skip=0
+for a in "$@"; do
+  shift
+  if [ "$skip" = 1 ]; then
+    skip=0
+    case "$a" in
+      *'"ccproxy@ccproxy"'*) continue ;;
+      *) set -- "$@" --settings "$a"; continue ;;
+    esac
+  fi
+  if [ "$a" = "--settings" ]; then
+    skip=1
+    continue
+  fi
+  set -- "$@" "$a"
+done
+
+exec "$REAL" --setting-sources "" --strict-mcp-config "$@"

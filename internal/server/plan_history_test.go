@@ -2,10 +2,13 @@ package server
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/config"
+	"github.com/keyolk/narwhal/internal/store"
 )
 
 // A planner decomposing a request has never been shown how the same
@@ -102,5 +105,37 @@ func TestBothPlanPathsGoThroughTheHistoryLookup(t *testing.T) {
 		if !strings.Contains(string(src), "PlanInstructionsFor(") {
 			t.Errorf("%s does not go through the history lookup", f)
 		}
+	}
+}
+
+// plan.history=false keeps the digest out. A benchmark repeats one question
+// in one directory, and with the digest on, a repeat's planner reads how the
+// previous trial's tasks ended before it plans.
+func TestPlanHistoryCanBeSwitchedOff(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := filepath.Join(t.TempDir(), "config.json")
+	config.UseFile(cfg)
+	t.Cleanup(func() { config.UseFile("") })
+
+	prompt := "launch kitty headless and report the startup log"
+	if err := store.SaveRun(broker.Snapshot{
+		RunID: "s200-1", Prompt: prompt, CWD: "/repo", State: broker.RunDone,
+		// The outcome is padded past the store's floor for a run worth
+		// showing (store.substantial, 1000 bytes of export).
+		Tasks: []broker.TaskSnapshot{{ID: "task-1", Name: "launch", State: broker.TaskCompleted,
+			Outcome: "LAUNCHED IN DOCKER: kitty started under Xvfb inside the task image.\n" +
+				strings.Repeat("startup log line with a subsystem name and its timestamp\n", 30)}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if on := PlanInstructionsFor("r1", "u", "tok", prompt, "/repo"); !strings.Contains(on, "LAUNCHED IN DOCKER") {
+		t.Fatal("the seeded run is not in the digest; the test does not exercise the switch")
+	}
+	if err := config.Set("plan.history", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if off := PlanInstructionsFor("r1", "u", "tok", prompt, "/repo"); strings.Contains(off, "Past runs") {
+		t.Error("plan.history=false still shows the planner past runs")
 	}
 }

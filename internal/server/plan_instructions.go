@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/keyolk/narwhal/internal/broker"
+	"github.com/keyolk/narwhal/internal/config"
 	"github.com/keyolk/narwhal/internal/store"
 )
 
@@ -167,6 +168,14 @@ func BuildPlanInstructionsWithHistory(runID, brokerURL, mainToken, prompt, cwd s
 // that the digest stays a hint rather than the bulk of the prompt.
 const PlanHistoryLimit = 2
 
+// settingPlanHistory turns the digest off. A benchmark needs it off: its
+// trials run the same question in the same directory, the same-cwd boost
+// puts the previous trial first, and the digest carries each task's
+// outcome line — so a repeat's planner reads how the last one ended
+// ("launched it in docker", "impossible on this host") before it starts.
+var settingPlanHistory = config.Register(config.Key{Name: "plan.history", Kind: config.Bool, Default: "true",
+	Help: "show the planner how similar requests in the same directory were decomposed, and how their tasks ended"})
+
 // PlanInstructionsFor is what both plan paths call. It reads the store for
 // past decompositions of similar requests in the same working directory and
 // builds the fragment around them.
@@ -176,6 +185,9 @@ const PlanHistoryLimit = 2
 // fix reached only the daemon. A lookup done at each call site would be the
 // same mistake with different code.
 func PlanInstructionsFor(runID, brokerURL, mainToken, prompt, cwd string) string {
-	past := store.RecentRunsFor(cwd, prompt, PlanHistoryLimit)
+	var past []broker.Snapshot
+	if config.GetBool(settingPlanHistory.Name) {
+		past = store.RecentRunsFor(cwd, prompt, PlanHistoryLimit)
+	}
 	return BuildPlanInstructionsWithHistory(runID, brokerURL, mainToken, prompt, cwd, past)
 }

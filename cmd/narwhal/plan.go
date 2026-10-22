@@ -98,10 +98,28 @@ func planCmd(args []string) {
 	if *plannerModel != "" {
 		planArgs = append(planArgs, "--model", *plannerModel)
 	}
+	// Pin and record the planner's session the way the interactive path
+	// does (server.startPlanner). Without it the planner's transcript cannot
+	// be found afterwards, and a batch run's cost leaves out the planner —
+	// usually the most expensive single agent, since it runs on the
+	// frontier tier.
+	planSessionDir := launcher.New(addr, runID, *cwd).SessionDir()
+	if err := os.MkdirAll(planSessionDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "error: create session dir: %v\n", err)
+		os.Exit(1)
+	}
+	if sid, err := launcher.NewSessionUUID(); err == nil {
+		planArgs = append(planArgs, "--session-id", sid)
+		if err := os.WriteFile(filepath.Join(planSessionDir, "planner-session-id"), []byte(sid+"\n"), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "[narwhal] warning: record planner session: %v\n", err)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "[narwhal] warning: mint planner session id: %v\n", err)
+	}
 	planArgs = append(planArgs, "Decompose the user's request into a task DAG and create the tasks via the broker API. When done, post PLAN_DONE to the planning thread.")
 	planCmd := exec.Command("ccproxy", planArgs...)
 	planCmd.Dir = *cwd
-	planLog, _ := os.Create(filepath.Join(launcher.New(addr, runID, *cwd).SessionDir(), "planner-output.txt"))
+	planLog, _ := os.Create(filepath.Join(planSessionDir, "planner-output.txt"))
 	planCmd.Stdout = planLog
 	planCmd.Stderr = planLog
 	planCmd.Env = append(os.Environ(),

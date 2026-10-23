@@ -117,6 +117,17 @@ def main():
                 data[task][arm] = trials
                 seen.add(arm)
     arms = [a for a in ARM_ORDER if a in seen] + sorted(seen - set(ARM_ORDER))
+    # Attempts set aside because an account limit stopped them (run_slice.sh
+    # keeps them as r<k>.quota-<ts>). Not scored; a trial that ran out of
+    # retries is missing from its cell, and this is where that shows.
+    quota = {}
+    for task in tasks:
+        for arm in os.listdir(os.path.join(args.root, task)):
+            adir = os.path.join(args.root, task, arm)
+            if os.path.isdir(adir):
+                n = sum(1 for d in os.listdir(adir) if ".quota-" in d)
+                if n:
+                    quota[arm] = quota.get(arm, 0) + n
 
     # Per task, the rubric count is whatever any judged trial reported; all
     # arms answer the same rubric.
@@ -182,6 +193,10 @@ def main():
               f"{fmt(tot['reward'], '.2f'):>6} {fmt(tot['sd'] and 100 * tot['sd'], '.1f'):>7} "
               f"{fmt(tot['wall'], '.0f'):>5}s {fmt(tot['cost'], '.2f'):>7} "
               f"{tot['excluded']:>4} {tot['unjudged']:>8}")
+
+    if quota:
+        print("\nattempts stopped by an account limit (not scored): " +
+              ", ".join(f"{a}={n}" for a, n in sorted(quota.items())))
 
     base = args.baseline
     deltas = {}

@@ -13,8 +13,10 @@ Usage:
 """
 
 import argparse
+import glob
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +38,33 @@ def narwhal_fields(path):
         "unreached": len(res.get("Unreached") or []),
         "timed_out": bool(res.get("TimedOut")),
     }
+
+
+# What Claude Code prints, as the whole of a session's output, when the
+# account serving it is out of quota. Matched on the full phrase: an agent's
+# own answer can discuss rate limiting in the code it read.
+QUOTA_RE = re.compile(r"You've hit your [a-z ]*limit")
+
+
+def quota_hit(trial, session_dir):
+    """Whether any session of the trial stopped on an account limit.
+
+    A pinned ccproxy does not wait out a throttled account: it exits at once
+    with the limit message. Such a trial measured the account, not the arm,
+    and must not be scored as the arm writing no answer.
+    """
+    paths = glob.glob(os.path.join(trial, "agent", "stdout*.txt"))
+    if session_dir:
+        paths += glob.glob(os.path.join(session_dir, "agents", "*", "claude-output.txt"))
+        paths.append(os.path.join(session_dir, "planner-output.txt"))
+    for p in paths:
+        try:
+            with open(p, errors="replace") as f:
+                if QUOTA_RE.search(f.read(200_000)):
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def main():
@@ -82,6 +111,7 @@ def main():
     # Rubric judges reward length; recording it lets a win be checked
     # against "it just wrote more".
     meta["answer_bytes"] = os.path.getsize(ans) if os.path.exists(ans) else 0
+    meta["quota_hit"] = quota_hit(args.trial, meta.get("session_dir"))
 
     json.dump(meta, open(os.path.join(args.trial, "run_meta.json"), "w"), indent=2)
     shown = {k: v for k, v in meta.items() if k not in ("session_dir", "served_models")}

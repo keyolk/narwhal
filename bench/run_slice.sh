@@ -23,7 +23,7 @@ if [ -z "${BENCH_ISOLATED:-}" ]; then
   FWD=()
   for v in QA_DIR REPOS_DIR AGENT_TIMEOUT CONC ARMS REPEATS B0_MODEL \
            FANOUT_N FANOUT_MODEL NARWHAL_WORKER_MODEL NARWHAL_SYNTHESIS_MODEL \
-           JUDGE_MODEL JUDGE_CMD BENCH_NO_ENV BENCH_ACCOUNTS; do
+           JUDGE_MODEL JUDGE_CMD BENCH_NO_ENV BENCH_ACCOUNTS QUOTA_RETRIES QUOTA_WAIT; do
     if [ -n "${!v+x}" ]; then FWD+=("$v=${!v}"); fi
   done
   exec "$HERE/isolated.sh" env ${FWD[@]+"${FWD[@]}"} bash "$HERE/run_slice.sh" "$@"
@@ -50,6 +50,8 @@ export NARWHAL_WORKER_MODEL="${NARWHAL_WORKER_MODEL-haiku}"
 export NARWHAL_SYNTHESIS_MODEL="${NARWHAL_SYNTHESIS_MODEL-opus}"
 ARMS="${ARMS:-b0 fanout narwhal}"
 REPEATS="${REPEATS:-3}"
+QUOTA_RETRIES="${QUOTA_RETRIES:-8}"
+QUOTA_WAIT="${QUOTA_WAIT:-1800}"
 
 mkdir -p "$RESULTS"
 
@@ -108,18 +110,36 @@ for TASK in "${TASKS[@]}"; do
         python3 "$HERE/judge.py" "$TASK_DIR" "$TRIAL" || true
         continue
       fi
-      mkdir -p "$TRIAL"
-      echo "== run $TASK/$ARM/r$K"
-      case "$ARM" in
-        b0)      bash "$HERE/run_b0.sh"      "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" || true ;;
-        fanout)  bash "$HERE/run_fanout.sh"  "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" || true ;;
-        narwhal) bash "$HERE/run_narwhal.sh" "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
-        narwhal-nogate)
-          NARWHAL_CONFIG="$BIN/config-nogate.json" ARM_NAME=narwhal-nogate \
-            bash "$HERE/run_narwhal.sh" "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
-        hybrid)  bash "$HERE/run_hybrid.sh"  "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
-        *) echo "unknown arm: $ARM" >&2; continue ;;
-      esac
+      # An attempt that stopped on an account limit measured the account, not
+      # the arm. It is kept beside the trial for the record, and the trial is
+      # run again after a wait, up to QUOTA_RETRIES times.
+      attempt=0
+      while :; do
+        mkdir -p "$TRIAL"
+        echo "== run $TASK/$ARM/r$K"
+        case "$ARM" in
+          b0)      bash "$HERE/run_b0.sh"      "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" || true ;;
+          fanout)  bash "$HERE/run_fanout.sh"  "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" || true ;;
+          narwhal) bash "$HERE/run_narwhal.sh" "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
+          narwhal-nogate)
+            NARWHAL_CONFIG="$BIN/config-nogate.json" ARM_NAME=narwhal-nogate \
+              bash "$HERE/run_narwhal.sh" "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
+          hybrid)  bash "$HERE/run_hybrid.sh"  "$TASK_DIR" "$REPO" "$TRIAL" "$AGENT_TIMEOUT" "$CONC" || true ;;
+          *) echo "unknown arm: $ARM" >&2; continue 2 ;;
+        esac
+        if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("quota_hit") else 1)' "$TRIAL/run_meta.json" 2>/dev/null; then
+          attempt=$(( attempt + 1 ))
+          mv "$TRIAL" "$TRIAL.quota-$(date +%s)"
+          if [ "$attempt" -ge "$QUOTA_RETRIES" ]; then
+            echo "== quota: giving up on $TASK/$ARM/r$K after $attempt attempts"
+            continue 2
+          fi
+          echo "== quota: $TASK/$ARM/r$K hit an account limit; retrying in ${QUOTA_WAIT}s"
+          sleep "$QUOTA_WAIT"
+          continue
+        fi
+        break
+      done
       echo "== judge $TASK/$ARM/r$K"
       python3 "$HERE/judge.py" "$TASK_DIR" "$TRIAL" || true
     done

@@ -23,7 +23,7 @@ if [ -z "${BENCH_ISOLATED:-}" ]; then
   FWD=()
   for v in QA_DIR REPOS_DIR AGENT_TIMEOUT CONC ARMS REPEATS B0_MODEL \
            FANOUT_N FANOUT_MODEL NARWHAL_WORKER_MODEL NARWHAL_SYNTHESIS_MODEL \
-           JUDGE_MODEL JUDGE_CMD; do
+           JUDGE_MODEL JUDGE_CMD BENCH_NO_ENV; do
     if [ -n "${!v+x}" ]; then FWD+=("$v=${!v}"); fi
   done
   exec "$HERE/isolated.sh" env ${FWD[@]+"${FWD[@]}"} bash "$HERE/run_slice.sh" "$@"

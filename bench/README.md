@@ -70,6 +70,25 @@ Every judge call's served model is checked; a judge that could not finish
 leaves the trial unjudged, and the next slice run judges it again without
 re-running the agent.
 
+## Runtime environment
+
+Every arm's prompt ends with the same note: the repository is a copy of the
+task image's `/app`, the image is pulled, and code can be run in it with
+`docker run --platform linux/amd64`. The published harness runs agents inside
+that container, so runtime rubrics ("reports the log line X") are meant to be
+met by running the code. Without the note, whether an arm can meet them comes
+down to whether it thinks of docker — on measure-2 the single agent did and
+the narwhal worker did not. `BENCH_NO_ENV=1` leaves the note out, which is how
+the earlier slices ran.
+
+## Pilot
+
+`pilot.sh` runs eight runtime-heavy tasks across six repositories, arms
+`b0 fanout narwhal narwhal-nogate`, three repeats, `FANOUT_N=2` (measure-2's
+costs put two independent runs closest to narwhal's spend).
+`PREPARE_ONLY=1 bash bench/pilot.sh` pulls the images and extracts the
+repositories without starting an agent.
+
 ## Reading the summary
 
 `summarize.py` prints, per arm: mean rubric pass rate, reward, the spread
@@ -99,6 +118,7 @@ arm against `b0` with a paired bootstrap CI over tasks.
 | `usage.py` | Tallies tokens and cost from Claude transcripts by session id |
 | `summarize.py` | Per-arm score, spread, cost; paired bootstrap CI against `b0` |
 | `run_slice.sh` | Drives the above over a task list |
+| `pilot.sh` | The pilot task list and arm set |
 
 ## Two things that will bite
 

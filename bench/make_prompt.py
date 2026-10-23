@@ -62,16 +62,53 @@ that task, do not write it — post your findings to the radio instead.
 """
 
 
+# Every arm is told the same fact about the environment. The published harness
+# runs agents inside the task's container, so a rubric like "reports the log
+# line X" can be met by running the code. Here the repository is a host copy;
+# the task image is pulled locally, and an agent that finds it can run the
+# code in it. On measure-2 the single agent found it and the narwhal worker
+# did not — a difference in luck, not in approach. Stating it removes that.
+ENV_NOTE = """
+
+## Runtime environment
+
+The repository above is a copy of /app from this task's Docker image, which
+is already pulled on this host. To build or run the code, or to capture its
+real output, run it in that image (it is linux/amd64; the host is macOS
+arm64):
+
+```bash
+docker run --rm --platform linux/amd64 -w /app {image} <command>
+```
+
+Mount the host copy with -v {repo}:/app if you need your edits inside the
+container. Do not push or modify the image.
+"""
+
+
+def image_of(task_dir):
+    for line in open(os.path.join(task_dir, "task.toml")):
+        if line.strip().startswith("docker_image"):
+            return line.split('"')[1]
+    return ""
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("task_dir")
     ap.add_argument("repo")
     ap.add_argument("answer_path")
     ap.add_argument("--arm", default="b0", choices=["b0", "narwhal"])
+    # BENCH_NO_ENV=1 reproduces the earlier slices, which stated nothing.
+    ap.add_argument("--no-env", action="store_true",
+                    default=os.environ.get("BENCH_NO_ENV") == "1")
     args = ap.parse_args()
 
     text = open(os.path.join(args.task_dir, "instruction.md")).read()
     out = remap(text, args.repo, args.answer_path)
+    image = image_of(args.task_dir)
+    if image and not args.no_env:
+        out += ENV_NOTE.format(image=image, repo=args.repo)
     if args.arm == "narwhal":
         out += NARWHAL_TAIL
     sys.stdout.write(out)

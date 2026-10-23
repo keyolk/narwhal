@@ -21,11 +21,13 @@ SHIM="$HERE/isolate"
 # resolve to the shim itself.
 CLEAN_PATH=$(printf '%s' "$PATH" | tr ':' '\n' | grep -vx "$SHIM" | paste -sd: -)
 REAL=$(PATH="$CLEAN_PATH" command -v claude) || { echo "claude not on PATH" >&2; exit 1; }
+REAL_CCPROXY=$(PATH="$CLEAN_PATH" command -v ccproxy) || { echo "ccproxy not on PATH" >&2; exit 1; }
 
 exec env -i \
   HOME="$HOME" USER="${USER:-}" LOGNAME="${LOGNAME:-${USER:-}}" \
   TMPDIR="${TMPDIR:-/tmp}" TERM=dumb LANG="${LANG:-en_US.UTF-8}" \
   SHELL=/bin/bash \
   PATH="$SHIM:$CLEAN_PATH" \
-  BENCH_REAL_CLAUDE="$REAL" BENCH_ISOLATED=1 \
+  BENCH_REAL_CLAUDE="$REAL" BENCH_REAL_CCPROXY="$REAL_CCPROXY" BENCH_ISOLATED=1 \
+  ${BENCH_ACCOUNTS:+BENCH_ACCOUNTS="$BENCH_ACCOUNTS"} \
   "$@"

@@ -17,6 +17,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 RESULTS="${1:-$HERE/results/pilot-1}"
 export QA_DIR="${QA_DIR:-$HOME/src/AgentRadio/data/qa}"
 export REPOS_DIR="${REPOS_DIR:-$HOME/.cache/narwhal-bench/repos}"
+# Claude accounts only: a turn routed to another backend is an excluded trial.
+export BENCH_ACCOUNTS="${BENCH_ACCOUNTS-claude-sendbird,claude-personal}"
 
 TASKS=(
   task-6905333b74f22949d97baa2a

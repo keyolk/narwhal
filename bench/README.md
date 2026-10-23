@@ -61,6 +61,11 @@ four fixes to make true. `run_slice.sh` re-executes itself under
   `plan.history=false`. With history on, a repeat's planner is shown how the
   previous trial's tasks ended.
 
+- `isolate/ccproxy` adds `--accounts $BENCH_ACCOUNTS` to every ccproxy call
+  when it is set. When every Claude account is throttled ccproxy routes a
+  turn to another backend, and that trial is excluded by the tier check;
+  pinned, it waits instead. `pilot.sh` pins the two Claude accounts.
+
 Task repositories live under `~/.cache/narwhal-bench/repos`, outside this
 checkout, so an agent cannot walk up into `bench/results`.
 

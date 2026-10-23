@@ -3,6 +3,7 @@ package launcher
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
@@ -27,7 +28,7 @@ func TestDispatchCarriesEveryTaskFieldTheWorkerNeeds(t *testing.T) {
 	task.SetModel("haiku")
 	task.SetCheck("confirm the names are exported")
 
-	cfg := WorkerConfigFor(task)
+	cfg := WorkerConfigFor(run, task)
 
 	if cfg.TaskID != "task-1" {
 		t.Errorf("TaskID = %q", cfg.TaskID)
@@ -55,7 +56,7 @@ func TestTheInstructionsCarryTheCheckWhenTheTaskHasOne(t *testing.T) {
 
 	reg := broker.NewAgentRegistry()
 	a := reg.Register("worker-task-1", "r1", false)
-	instr := buildAgentInstructions(a, WorkerConfigFor(task), "/scripts")
+	instr := buildAgentInstructions(a, WorkerConfigFor(run, task), "/scripts")
 
 	if !strings.Contains(instr, "confirm the names you report are actually exported") {
 		t.Errorf("the check is missing from the instructions:\n%s", instr)
@@ -79,9 +80,46 @@ func TestTheInstructionsSayNothingAboutChecksWhenThereIsNone(t *testing.T) {
 
 	reg := broker.NewAgentRegistry()
 	a := reg.Register("worker-task-1", "r1", false)
-	instr := buildAgentInstructions(a, WorkerConfigFor(task), "/scripts")
+	instr := buildAgentInstructions(a, WorkerConfigFor(run, task), "/scripts")
 
 	if strings.Contains(instr, "end condition") {
 		t.Errorf("a task with no check is told about one:\n%s", instr)
+	}
+}
+
+// The worker sees the run's request, not only its slice of it. On
+// SWE-Atlas measure-2 three of four workers got "(read-only): trace…" for a
+// question about what is visible on screen, and none of them knew.
+func TestTheInstructionsCarryTheRunRequest(t *testing.T) {
+	b := broker.New()
+	run := b.CreateRun("r1", "report what kitty shows on screen at startup", "/tmp", "main")
+	task := run.AddTask("task-2", "n", "(read-only): trace the config loader", nil)
+
+	cfg := WorkerConfigFor(run, task)
+	if cfg.Request != "report what kitty shows on screen at startup" {
+		t.Fatalf("Request = %q, want the run's request", cfg.Request)
+	}
+	reg := broker.NewAgentRegistry()
+	a := reg.Register("worker-task-2", "r1", false)
+	instr := buildAgentInstructions(a, cfg, "/scripts")
+	if !strings.Contains(instr, "<request>\nreport what kitty shows on screen at startup\n</request>") {
+		t.Error("the run's request is not in the worker's instructions")
+	}
+	if !strings.Contains(instr, "Before you conclude it cannot be done") {
+		t.Error("the instructions do not ask for alternatives before a negative conclusion")
+	}
+
+	// A one-task run whose assignment is the request does not repeat it.
+	solo := run.AddTask("solo", "n", "report what kitty shows on screen at startup", nil)
+	if strings.Contains(buildAgentInstructions(a, WorkerConfigFor(run, solo), "/scripts"), "<request>") {
+		t.Error("an assignment identical to the request was quoted twice")
+	}
+}
+
+func TestALongRequestIsClippedOnARuneBoundary(t *testing.T) {
+	s := strings.Repeat("가", requestLimit) // 3 bytes each
+	got := clipRequest(s)
+	if !strings.HasSuffix(got, "(request truncated)") || !utf8.ValidString(got) {
+		t.Errorf("clipped request is not valid UTF-8 or not marked: …%q", got[len(got)-40:])
 	}
 }

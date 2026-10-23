@@ -1,0 +1,19 @@
+#!/bin/sh
+# A ccproxy restricted to the accounts named in BENCH_ACCOUNTS.
+#
+# ccproxy rotates accounts on quota, and when every Claude account is
+# throttled it routes a turn to a non-Claude backend (codex, kiro, ...). A
+# trial served that way fails the tier check and is excluded: its cost is
+# spent and it measures nothing. Pinning the slice to the Claude accounts
+# turns that into a throttle wait, which costs wall clock instead.
+#
+# ccproxy takes --accounts only as a flag, before the subcommand, so every
+# caller — run_b0.sh, run_fanout.sh, narwhal's planner and workers — would
+# have to pass it; a shim first on PATH reaches all of them.
+set -eu
+
+REAL="${BENCH_REAL_CCPROXY:?BENCH_REAL_CCPROXY not set; run through bench/isolated.sh}"
+if [ -n "${BENCH_ACCOUNTS:-}" ]; then
+  exec "$REAL" --accounts "$BENCH_ACCOUNTS" "$@"
+fi
+exec "$REAL" "$@"

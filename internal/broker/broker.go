@@ -854,6 +854,13 @@ func (t *Task) snapshot() TaskSnapshot {
 	return ts
 }
 
+// Request is the request the run was started with.
+func (r *Run) Request() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Prompt
+}
+
 // SnapshotTasks returns a stable view of every task's id and state, for
 // callers that need to classify the graph without holding locks.
 func (r *Run) SnapshotTasks() []TaskSnapshot {

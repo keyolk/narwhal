@@ -27,15 +27,23 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/keyolk/narwhal/internal/broker"
 )
 
 // WorkerConfig describes one worker to launch.
 type WorkerConfig struct {
-	AgentID       string
-	TaskID        string
-	Assignment    string
+	AgentID    string
+	TaskID     string
+	Assignment string
+	// Request is the run's original request, as the operator wrote it.
+	// The assignment is the planner's slice of it, and a slice drops
+	// things: on SWE-Atlas measure-2 the question asked what is visible
+	// on screen, the planner gave the launch to one task and marked the
+	// other three "(read-only): trace…", and nobody but that one task
+	// knew the run was meant to show runtime evidence.
+	Request       string
 	IsCoordinator bool
 	Model         string // --model flag for claude; empty = ccproxy default
 	// Check is the end condition this task must answer before it can
@@ -72,11 +80,12 @@ type WorkerConfig struct {
 // already depend on this package, and because the lesson is the one
 // Task.snapshot() records: adding a field to WorkerConfig must not
 // require remembering a second site.
-func WorkerConfigFor(task *broker.Task) WorkerConfig {
+func WorkerConfigFor(run *broker.Run, task *broker.Task) WorkerConfig {
 	return WorkerConfig{
 		AgentID:    "worker-" + task.ID,
 		TaskID:     task.ID,
 		Assignment: task.Assignment,
+		Request:    run.Request(),
 		Model:      task.CurrentModel(),
 		// The end condition travels with the assignment. A worker that
 		// first meets its check as a 202 has already written its answer
@@ -471,6 +480,22 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "You are %s in Narwhal run %s.\n", a.ID, a.RunID)
 	fmt.Fprintf(&b, "Your task id is %s.\n\n", cfg.TaskID)
 	fmt.Fprintf(&b, "Your task: %s\n\n", cfg.Assignment)
+	if r := strings.TrimSpace(cfg.Request); r != "" && r != strings.TrimSpace(cfg.Assignment) {
+		fmt.Fprintf(&b, "## The request this run answers\n\n")
+		fmt.Fprintf(&b, "Your task is one part of this. Do your part; read the whole so you\n")
+		fmt.Fprintf(&b, "know what kind of evidence the answer needs and what your peers are\n")
+		fmt.Fprintf(&b, "covering.\n\n")
+		fmt.Fprintf(&b, "<request>\n%s\n</request>\n\n", clipRequest(r))
+	}
+	fmt.Fprintf(&b, "## Before you conclude it cannot be done\n\n")
+	fmt.Fprintf(&b, "A conclusion that something is impossible, missing, unsupported or\n")
+	fmt.Fprintf(&b, "unreproducible is the one your peers and the synthesis will not\n")
+	fmt.Fprintf(&b, "re-check. Before you reach it, try at least one concrete alternative:\n")
+	fmt.Fprintf(&b, "a different environment (a container or image, if one is available),\n")
+	fmt.Fprintf(&b, "installing or building what is missing, another tool, or a wider search.\n")
+	fmt.Fprintf(&b, "In the outcome, list what you tried and what each attempt returned.\n")
+	fmt.Fprintf(&b, "Post each approach you abandon, and why, to the worklog as you abandon\n")
+	fmt.Fprintf(&b, "it — a peer may see a way around it.\n\n")
 	fmt.Fprintf(&b, "## Radio Channel (peer communication)\n\n")
 	fmt.Fprintf(&b, "Wrapper scripts live at this ABSOLUTE path (your cwd is the target\n")
 	fmt.Fprintf(&b, "repository, so relative paths will NOT work):\n\n")
@@ -628,6 +653,22 @@ func buildAgentInstructions(a *broker.Agent, cfg WorkerConfig, scriptsDir string
 	fmt.Fprintf(&b, "already held, do not write it — say what you need on the radio and\n")
 	fmt.Fprintf(&b, "let the holder either hand it over or make the change for you.\n")
 	return b.String()
+}
+
+// requestLimit bounds the request quoted into a worker's instructions.
+// A request is operator-written and usually short; a pasted log should
+// not crowd out the instructions around it.
+const requestLimit = 8000
+
+func clipRequest(s string) string {
+	if len(s) <= requestLimit {
+		return s
+	}
+	n := requestLimit
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "\n…(request truncated)"
 }
 
 // NewSessionUUID mints a Claude session id for an agent the launcher does

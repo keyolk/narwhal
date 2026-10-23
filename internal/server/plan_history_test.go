@@ -139,3 +139,15 @@ func TestPlanHistoryCanBeSwitchedOff(t *testing.T) {
 		t.Error("plan.history=false still shows the planner past runs")
 	}
 }
+
+// The planner is told not to write escape clauses. On measure-2 one
+// ("if impossible on this host, report the errors") let a worker stop after
+// five turns, and the run lost the six rubrics that needed what it skipped.
+func TestThePlannerIsToldNotToWriteEscapeClauses(t *testing.T) {
+	instr := BuildPlanInstructions("r1", "u", "tok", "run it and report the log")
+	for _, want := range []string{"Never write an escape clause", "shown the full request"} {
+		if !strings.Contains(instr, want) {
+			t.Errorf("planner instructions are missing %q", want)
+		}
+	}
+}

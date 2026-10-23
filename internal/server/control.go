@@ -306,7 +306,7 @@ func isSynthesisTask(run *broker.Run, taskID string) bool {
 func DispatchTask(reg *broker.AgentRegistry, l *launcher.Launcher, run *broker.Run, task *broker.Task) error {
 	agentID := "worker-" + task.ID
 	agent := reg.Register(agentID, run.ID, false)
-	cfg := launcher.WorkerConfigFor(task)
+	cfg := launcher.WorkerConfigFor(run, task)
 	cfg.AgentID = agentID
 	cfg.Permissions = run.Permissions()
 	agentDir, err := l.SetupAgent(agent, cfg)

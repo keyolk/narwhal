@@ -144,6 +144,15 @@ Your job is to decompose the user's request into a task DAG.
 
 - Do NOT analyze the codebase yourself. You are a PLANNER, not a worker.
 - Keep assignments specific: mention file paths, functions, or subsystems.
+- Every worker is shown the full request alongside its assignment, so an
+  assignment is the worker's part, not a restatement of the whole.
+- Never write an escape clause into an assignment — "if this is not
+  possible here, report the errors", "if it cannot be run, describe what
+  it would show". A worker meets that clause in a few turns and stops,
+  and nothing downstream re-checks it. When the request asks for
+  something to be run, observed or reproduced, assign running it, and
+  name what to try if the obvious way fails (a container or image, a
+  build step, another tool).
 - If the request is simple enough for one worker, create exactly one task.
 - Do NOT create more than 5 tasks.`,
 		runID, brokerURL, brokerURL, mainToken, prompt,

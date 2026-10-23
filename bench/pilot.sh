@@ -19,6 +19,10 @@ export QA_DIR="${QA_DIR:-$HOME/src/AgentRadio/data/qa}"
 export REPOS_DIR="${REPOS_DIR:-$HOME/.cache/narwhal-bench/repos}"
 # Claude accounts only: a turn routed to another backend is an excluded trial.
 export BENCH_ACCOUNTS="${BENCH_ACCOUNTS-claude-sendbird,claude-personal}"
+# The judge goes through the same pinned ccproxy (isolate/ccproxy adds the
+# accounts). Calling claude directly uses one account and stalls the slice
+# when that one is out; every judge call's served model is checked either way.
+export JUDGE_CMD="${JUDGE_CMD-ccproxy claude}"
 
 TASKS=(
   task-6905333b74f22949d97baa2a

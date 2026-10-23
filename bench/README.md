@@ -66,6 +66,13 @@ four fixes to make true. `run_slice.sh` re-executes itself under
   turn to another backend, and that trial is excluded by the tier check;
   pinned, it waits instead. `pilot.sh` pins the two Claude accounts.
 
+- A pinned ccproxy does not wait out a throttled account: it exits at once
+  with "You've hit your … limit". `meta.py` marks such a trial `quota_hit`;
+  `run_slice.sh` keeps the attempt as `r<k>.quota-<ts>`, waits `QUOTA_WAIT`
+  (1800s) and runs it again, up to `QUOTA_RETRIES` (8). It is never judged,
+  so an account limit is not scored as the arm writing no answer; the
+  summary prints how many attempts were set aside.
+
 Task repositories live under `~/.cache/narwhal-bench/repos`, outside this
 checkout, so an agent cannot walk up into `bench/results`.
 

@@ -41,9 +41,15 @@ def narwhal_fields(path):
 
 
 # What Claude Code prints, as the whole of a session's output, when the
-# account serving it is out of quota. Matched on the full phrase: an agent's
-# own answer can discuss rate limiting in the code it read.
-QUOTA_RE = re.compile(r"You've hit your [a-z ]*limit")
+# account cannot serve it: out of quota, or the organization's managed
+# settings failed to load (a network or auth blip; the CLI refuses to start
+# without them). Either way the session stopped before the arm did anything.
+# Matched on the full phrase: an agent's own answer can discuss rate
+# limiting in the code it read.
+QUOTA_RE = re.compile(
+    r"You've hit your [a-z ]*limit"
+    r"|requires remote managed settings to load, but they could not be loaded"
+)
 
 
 def quota_hit(trial, session_dir):

@@ -67,6 +67,26 @@ def quota_hit(trial, session_dir):
     return False
 
 
+def session_dir_from_log(trial):
+    """The narwhal session directory, read from narwhal.log.
+
+    narwhal.json carries session_dir, but `narwhal plan` writes it only when
+    the run gets as far as a result. A planner that stops on its first call —
+    an account limit, most often — leaves narwhal.json empty, and the limit
+    message sits in that session's planner-output.txt. The log names the run
+    from its first line on.
+    """
+    try:
+        with open(os.path.join(trial, "agent", "narwhal.log"), errors="replace") as f:
+            for line in f:
+                m = re.search(r"\[narwhal\] plan (\S+) started", line)
+                if m:
+                    return os.path.expanduser(os.path.join("~", ".narwhal", "sessions", m.group(1)))
+    except OSError:
+        pass
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("trial")
@@ -111,7 +131,8 @@ def main():
     # Rubric judges reward length; recording it lets a win be checked
     # against "it just wrote more".
     meta["answer_bytes"] = os.path.getsize(ans) if os.path.exists(ans) else 0
-    meta["quota_hit"] = quota_hit(args.trial, meta.get("session_dir"))
+    sdir = meta.get("session_dir") or session_dir_from_log(args.trial)
+    meta["quota_hit"] = quota_hit(args.trial, sdir)
 
     json.dump(meta, open(os.path.join(args.trial, "run_meta.json"), "w"), indent=2)
     shown = {k: v for k, v in meta.items() if k not in ("session_dir", "served_models")}

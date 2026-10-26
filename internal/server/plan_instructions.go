@@ -86,6 +86,13 @@ Your job is to decompose the user's request into a task DAG.
      text a correct outcome would contain — a location, a number that
      matches a list, a stated choice with its reason — not as work to do.
 
+     Make each criterion a concrete CLAIM-AND-EVIDENCE contract for that
+     task, not a generic formatting rule such as "every finding has a file
+     and line". Name the answer claim the task owns and the evidence form
+     its outcome must return. If the request asks what was run, observed,
+     displayed or logged, require the command or procedure plus the
+     captured observation; tracing source code alone does not satisfy it.
+
 3. Create a synthesis task that DEPENDS on every investigation task
    ("deps": ["task-1","task-2",...]). Narwhal treats these deps as a
    completion gate, not a dispatch gate: the synthesis worker starts
@@ -94,6 +101,12 @@ Your job is to decompose the user's request into a task DAG.
    Its assignment must state that it:
      - starts a background watcher on the radio immediately
      - drains the radio repeatedly, accumulating peer findings as they arrive
+     - keeps a compact evidence ledger: each distinct claim or observation
+       requested by the user maps to a peer's concrete evidence, or is marked
+       UNOBSERVED. While a responsible peer is still running, asks that peer
+       for evidence missing from the ledger
+     - includes that ledger in its task-done outcome, so criterion judging can
+       inspect coverage instead of seeing only "answer written"
      - does NOT investigate the codebase itself — peers are doing that, and
        duplicating their work is how a synthesis runs out of turn. The one
        exception is the headline itself, and it belongs in the task's
@@ -104,13 +117,16 @@ Your job is to decompose the user's request into a task DAG.
      - calls task-done when it has written what it can; the call blocks
        until every peer has finished, which is what keeps the worker alive
        until then
+   Give the synthesis task a criterion requiring its outcome's evidence
+   ledger to cover every distinct claim or requested observation in the
+   user's request, with UNOBSERVED for a gap rather than silently omitting it.
    Set the synthesis task's "model" to "opus" — it integrates peer findings
    with fidelity, which needs frontier intelligence. Investigation tasks
    should use a cheaper model (haiku) since they are narrow:
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio and integrate them into one answer.","deps":["task-1","task-2"],"model":"opus","check":"Confirm two or three of the items your peers reported really meet the definition in the request, and report what that showed — including a result that contradicts the headline."}'
+     -d '{"id":"synthesis","name":"synthesis","assignment":"Accumulate peer findings from the radio and integrate them into one answer.","deps":["task-1","task-2"],"model":"opus","check":"Confirm two or three of the items your peers reported really meet the definition in the request, and report what that showed — including a result that contradicts the headline.","criterion":"The outcome contains an evidence ledger covering every distinct claim or requested observation in the user's request, and marks every unsupported item UNOBSERVED."}'
 
 3b. If the request has a research part whose findings decide how the rest
    is done — which of several approaches, what to keep, where to put it —

@@ -157,7 +157,11 @@ def main():
                 "sd": statistics.stdev(rates) if len(rates) > 1 else None,
                 "reward": mean([t["reward"] for t in valid]),
                 "wall": mean([t["wall"] for t in valid]),
-                "cost": None if not costs or None in costs else mean(costs),
+                # A deleted transcript makes one trial's cost unknown. Keep
+                # the measured trials instead of hiding the whole arm, and
+                # print coverage beside the estimate.
+                "cost": mean([cost for cost in costs if cost is not None]),
+                "cost_n": sum(cost is not None for cost in costs),
                 "kb": mean([t["bytes"] / 1024 for t in valid]),
                 "unjudged": unjudged,
             }
@@ -166,25 +170,28 @@ def main():
                   f"{fmt(c['pass'] and 100 * c['pass'], '.0f'):>6} "
                   f"{fmt(c['sd'] and 100 * c['sd'], '.0f'):>5} "
                   f"{fmt(c['reward'], '.2f'):>6} {fmt(c['wall'], '.0f'):>5}s "
-                  f"{fmt(c['cost'], '.2f'):>7} {fmt(c['kb'], '.0f'):>6}")
+                  f"{fmt(c['cost'], '.2f'):>7} {c['cost_n']:>3} {fmt(c['kb'], '.0f'):>6}")
         print()
 
     print("=" * 74)
     print(f"{'ARM':<8} {'tasks':>5} {'pass%':>6} {'reward':>6} {'mean sd':>7} "
-          f"{'wall':>6} {'cost$':>7} {'excl':>4} {'unjudged':>8}")
+          f"{'wall':>6} {'cost$':>7} {'n$':>3} {'excl':>4} {'unjudged':>8}")
     totals = {}
     for arm in arms:
         cs = [cell[t][arm] for t in tasks if arm in cell[t] and cell[t][arm]["n"]]
         unj = sum(cell[t][arm]["unjudged"] for t in tasks if arm in cell[t])
         sds = [c["sd"] for c in cs if c["sd"] is not None]
-        costs = [c["cost"] for c in cs]
+        costs = [c["cost"] for c in cs if c["cost"] is not None]
         tot = {
             "tasks": len(cs),
             "pass": mean([c["pass"] for c in cs]),
             "reward": mean([c["reward"] for c in cs]),
             "sd": mean(sds),
             "wall": mean([c["wall"] for c in cs]),
-            "cost": None if not costs or None in costs else mean(costs),
+            # Weight tasks equally, like pass and reward. cost_n reports the
+            # number of actual trial transcripts behind this estimate.
+            "cost": mean(costs),
+            "cost_n": sum(c["cost_n"] for c in cs),
             "excluded": sum(cell[t][arm]["excluded"] for t in tasks if arm in cell[t]),
             "unjudged": unj,
         }
@@ -192,7 +199,7 @@ def main():
         print(f"{arm:<8} {tot['tasks']:>5} {fmt(tot['pass'] and 100 * tot['pass'], '.1f'):>6} "
               f"{fmt(tot['reward'], '.2f'):>6} {fmt(tot['sd'] and 100 * tot['sd'], '.1f'):>7} "
               f"{fmt(tot['wall'], '.0f'):>5}s {fmt(tot['cost'], '.2f'):>7} "
-              f"{tot['excluded']:>4} {tot['unjudged']:>8}")
+              f"{tot['cost_n']:>3} {tot['excluded']:>4} {tot['unjudged']:>8}")
 
     if quota:
         print("\nattempts stopped by an account limit (not scored): " +
@@ -216,10 +223,12 @@ def main():
             dr = [cell[t][arm]["reward"] - cell[t][base]["reward"] for t in common]
             lo_p, hi_p = bootstrap(dp, args.iters)
             lo_r, hi_r = bootstrap(dr, args.iters)
-            ca = [cell[t][arm]["cost"] for t in common]
-            cb = [cell[t][base]["cost"] for t in common]
-            ratio = (sum(ca) / sum(cb)
-                     if None not in ca and None not in cb and sum(cb) else None)
+            cost_common = [t for t in common
+                           if cell[t][arm]["cost"] is not None
+                           and cell[t][base]["cost"] is not None]
+            ca = [cell[t][arm]["cost"] for t in cost_common]
+            cb = [cell[t][base]["cost"] for t in cost_common]
+            ratio = sum(ca) / sum(cb) if cb and sum(cb) else None
             deltas[arm] = {"tasks": len(common), "d_pass": mean(dp), "ci_pass": [lo_p, hi_p],
                            "d_reward": mean(dr), "ci_reward": [lo_r, hi_r], "cost_ratio": ratio}
             print(f"{arm:<8} {len(common):>5} {100 * mean(dp):>+9.1f} "

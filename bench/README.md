@@ -104,8 +104,10 @@ repositories without starting an agent.
 ## Reading the summary
 
 `summarize.py` prints, per arm: mean rubric pass rate, reward, the spread
-across repeats (`sd`), wall clock, estimated cost, and answer size; then each
-arm against `b0` with a paired bootstrap CI over tasks.
+across repeats (`sd`), wall clock, estimated cost, cost coverage (`n$`), and
+answer size; then each arm against `b0` with a paired bootstrap CI over tasks.
+A deleted or missing transcript makes only that trial's cost unknown: the
+estimate uses the remaining trials and `n$` shows how many costs it includes.
 
 - An unjudged trial scores 0. A harness failure is the failing arm's loss.
 - A trial whose served model is not the tier it asked for is excluded and

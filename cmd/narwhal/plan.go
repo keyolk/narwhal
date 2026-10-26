@@ -42,7 +42,8 @@ func planCmd(args []string) {
 	planTimeout := fs.Duration("plan-timeout", 5*time.Minute, "max time for the planning phase")
 	maxConcurrency := fs.Int("concurrency", 3, "max parallel workers")
 	plannerModel := fs.String("planner-model", "", "claude --model for the planner (default: ccproxy rotation)")
-	workerModel := fs.String("worker-model", "", "claude --model for workers (default: ccproxy rotation)")
+	workerModel := fs.String("worker-model", "", "default claude --model when a task has no model")
+	forceWorkerModel := fs.String("force-worker-model", "", "override the planner's model for every investigation worker")
 	synthesisModel := fs.String("synthesis-model", "", "claude --model for the synthesis task (default: same as --worker-model)")
 	fs.Parse(args)
 
@@ -170,6 +171,7 @@ func planCmd(args []string) {
 	cfg := coordinator.DefaultConfig()
 	cfg.MaxConcurrency = *maxConcurrency
 	cfg.Timeout = *timeout
+	cfg.WorkerModel = *forceWorkerModel
 	// The synthesis task integrates every peer finding with fidelity —
 	// that needs frontier intelligence even when narrow investigation
 	// does not. Override the worker model for the synthesis task only.

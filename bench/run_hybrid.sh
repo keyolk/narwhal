@@ -51,7 +51,7 @@ gtimeout $(( TIMEOUT + 120 )) narwhal plan \
   --cwd "$REPO" \
   --concurrency "$CONC" \
   --planner-model "$PLANNER_MODEL" \
-  --worker-model "$WORKER_MODEL" \
+  --force-worker-model "$WORKER_MODEL" \
   --plan-timeout "${PLAN_TIMEOUT}s" \
   --timeout "${TIMEOUT}s" \
   > "$TRIAL/agent/narwhal.json" 2> "$TRIAL/agent/narwhal.log"

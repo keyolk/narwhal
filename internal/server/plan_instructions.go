@@ -62,7 +62,7 @@ Your job is to decompose the user's request into a task DAG.
 
    curl -s -X POST $NARWHAL_BROKER_URL/api/v1/run/%s/task \
      -H "Content-Type: application/json" \
-     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku","check":"Name one specific finding and the file:line it is at. A finding with no location was not actually found.","criterion":"Every finding names the file and line it is at."}'
+     -d '{"id":"task-1","name":"auth-audit","assignment":"Analyze auth/ for security issues","deps":[],"model":"haiku","check":"Name one specific finding and the file:line it is at. A finding with no location was not actually found.","criterion":"Every finding names the file and line it is at and says what the code there does."}'
 
    - id: unique task id (task-1, task-2, ...)
    - name: short human-readable name

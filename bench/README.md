@@ -101,6 +101,12 @@ costs put two independent runs closest to narwhal's spend).
 `PREPARE_ONLY=1 bash bench/pilot.sh` pulls the images and extracts the
 repositories without starting an agent.
 
+`hard_screen.sh` runs one B0 trial over twelve predeclared candidates from the
+same cached repositories. It selects a harder follow-up population; its trial
+must not be reused in the final comparison. The script records the selection
+rule before any candidate score is known, which prevents post-score task
+cherry-picking.
+
 ## Reading the summary
 
 `summarize.py` prints, per arm: mean rubric pass rate, reward, the spread

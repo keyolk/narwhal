@@ -79,15 +79,15 @@ cliff cannot land systematically on one of them.
   task DAG, the coordinator dispatches workers in dependency order over a
   shared radio, and a synthesis task writes the answer. All workers run on the
   same model ccproxy routes.
-- **Hybrid** — `narwhal plan --planner-model opus --worker-model haiku`: same
+- **Hybrid** — `narwhal plan --planner-model opus --force-worker-model haiku`: same
   DAG protocol, but the planner runs on a frontier model and every worker on a
   cheap one. This tests the Cursor economics insight — that decomposition and
   design decisions need frontier intelligence, but narrow execution does not.
-- **Smart** — `narwhal plan` with per-task model assignment: investigation
-  workers run on haiku, synthesis on opus. The `Task.Model` field lets the
-  planner pick a model per task rather than per run, so the synthesis task — the
-  one that needs frontier intelligence to integrate peer findings with fidelity —
-  gets opus while the narrow investigation tasks get haiku.
+- **Smart** — `narwhal plan --force-worker-model haiku --synthesis-model opus`:
+  investigation workers run on haiku and synthesis runs on opus. Run-level
+  role overrides make the comparison reproducible even when the planner puts
+  a different `Task.Model` on a task. The planner still chooses models in
+  ordinary runs that omit these flags.
 
 ## Results
 

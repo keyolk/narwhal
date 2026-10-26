@@ -426,3 +426,44 @@ func TestSplitRequestWithDeps(t *testing.T) {
 		t.Fatalf("launch order = %v, want [task-1 task-2]", order)
 	}
 }
+
+func TestFixedModelsOverridePlannerModelsByRole(t *testing.T) {
+	b := broker.New()
+	reg := broker.NewAgentRegistry()
+	run := b.CreateRun("run-models", "test", "/tmp", "main")
+
+	worker := run.AddTask("worker", "worker", "investigate", nil)
+	worker.Model = "sonnet"
+	synthesis := run.AddTask("synthesis", "synthesis", "integrate", []string{"worker"})
+	synthesis.Model = "haiku"
+
+	f := newFakeRunner()
+	cfg := testConfig()
+	cfg.WorkerModel = "haiku"
+	cfg.SynthesisModel = "opus"
+	c := New(run, reg, f, cfg)
+
+	got := make(chan launcher.WorkerConfig, 2)
+	f.onLaunch = func(cfg launcher.WorkerConfig) {
+		got <- cfg
+		run.GetTask(cfg.TaskID).CompleteDispatch("done", run)
+		f.finish(cfg.AgentID)
+	}
+
+	res := c.Run()
+	if len(res.Completed) != 2 {
+		t.Fatalf("completed = %v, want both tasks", res.Completed)
+	}
+
+	models := map[string]string{}
+	for range 2 {
+		launched := <-got
+		models[launched.TaskID] = launched.Model
+	}
+	if models["worker"] != "haiku" {
+		t.Errorf("worker model = %q, want haiku", models["worker"])
+	}
+	if models["synthesis"] != "opus" {
+		t.Errorf("synthesis model = %q, want opus", models["synthesis"])
+	}
+}

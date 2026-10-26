@@ -40,11 +40,14 @@ type Config struct {
 	// Timeout bounds the whole run.
 	Timeout time.Duration
 
-	// SynthesisModel overrides the worker model for the synthesis task —
-	// the one that integrates peer findings with fidelity. Empty means use
-	// the same model as every other worker. The Cursor economics
-	// insight: frontier intelligence is needed for decomposition and
-	// integration, not for narrow investigation.
+	// WorkerModel overrides the planner's per-task model for investigation
+	// tasks. Empty preserves the planner's choice. This is for controlled
+	// comparisons whose worker tier must stay fixed.
+	WorkerModel string
+
+	// SynthesisModel overrides every other model for the synthesis task —
+	// the one that integrates peer findings with fidelity. Empty preserves
+	// the planner's choice.
 	SynthesisModel string
 }
 
@@ -213,12 +216,15 @@ func (c *Coordinator) dispatchTask(task *broker.Task) error {
 	agent := c.registry.Register(agentID, c.run.ID, false)
 
 	cfg := launcher.WorkerConfigFor(c.run, task)
-	// The synthesis task integrates peer findings — it needs frontier
-	// intelligence even when the investigation workers do not. Apply the
-	// config-level synthesis model unless the planner already set a
-	// per-task model (per-task wins; it is more specific).
-	if cfg.Model == "" && c.cfg.SynthesisModel != "" && task.IsSynthesis() {
-		cfg.Model = c.cfg.SynthesisModel
+	// A run-level fixed tier wins over a planner's per-task suggestion. The
+	// synthesis tier is separate because integration can need a stronger
+	// model than narrow investigation.
+	if task.IsSynthesis() {
+		if c.cfg.SynthesisModel != "" {
+			cfg.Model = c.cfg.SynthesisModel
+		}
+	} else if c.cfg.WorkerModel != "" {
+		cfg.Model = c.cfg.WorkerModel
 	}
 
 	agentDir, err := c.launcher.SetupAgent(agent, cfg)

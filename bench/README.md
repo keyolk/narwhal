@@ -32,9 +32,9 @@ verdict, so an interrupted slice resumes.
 |---|---|---|
 | `b0` | one `claude --print` session | `B0_MODEL` (default `opus`) |
 | `fanout` | `FANOUT_N` independent B0 sessions, then one merge session | `FANOUT_N` (3), `FANOUT_MODEL` (`opus`) |
-| `narwhal` | `narwhal plan`, Smart split by default | `NARWHAL_WORKER_MODEL` (`haiku`), `NARWHAL_SYNTHESIS_MODEL` (`opus`), `CONC` |
+| `narwhal` | `narwhal plan`, fixed Smart split | `NARWHAL_WORKER_MODEL` (`haiku`), `NARWHAL_SYNTHESIS_MODEL` (`opus`), `CONC` |
 | `narwhal-nogate` | `narwhal` with the gave-up gate off (`jev.gave-up.enabled=false`) | same as `narwhal` |
-| `hybrid` | `narwhal plan`, opus planner and haiku workers | — |
+| `hybrid` | `narwhal plan`, opus planner and forced haiku workers | — |
 
 `ARMS` picks arms (default `b0 fanout narwhal`); `AGENT_TIMEOUT` (seconds,
 default 1800) bounds each trial.

@@ -170,10 +170,9 @@ def read_sid(path):
 def tally_narwhal(narwhal_json, planner_tier="", worker_tier="", synthesis_tier=""):
     """Tally a narwhal run, checking each agent against the tier it was given.
 
-    A task's own model field wins; otherwise the run-level tier the harness
-    passed (--worker-model, --synthesis-model) is what that agent should have
-    run on. Without the fallback, a run whose tiers were all set at run level
-    would pass the check vacuously.
+    The benchmark's run-level tiers override the planner's model field. The
+    task field is used only when the harness did not fix that role's tier.
+    Without the fallback, a fixed-tier run would pass the check vacuously.
     """
     data = json.load(open(narwhal_json))
     sdir = data.get("session_dir")
@@ -193,7 +192,8 @@ def tally_narwhal(narwhal_json, planner_tier="", worker_tier="", synthesis_tier=
             continue
         name = os.path.basename(d)
         task = name[len("worker-"):] if name.startswith("worker-") else name
-        tier = requested.get(task, "") or (synthesis_tier if task == "synthesis" else worker_tier)
+        fixed = synthesis_tier if task == "synthesis" else worker_tier
+        tier = fixed or requested.get(task, "")
         sids.append(sid)
         agents.append({"agent": task, "session": sid, "requested": tier})
 

@@ -66,7 +66,7 @@ gtimeout $(( TIMEOUT + 120 )) narwhal plan \
   --prompt "$(cat "$TRIAL/prompt.txt")" \
   --cwd "$REPO" \
   --concurrency "$CONC" \
-  ${WORKER_MODEL:+--worker-model "$WORKER_MODEL"} \
+  ${WORKER_MODEL:+--force-worker-model "$WORKER_MODEL"} \
   ${SYNTHESIS_MODEL:+--synthesis-model "$SYNTHESIS_MODEL"} \
   --plan-timeout "${PLAN_TIMEOUT}s" \
   --timeout "${TIMEOUT}s" \

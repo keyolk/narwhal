@@ -151,3 +151,22 @@ func TestThePlannerIsToldNotToWriteEscapeClauses(t *testing.T) {
 		}
 	}
 }
+
+// Pilot-1's missed rubrics mostly asked for evidence nobody collected. A
+// location-only criterion let those workers complete after naming a function,
+// and synthesis outcomes merely said that an answer file was written.
+func TestThePlannerRequiresClaimEvidenceAndASynthesisLedger(t *testing.T) {
+	instr := BuildPlanInstructions("r1", "u", "tok", "run it and report what appears")
+	for _, want := range []string{
+		"CLAIM-AND-EVIDENCE",
+		"captured observation",
+		"tracing source code alone does not satisfy it",
+		"compact evidence ledger",
+		"UNOBSERVED",
+		"includes that ledger in its task-done outcome",
+	} {
+		if !strings.Contains(instr, want) {
+			t.Errorf("planner instructions are missing %q", want)
+		}
+	}
+}

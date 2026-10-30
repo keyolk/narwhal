@@ -170,3 +170,21 @@ func TestThePlannerRequiresClaimEvidenceAndASynthesisLedger(t *testing.T) {
 		}
 	}
 }
+
+// On composite-1 (four repositories in one request) the planner gave each
+// part one worker, under a five-task cap, and the hardest part lost 8-14 of
+// its 17 rubrics. The cap now scales with parts, and synthesis is told not
+// to shorten a part because the request had several.
+func TestThePlannerScalesTasksWithParts(t *testing.T) {
+	instr := BuildPlanInstructions("r1", "u", "tok", "answer parts 1-4")
+	for _, want := range []string{
+		"tasks PER PART",
+		"one task per question",
+		"4 per part (16 in all)",
+		"not a reason to shorten each part",
+	} {
+		if !strings.Contains(instr, want) {
+			t.Errorf("planner instructions are missing %q", want)
+		}
+	}
+}

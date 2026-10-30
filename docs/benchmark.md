@@ -30,6 +30,40 @@ those whose rubrics are entirely code-reading claims ("identifies function F in
 file G"), which removes that confound but also removes the runtime-heavy tasks
 where the published gap is widest.
 
+## October 2026 controlled runs
+
+The harness described in [`../bench/README.md`](../bench/README.md) —
+isolated environment, pinned models, three repeats, cost from transcripts,
+paired bootstrap CI over tasks — was run on four slices:
+
+| Slice | Configuration | Tasks | B0 | Narwhal | Δ (95% CI) | Cost |
+|---|---|---:|---:|---:|---|---:|
+| pilot-1 | planner-chosen workers (109/123 sonnet), opus synthesis | 8 | 94.5% | 92.7% | −1.8pp [−6.2, +1.9] | 2.13× |
+| pilot-3-fixed | forced haiku workers, claim-and-evidence criteria | 3 | 94.3%¹ | 87.5% | — | 1.7×¹ |
+| pilot-4 | planner-chosen workers, claim-and-evidence criteria | 3 | 94.3%¹ | 87.2% | — | 2.0×¹ |
+| hard-1 | planner-chosen workers, the four tasks where B0 scored lowest in a 12-task screen | 4 | 76.1% | 75.6% | −0.5pp [−4.1, +3.8] | 2.36× |
+
+¹ B0 from pilot-1 on the same three tasks; not rerun.
+
+The fanout control (best-of-2 plus a merge) tied B0 in pilot-1 at 2.53× its
+cost. The gave-up gate never fired across pilot-1.
+
+Two things these runs showed beyond the headline:
+
+- **Where the misses come from.** Of 33 rubric misses traced through
+  planner, workers, radio and synthesis on Kitty and MinIO, 26 were facts no
+  worker collected, 4 were facts synthesis dropped, and 3 were a negative
+  rubric the answer tripped. Better criteria text (#112, #115) did not move
+  the score measurably.
+- **Worker tier matters per repository.** Forcing haiku investigators cut
+  cost about 15% and was perfect on Paperless, but lost Kitty's C/Python
+  boundary facts (`init_glfw`, `load_all_shaders`, `mark_as_dirty`) that
+  sonnet workers sometimes found.
+
+For one question about one codebase, a single Opus session is the better
+choice. The question these runs leave open is work that does not fit in one
+session.
+
 ## Known limits of the slices below
 
 The two slices below were run before the harness measured cost or checked

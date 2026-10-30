@@ -545,10 +545,16 @@ Three working modes, chosen with `--worker-model` and `--synthesis-model`:
 
 The coordinator applies `--synthesis-model` to any task whose name or
 assignment contains "synthesis" — the one that integrates peer findings with
-fidelity. A per-task `model` field on the broker API lets the planner
-override the model for an individual task, which wins over the run-level
-default. The priority is: per-task `model` > `--synthesis-model` (synthesis
-only) > `--worker-model` (everything else) > ccproxy rotation.
+fidelity. A per-task `model` field on the broker API lets the planner choose
+a model for an individual task. The priority is:
+
+- synthesis: `--synthesis-model` > per-task `model` > `--worker-model` > ccproxy rotation
+- other tasks: `--force-worker-model` > per-task `model` > `--worker-model` > ccproxy rotation
+
+`--worker-model` is only a default. A benchmark that must hold the worker
+tier fixed uses `--force-worker-model`: pilot-1 passed `--worker-model haiku`,
+and 109 of 123 investigation tasks still ran on sonnet because the planner
+had set it.
 
 ## CLI
 
@@ -650,15 +656,35 @@ See `docs/experiments.md` for the full record:
 - **E9**: "Wait for your peers" as an instruction — **refuted** (synthesis finished early in 3 of 3 runs; deps now gate completion)
 - **E10**: A daemon restart destroys finished work — **confirmed, then fixed** (11 of 12 tasks had written their reports; the broker recorded all 12 as dispatched)
 
-### SWE-Atlas QnA benchmark slice
+### SWE-Atlas QnA benchmark
 
-Two slices of the benchmark AgentRadio publishes against, with Narwhal on
-one arm and a single Claude Code session (B0) on the other. Slice 1 (easy
-tasks) hits ceiling — both arms 100%. Slice 2 (harder tasks, 4 arms) shows
-Smart — haiku investigate + opus synthesis — at 94.9% rubric coverage,
-above Narwhal's 92.3% and B0's 89.7%, at wall-clock below B0 (52 min vs
-58 min). See [`docs/benchmark.md`](docs/benchmark.md) and
-[`docs/experiments.md`](docs/experiments.md) §E7–E8.
+Controlled runs in October 2026 (isolated harness, pinned models, three
+repeats, paired bootstrap CI over tasks) found **no accuracy benefit over a
+single Opus session** on SWE-Atlas QnA, at about twice the cost:
+
+| Slice | Tasks | B0 pass | Narwhal pass | Δ (95% CI) | Cost |
+|---|---:|---:|---:|---|---:|
+| pilot-1 | 8 | 94.5% | 92.7% | −1.8pp [−6.2, +1.9] | 2.13× |
+| hard-1 (B0 weakest of 12 screened) | 4 | 76.1% | 75.6% | −0.5pp [−4.1, +3.8] | 2.36× |
+
+Neither forcing haiku investigators nor claim-and-evidence criteria moved
+the result. In a transcript analysis of 33 missed rubrics, 26 were
+evidence no worker collected; dividing a single question among workers does
+not fix that. Narwhal's only measured edge was a smaller spread between
+repeats.
+
+The earlier slices (E7–E8, one run per arm, B0 unpinned) are kept in
+[`docs/benchmark.md`](docs/benchmark.md) as the directional read they were.
+
+### When to use Narwhal
+
+- **One question about one codebase:** use a single Claude Code session.
+  That is what the QnA results above measure.
+- **Work with independent parts:** several repositories or services, an
+  audit with disjoint scopes, an RCA across systems. Each worker gets its
+  own context, and the run keeps a record of every part.
+- **Work longer than one session:** the case the QnA benchmark does not
+  exercise and the direction the next benchmarks test.
 
 ## Development
 

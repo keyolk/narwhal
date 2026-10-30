@@ -33,8 +33,16 @@ ANSWER="$ANSWER_DIR/answer.txt"
 mkdir -p "$ANSWER_DIR"
 rm -f "$ANSWER"
 
-python3 "$HERE/make_prompt.py" "$TASK_DIR" "$REPO" "$ANSWER" --arm narwhal \
-  > "$TRIAL/prompt.txt"
+# A composite trial (run_composite.sh) asks several tasks at once; its
+# prompt lists every part, each with its own repository.
+if [ -n "${COMPOSITE_PARTS:-}" ]; then
+  # shellcheck disable=SC2086 # one word per part, by construction
+  python3 "$HERE/composite.py" prompt "$ANSWER" --arm narwhal $COMPOSITE_PARTS \
+    > "$TRIAL/prompt.txt"
+else
+  python3 "$HERE/make_prompt.py" "$TASK_DIR" "$REPO" "$ANSWER" --arm narwhal \
+    > "$TRIAL/prompt.txt"
+fi
 
 # The DAG completing is not the same as the artifact existing: without an
 # explicit synthesis contract the workers each report to the radio and nobody

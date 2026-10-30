@@ -107,6 +107,27 @@ must not be reused in the final comparison. The script records the selection
 rule before any candidate score is known, which prevents post-score task
 cherry-picking.
 
+## Composite tasks
+
+`COMPOSITE=1` asks every task on the command line as the parts of one
+request, each part about its own repository. The agent starts in the
+directory that holds every repository; the answer file has one
+`<<PART k>>` section per part; each section is judged against its own
+task's rubric and the verdicts are merged (`composite.py`). Rubric counts
+add up, so `pass%` is the share of all rubrics passed, and a part with no
+section counts all its rubrics as failed.
+
+The point is length, not difficulty. Each part's score in the composite
+compares directly with the same task scored alone, so the drop from solo
+to composite measures what a longer request costs each arm.
+
+```bash
+COMPOSITE=1 ARMS="b0 narwhal" REPEATS=3 AGENT_TIMEOUT=5400 \
+  bash bench/run_slice.sh bench/results/composite-1 \
+  task-6905333b74f22949d97baa2a task-6905333b74f22949d97baa1a \
+  task-6905333b74f22949d97ba9d5 task-6905333b74f22949d97ba9f0
+```
+
 ## Reading the summary
 
 `summarize.py` prints, per arm: mean rubric pass rate, reward, the spread

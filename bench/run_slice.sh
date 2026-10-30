@@ -23,7 +23,8 @@ if [ -z "${BENCH_ISOLATED:-}" ]; then
   FWD=()
   for v in QA_DIR REPOS_DIR AGENT_TIMEOUT CONC ARMS REPEATS B0_MODEL \
            FANOUT_N FANOUT_MODEL NARWHAL_WORKER_MODEL NARWHAL_SYNTHESIS_MODEL \
-           JUDGE_MODEL JUDGE_CMD BENCH_NO_ENV BENCH_ACCOUNTS QUOTA_RETRIES QUOTA_WAIT; do
+           JUDGE_MODEL JUDGE_CMD BENCH_NO_ENV BENCH_ACCOUNTS QUOTA_RETRIES QUOTA_WAIT \
+           COMPOSITE; do
     if [ -n "${!v+x}" ]; then FWD+=("$v=${!v}"); fi
   done
   exec "$HERE/isolated.sh" env ${FWD[@]+"${FWD[@]}"} bash "$HERE/run_slice.sh" "$@"
@@ -87,14 +88,58 @@ json.dump({**base, "jev.gave-up.enabled": False},
 PY
 export NARWHAL_CONFIG="$BIN/config.json"
 
+# One extraction per image, shared by every task that uses it and by both
+# arms — a per-arm copy would differ only in inode, but a per-arm extraction
+# doubles the disk for nothing.
+repo_for() {
+  local img
+  img=$(grep docker_image "$1/task.toml" | head -1 | cut -d'"' -f2)
+  echo "$REPOS/$(echo "$img" | sed 's|.*:||')"
+}
+
+# COMPOSITE=1 asks every task on the command line as the parts of one
+# request (composite.py). The trial lives under one composite name, the agent
+# starts in the directory holding every repository, and each part is judged
+# against its own rubric before the verdicts are merged.
+PART_DIRS=()
+if [ -n "${COMPOSITE:-}" ]; then
+  COMPOSITE_PARTS=""
+  NAME="composite"
+  for T in "${TASKS[@]}"; do
+    R="$(repo_for "$QA/$T")"
+    bash "$HERE/extract_repo.sh" "$QA/$T" "$R"
+    PART_DIRS+=("$QA/$T")
+    COMPOSITE_PARTS="$COMPOSITE_PARTS $QA/$T=$R"
+    NAME="$NAME-${T: -5}"
+  done
+  export COMPOSITE_PARTS
+  TASKS=("$NAME")
+fi
+
+judge_trial() {
+  if [ -z "${COMPOSITE:-}" ]; then
+    python3 "$HERE/judge.py" "$1" "$2" || true
+    return
+  fi
+  python3 "$HERE/composite.py" split "$2" "${PART_DIRS[@]}"
+  local k=0
+  for D in "${PART_DIRS[@]}"; do
+    k=$((k + 1))
+    [ -f "$2/parts/p$k/verifier/evaluation_results.json" ] && continue
+    python3 "$HERE/judge.py" "$D" "$2/parts/p$k" || true
+  done
+  python3 "$HERE/composite.py" merge "$2" "${PART_DIRS[@]}" || true
+}
+
 for TASK in "${TASKS[@]}"; do
-  TASK_DIR="$QA/$TASK"
-  IMG=$(grep docker_image "$TASK_DIR/task.toml" | head -1 | cut -d'"' -f2)
-  # One extraction per image, shared by every task that uses it and by both
-  # arms — a per-arm copy would differ only in inode, but a per-arm extraction
-  # doubles the disk for nothing.
-  REPO="$REPOS/$(echo "$IMG" | sed 's|.*:||')"
-  bash "$HERE/extract_repo.sh" "$TASK_DIR" "$REPO"
+  if [ -n "${COMPOSITE:-}" ]; then
+    TASK_DIR="${PART_DIRS[0]}"
+    REPO="$REPOS"
+  else
+    TASK_DIR="$QA/$TASK"
+    REPO="$(repo_for "$TASK_DIR")"
+    bash "$HERE/extract_repo.sh" "$TASK_DIR" "$REPO"
+  fi
 
   for K in $(seq 1 "$REPEATS"); do
     for ARM in $ARMS; do
@@ -107,7 +152,7 @@ for TASK in "${TASKS[@]}"; do
       # judge again, do not pay for the agent twice.
       if [ -f "$TRIAL/run_meta.json" ]; then
         echo "== rejudge $TASK/$ARM/r$K"
-        python3 "$HERE/judge.py" "$TASK_DIR" "$TRIAL" || true
+        judge_trial "$TASK_DIR" "$TRIAL"
         continue
       fi
       # An attempt that stopped on an account limit measured the account, not
@@ -141,7 +186,7 @@ for TASK in "${TASKS[@]}"; do
         break
       done
       echo "== judge $TASK/$ARM/r$K"
-      python3 "$HERE/judge.py" "$TASK_DIR" "$TRIAL" || true
+      judge_trial "$TASK_DIR" "$TRIAL"
     done
   done
 done

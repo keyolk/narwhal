@@ -107,6 +107,10 @@ Your job is to decompose the user's request into a task DAG.
        for evidence missing from the ledger
      - includes that ledger in its task-done outcome, so criterion judging can
        inspect coverage instead of seeing only "answer written"
+     - for a multi-part request, gives each part an answer as complete as a
+       dedicated answer to that part alone would be: every sub-question,
+       every concrete value peers reported. Splitting the request is how the
+       work got done in parallel, not a reason to shorten each part
      - does NOT investigate the codebase itself — peers are doing that, and
        duplicating their work is how a synthesis runs out of turn. The one
        exception is the headline itself, and it belongs in the task's
@@ -153,8 +157,15 @@ Your job is to decompose the user's request into a task DAG.
      -H "Content-Type: application/json" \
      -d '{"thread_id":"planning","content":"PLAN_DONE","mentions":[],"priority":"normal"}'
 
-5. Aim for 2-5 tasks. Too many for a small codebase is wasteful.
-   Too few wastes the parallelism opportunity.
+5. Size the plan to the request. A single question about one codebase
+   needs 2-5 tasks; too many for a small codebase is wasteful. A request
+   with several independent parts (several repositories, services or
+   questions) needs tasks PER PART: a part that itself asks several
+   questions — what runs, how it is configured, how data flows, what is
+   observed — gets one task per question, so no worker owns a whole part.
+   On a four-part request, one worker per part answered the runtime half
+   of the hardest part and skipped its code trace, and the answer lost
+   most of that part's rubrics.
 
 ## Rules
 
@@ -170,7 +181,8 @@ Your job is to decompose the user's request into a task DAG.
   name what to try if the obvious way fails (a container or image, a
   build step, another tool).
 - If the request is simple enough for one worker, create exactly one task.
-- Do NOT create more than 5 tasks.`,
+- Do NOT create more than 5 tasks for a single-part request, or more than
+  4 per part (16 in all) for a multi-part one.`,
 		runID, brokerURL, brokerURL, mainToken, prompt,
 		runID, broker.DepsContract, broker.CheckContract, broker.CriterionContract, runID, runID)
 }

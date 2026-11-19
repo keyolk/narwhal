@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/keyolk/tuikit/keys"
 	"github.com/keyolk/tuikit/mouse"
+	"github.com/mattn/go-isatty"
 
 	nd "github.com/keyolk/narwhal/internal/daemon"
 	"github.com/keyolk/narwhal/internal/store"
@@ -88,6 +89,27 @@ func daemonRunLister() ([]store.LiveRun, error) {
 // homeCmd is `narwhal` with no arguments: the monitor, on its home screen.
 func homeCmd() { monitorCmd(nil) }
 
+// exitNoTerminal is the exit code when the TUI is asked for without a
+// terminal: a usage error, distinct from a monitor that started and failed.
+const exitNoTerminal = 2
+
+// noTerminalHelp names the ways in that do not need a terminal. Without it,
+// an agent running bare `narwhal` from its shell got "could not open a new
+// TTY: open /dev/tty" — true, and no help in finding what to run instead.
+const noTerminalHelp = `narwhal: the home screen and monitor are terminal UIs; stdin and stdout must be a terminal.
+Without one:  narwhal show [run-id] [--json]    finished runs, or one run's snapshot
+              narwhal run|plan --prompt "..."   run a request; its result is JSON on stdout
+              narwhal mcp                       MCP server for Claude Code (claude mcp add narwhal narwhal mcp)
+              narwhal daemon status             the daemon, as JSON; narwhal monitor --list for live runs
+`
+
+// hasTerminal reports whether the TUI can run. A mode check on the file is
+// not enough: /dev/null is a character device too, and `narwhal </dev/null`
+// is exactly the agent's case, so this asks the terminal driver.
+func hasTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) && isatty.IsTerminal(os.Stdout.Fd())
+}
+
 func monitorCmd(args []string) {
 	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
 	runID := fs.String("run", "", "run id to monitor (default: newest live run)")
@@ -121,6 +143,11 @@ func monitorCmd(args []string) {
 			fmt.Fprintf(os.Stderr, "\nFor a finished run, use: narwhal show %s\n", *runID)
 			os.Exit(1)
 		}
+	}
+
+	if !hasTerminal() {
+		fmt.Fprint(os.Stderr, noTerminalHelp)
+		os.Exit(exitNoTerminal)
 	}
 
 	m := newTUIModel(entries, cur, *interval, picker)

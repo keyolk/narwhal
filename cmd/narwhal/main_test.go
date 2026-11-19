@@ -12,6 +12,13 @@ import (
 // unset, so tmux.New hands out a client that refuses every call, and a tmux
 // that fails loudly is put first on PATH in case anything execs it anyway.
 func TestMain(m *testing.M) {
+	// A test that needs the real exit code and streams of `narwhal ARGS`
+	// re-runs this binary with the arguments here; see runNarwhal.
+	if args, ok := os.LookupEnv(runMainEnv); ok {
+		os.Args = append([]string{"narwhal"}, splitArgs(args)...)
+		main()
+		os.Exit(0)
+	}
 	dir, err := os.MkdirTemp("", "narwhal-test-tmux-")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
